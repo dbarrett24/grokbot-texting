@@ -18,6 +18,7 @@ you --(email PIN + passkey)--> your private status page (contacts sync, log)
 - No password, token or key goes into a chat, email, note or ticket. Each one is typed only into a hidden prompt on your computer, or into your bot's secret prompt.
 - **HUMAN STEP** marks a step only you can do: installs, sign-ins, codes, consent screens, passkeys and the first deploy. Your bot can walk you through everything else, but it never signs in for you.
 - Stop at any failed **Check** and fix it before going on.
+- **Setup scripts:** `scripts/setup-mac.sh` (macOS) and `scripts/setup-windows.ps1` (Windows) run the computer steps of this guide one at a time (install Node, get the code, test, make keys, deploy, store secrets, test text). Your bot can run them for you on your computer, with your OK on each command. Keys they make stay in `.relay-local/` in your copy of the code (never committed) and go to Cloudflare without being shown. Run a step with no arguments to see what it needs.
 
 Placeholders in this guide:
 - `<yourdomain>`: a domain you own.
