@@ -50,6 +50,16 @@ All settings are `[vars]` in `wrangler.toml`; secrets go in with `npx wrangler s
 | `DIRECT_NOTIFY_EACH = "1"` | Texts you the name and first 80 characters of each direct send. |
 | `DIRECT_LOOKUP_MAX_PER_HOUR` | Lookups and refusals on `/send` per hour (default 30, `"off"` = none). Sends never count. |
 
+**iPhone delivery** (see [SETUP-iphone.md](SETUP-iphone.md); all unset = android):
+| Var | Default | Meaning |
+|---|---|---|
+| `DELIVERY` | unset (`android`) | `"mac"` or `"shortcut"` queues each checked text for your device to claim. Anything else: every route answers 503 `delivery_invalid`. |
+| `DEVICE_TOKEN` (secret) | none | Required for mac/shortcut: 32+ characters, different from `REQUEST_TOKEN`. |
+| `NOTIFY_MODE` | must be `"ntfy"` | In mac/shortcut, `"sms"` would send your notices through the device itself, so it's refused: 503 `config_invalid`, reason `notify_mode_must_be_ntfy_for_device_delivery`. |
+| `UNCLAIMED_EXPIRY_MINUTES` | `"30"` | A text no device claims within this many minutes is dropped, **not sent**, and you get one notice per dropped text. 1..1440; garbage = 503 `config_invalid`. |
+| `DIRECT_DAILY_CAP` | `25` in mac/shortcut | Unset means 25 a day here (Apple ID spam-flag risk); `"off"` removes it. |
+| `SHORTCUT_PING`, `PING_FROM`, `PING_TO`, `SHORTCUT_NAME` | `"email"`, none, none, `"Relay Send"` | Shortcut path only: how the iPhone is woken. |
+
 **Tap-to-approve limits** (only used by `POST /request`; unset = the default; garbage or out of range = 503 `config_invalid`):
 | Var | Default | Range |
 |---|---|---|

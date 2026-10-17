@@ -56,7 +56,10 @@ GOOGLE_ACCOUNTS = ""                      # e.g. "primary" or "primary,work"; fi
 # ---- iPhone delivery (SETUP-iphone.md). Unset = android: texts go through the SMS Gateway app. ----
 # DELIVERY = "mac"                        # "mac" = an always-on Mac with Messages claims each text (mac/install.sh);
 #                                         # "shortcut" = an iPhone Shortcut claims it (best-effort). Anything else refuses every route.
-#                                         # mac/shortcut need the DEVICE_TOKEN secret, and DIRECT_DAILY_CAP defaults to 25 ("off" removes it).
+#                                         # mac/shortcut need the DEVICE_TOKEN secret and NOTIFY_MODE = "ntfy" (sms would go through the
+#                                         # device itself: config_invalid), and DIRECT_DAILY_CAP defaults to 25 ("off" removes it).
+# UNCLAIMED_EXPIRY_MINUTES = "30"         # mac/shortcut: a text no device claims in this many minutes is dropped, NOT sent, and you
+#                                         # get a notice for each one. 1..1440; garbage = config_invalid.
 # SHORTCUT_PING = "email"                 # shortcut only: "email" (empty email to PING_TO) or "tap" (ntfy notification, one tap per text)
 # PING_FROM = "relay@example.com"         # shortcut + email: a sender on your Email Routing domain
 # PING_TO = "you@example.com"             # shortcut + email: the verified address your iPhone's Apple Mail gets with push

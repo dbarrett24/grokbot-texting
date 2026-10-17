@@ -23,8 +23,9 @@ Do DEPLOY.md first (sections for Cloudflare, Access, secrets and contacts), but 
 In `wrangler.toml`:
 
 ```toml
-DELIVERY = "mac"          # or "shortcut"
-NOTIFY_MODE = "ntfy"      # recommended: see "When the device goes quiet" below
+DELIVERY = "mac"                  # or "shortcut"
+NOTIFY_MODE = "ntfy"              # required in these modes; see "Notices" below
+# UNCLAIMED_EXPIRY_MINUTES = "30" # optional; see below
 ```
 
 Secrets:
@@ -42,14 +43,18 @@ What changes when `DELIVERY` is `mac` or `shortcut`:
 - `POST /send` answers **202 `{"state":"queued"}`** instead of 200 `sent`. The outcome shows up in the log (`direct_sent`, `direct_send_failed`, `direct_send_uncertain`). A tap request's state goes `queued_device` → `sent` / `send_failed` / `send_uncertain`.
 - **`DIRECT_DAILY_CAP` defaults to 25** a day (unset). Apple can flag an Apple ID that sends a lot of automated iMessages, so a cap is on unless you turn it off with `DIRECT_DAILY_CAP = "off"` or set your own number.
 - **One text at a time.** The device claims the oldest queued text. The claim and the hand-out are one step, so a text can be claimed only once, and its words are erased from the Worker's storage at that moment.
-- **No retries, ever.** The device reports one result. If it doesn't report within **2 minutes**, the claim times out: logged as `device_claim_timeout`, recorded as *uncertain* (the device may have sent it), and never handed out again. A text nobody claims within **30 minutes** is dropped (`device_job_expired`) rather than sent late.
+- **No retries, ever.** The device reports one result. If it doesn't report within **2 minutes**, the claim times out: logged as `device_claim_timeout`, recorded as *uncertain* (the device may have sent it), and never handed out again. A text nobody claims within **`UNCLAIMED_EXPIRY_MINUTES`** (default 30, allowed 1 to 1440) is dropped (`device_job_expired`) rather than sent late, and **you get a notice for each dropped text** saying who it was for (last 4 digits) and that it was not sent. Ask your bot to send it again once the device is back.
 - `GET /direct` on your private page shows the delivery mode, the last poll and how many texts are waiting.
+
+### Notices
+
+Device modes **require `NOTIFY_MODE = "ntfy"`**. With `"sms"` your notices (approval requests, "device offline", "text dropped") would be texts queued for the very device that might be down, so the Worker refuses every route with 503 `config_invalid` (reason `notify_mode_must_be_ntfy_for_device_delivery`) until you switch.
 
 ### When the device goes quiet
 
 If the device hasn't polled for **10 minutes** (Mac asleep, logged out after a restart, Wi-Fi down, Shortcut not firing), the Worker logs `device_stale` and sends you **one** notice for that outage through the owner-notice path. When the device polls again it logs `device_back`, and the next outage gets its own notice.
 
-That notice goes through ntfy. With `NOTIFY_MODE = "sms"` your notices are themselves texts queued for the same device, which is the thing that's down, so the stale notice can't arrive; the Worker logs `device_stale_notify_failed` instead of queueing it. **Use `NOTIFY_MODE = "ntfy"` with either iPhone path.**
+That notice goes through ntfy, never through the device.
 
 ## Path 1: a Mac that stays on (recommended)
 
@@ -103,7 +108,7 @@ destination_address = "you@example.com"
 
 **Create the automation:** Automation tab > + > **Email** > Sender is `PING_FROM`, Subject contains `Relay: job waiting` > **Run Immediately** (turn off Notify When Run) > run `Relay Send`. If it never fires with an iCloud address, set the account filter to "any account".
 
-Optional safety net: a few **Time of Day** automations (say hourly 8 AM to 9 PM) that run the same Shortcut, so a missed email is picked up later. Remember unclaimed texts are dropped after 30 minutes.
+Optional safety net: a few **Time of Day** automations (say hourly 8 AM to 9 PM) that run the same Shortcut, so a missed email is picked up later. Unclaimed texts are still dropped after `UNCLAIMED_EXPIRY_MINUTES` (you're told about each one), so raise it if your safety net runs hourly.
 
 **Limits, plainly:**
 - Gmail in Apple Mail only *fetches* (about every 15 minutes), and the Gmail app never triggers automations. Use a **push** account (iCloud Mail, or another IMAP IDLE / Exchange account).
