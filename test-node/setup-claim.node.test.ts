@@ -127,6 +127,17 @@ describe.skipIf(process.platform === "win32")("claim guard", () => {
     expect(JSON.parse(readFileSync(join(dir, "fake.stdin"), "utf8")).GATEWAY_PASS).toBe("TEST-ONLY-p");
     for (const v of Object.values(full)) if (v.startsWith("TEST-ONLY")) expect(t.out).not.toContain(v);
   });
+  it("hand-editing settings.json (skipping `config`) can't reuse a claim for new hosts", () => {
+    run(["claim"], { FAKE_WORKER: "missing" });
+    const cf = join(dir, ".relay-local", "settings.json"); const st = JSON.parse(readFileSync(cf, "utf8"));
+    for (const apiHost of ["api.evil.test", "API.owner.test"]) {
+      writeFileSync(cf, JSON.stringify({ ...st, apiHost }));
+      expect(run(["deploy"]).out).toContain("reason=run_claim_first");
+    }
+    writeFileSync(cf, JSON.stringify({ ...st, apiHost: "api.evil.test" }));
+    expect(run(["claim"], { FAKE_WORKER: "missing", FAKE_DNS_USED: "api.evil.test" }).out).toContain("reason=host_in_use");
+    expect(run(["config", "--api-host", "api.owner.test."]).out).toContain("bad=apiHost");
+  });
 });
 
 describe.skipIf(process.platform === "win32")("local secret writer", () => {
