@@ -38,7 +38,9 @@ async function expectError(r: Response, status: number, code: string) {
   expect(await r.json()).toEqual({ error: code });
 }
 
-const MAC = { DELIVERY: "mac", DEVICE_TOKEN, DIRECT_SEND: "1", RUNAWAY_PAUSE: "0" };
+const NTFY_MODE = { NOTIFY_MODE: "ntfy", NTFY_URL: NTFY, NTFY_TOKEN: "TEST-ONLY-ntfy-token" };
+// Device modes require an owner-notice channel that doesn't go through the device: ntfy.
+const MAC = { DELIVERY: "mac", DEVICE_TOKEN, DIRECT_SEND: "1", RUNAWAY_PAUSE: "0", ...NTFY_MODE };
 
 beforeEach(async () => {
   h = await harness();
@@ -105,7 +107,7 @@ describe("token split: DEVICE_TOKEN and REQUEST_TOKEN never stand in for each ot
     await expectError(await postRequest(h, { to: FRIEND, text: "hi" }, DEVICE_TOKEN), 401, "bad_request_token");
     const id = ((await (await postRequest(h, { to: FRIEND, text: "hi" })).json()) as any).id;
     await expectError(await h.relay.fetch(`${API}/request/${id}`, { headers: bearer(DEVICE_TOKEN) }), 401, "bad_request_token");
-    expect(await count("SELECT COUNT(*) AS c FROM device_jobs WHERE kind<>'notice'")).toBe(0); // only the approval notice to the owner
+    expect(await count("SELECT COUNT(*) AS c FROM device_jobs")).toBe(0);
   });
 
   it("a wrong device token is refused without a log row (no log flooding)", async () => {
@@ -157,9 +159,9 @@ describe("every existing guard runs before a job is queued", () => {
 
   it("tap flow: nothing is queued until the owner approves; approval queues exactly one job", async () => {
     const id = ((await (await postRequest(h, { to: FRIEND, text: "pick up at 5?" })).json()) as any).id;
-    // The approval notice to the owner (NOTIFY_MODE=sms) is itself queued for the device, as a notice.
-    expect(await count("SELECT COUNT(*) AS c FROM device_jobs WHERE kind='tap'")).toBe(0);
-    expect(await count("SELECT COUNT(*) AS c FROM device_jobs WHERE kind='notice' AND recipient=?", OWNER)).toBe(1);
+    // The approval notice goes to the owner over ntfy, never through the device.
+    expect(await count("SELECT COUNT(*) AS c FROM device_jobs")).toBe(0);
+    expect(ntfyPosts.filter((p) => p.title === "SMS relay approval")).toHaveLength(1);
     const r = await approve(h, id);
     expect(r.status).toBe(202);
     expect(await r.json()).toEqual({ id, state: "queued" });
@@ -187,9 +189,6 @@ describe("claim and result", () => {
 
   it("tap flow end to end: the bot's status call sees queued_device, then sent", async () => {
     const id = ((await (await postRequest(h, { to: FRIEND, text: "pick up at 5?" })).json()) as any).id;
-    const notice = await claim(); // the approval notice to the owner goes first
-    expect(notice.to).toBe(OWNER);
-    await result({ id: notice.id, lease: notice.lease, outcome: "sent" });
     await approve(h, id);
     const status = async () => ((await (await h.relay.fetch(`${API}/request/${id}`, { headers: bearer(REQUEST_TOKEN) })).json()) as any).state;
     expect(await status()).toBe("queued_device");
@@ -261,8 +260,6 @@ describe("no retry", () => {
 
   it("a failed tap send leaves the request failed, not pending or queued", async () => {
     const id = ((await (await postRequest(h, { to: FRIEND, text: "hi" })).json()) as any).id;
-    const notice = await claim();
-    await result({ id: notice.id, lease: notice.lease, outcome: "sent" });
     await approve(h, id);
     const job = await claim();
     await result({ id: job.id, lease: job.lease, outcome: "not_started" });
@@ -307,8 +304,6 @@ describe("claim timeout (2 minutes, fails closed)", () => {
 
   it("a tap request whose claim timed out reads send_uncertain", async () => {
     const id = ((await (await postRequest(h, { to: FRIEND, text: "hi" })).json()) as any).id;
-    const notice = await claim();
-    await result({ id: notice.id, lease: notice.lease, outcome: "sent" });
     await approve(h, id);
     await claim();
     h.setNow(T0 + 3 * MIN);
@@ -316,13 +311,104 @@ describe("claim timeout (2 minutes, fails closed)", () => {
     expect((await sql("SELECT state FROM requests WHERE id=?", id))[0].state).toBe("send_uncertain");
   });
 
-  it("an unclaimed job is dropped after 30 minutes, not sent late", async () => {
+});
+
+describe("a notice channel that doesn't go through the device is required", () => {
+  it.each([undefined, "sms", "", "NTFY"])("DELIVERY=mac with NOTIFY_MODE=%j → every route answers 503 config_invalid with the reason", async (mode) => {
+    await h.setEnv({ NOTIFY_MODE: mode as unknown as string });
+    const errs: string[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => void errs.push(a.join(" "));
+    try {
+      for (const r of [await direct({ to: FRIEND, body: "hi" }), await postRequest(h, { to: FRIEND, text: "hi" }), await next()]) {
+        expect(r.status).toBe(503);
+        expect(await r.json()).toEqual({ error: "config_invalid", reason: "notify_mode_must_be_ntfy_for_device_delivery" });
+      }
+    } finally {
+      console.error = orig;
+    }
+    expect(errs.join("\n")).toContain("CONFIG_ERROR reason=notify_mode_must_be_ntfy_for_device_delivery");
+    expect((await logOf("refused"))[0].detail).toBe("config_invalid reason=notify_mode_must_be_ntfy_for_device_delivery");
+    expect(await count("SELECT COUNT(*) AS c FROM device_jobs")).toBe(0);
+    expect(h.calls.filter((c) => !c.url.includes("ntfy"))).toHaveLength(0);
+  });
+
+  it("android keeps NOTIFY_MODE=sms", async () => {
+    await h.setEnv({ DELIVERY: "android", NOTIFY_MODE: "sms" });
+    expect((await postRequest(h, { to: FRIEND, text: "hi" })).status).toBe(202);
+  });
+});
+
+describe("UNCLAIMED_EXPIRY_MINUTES (default 30): dropped, not sent late, and the owner is told", () => {
+  const dropNotices = () => ntfyPosts.filter((p) => p.title === "SMS relay text dropped");
+
+  it("default 30: kept at 29:59, dropped at 30:00 with one owner notice per text (masked number, no text)", async () => {
+    const a = ((await (await direct({ to: FRIEND, body: "secret plans one" })).json()) as any).id;
+    await direct({ to: TWO, body: "secret plans two" });
+    h.setNow(T0 + 30 * MIN - 1000);
+    await sweep();
+    expect(dropNotices()).toHaveLength(0);
+    h.setNow(T0 + 30 * MIN);
+    await alarm();
+    expect(await claim()).toBeNull();
+    expect(await logOf("device_job_expired")).toHaveLength(2);
+    expect(await logOf("direct_send_failed")).toHaveLength(2);
+    const n = dropNotices();
+    expect(n).toHaveLength(2);
+    expect(n[0].body).toContain("…0101");
+    expect(n[0].body).toContain("NOT sent");
+    expect(n[0].body).toContain(`ref ${a.slice(0, 8)}`);
+    expect(n[0].body).toContain("within 30 min");
+    expect(n.map((x) => x.body).join(" ")).not.toContain("secret");
+    expect(await logOf("device_expired_notified")).toHaveLength(2);
+    await sweep(); // already expired: no repeat notice
+    expect(dropNotices()).toHaveLength(2);
+  });
+
+  it("a claimed text never expires (it times out instead) and gets no drop notice", async () => {
     await direct({ to: FRIEND, body: "hi" });
+    await claim();
+    h.setNow(T0 + 60 * MIN);
+    await sweep();
+    expect(dropNotices()).toHaveLength(0);
+    expect(await logOf("device_claim_timeout")).toHaveLength(1);
+  });
+
+  it("UNCLAIMED_EXPIRY_MINUTES=5 drops at 5 minutes", async () => {
+    await h.setEnv({ UNCLAIMED_EXPIRY_MINUTES: "5" });
+    await direct({ to: FRIEND, body: "hi" });
+    h.setNow(T0 + 5 * MIN - 1000);
+    await sweep();
+    expect(dropNotices()).toHaveLength(0);
+    h.setNow(T0 + 5 * MIN);
+    await sweep();
+    expect(dropNotices()).toHaveLength(1);
+    expect(dropNotices()[0].body).toContain("within 5 min");
+  });
+
+  it("UNCLAIMED_EXPIRY_MINUTES=120 keeps a text past 30 minutes", async () => {
+    await h.setEnv({ UNCLAIMED_EXPIRY_MINUTES: "120" });
+    await direct({ to: FRIEND, body: "late but wanted" });
+    h.setNow(T0 + 31 * MIN);
+    await sweep();
+    expect((await claim()).text).toBe("late but wanted");
+  });
+
+  it.each(["0", "1441", "off", "10.5", " 30", "abc"])("UNCLAIMED_EXPIRY_MINUTES=%j → 503 config_invalid (unclaimed_expiry_minutes_invalid)", async (v) => {
+    await h.setEnv({ UNCLAIMED_EXPIRY_MINUTES: v });
+    const r = await direct({ to: FRIEND, body: "hi" });
+    expect(r.status).toBe(503);
+    expect(await r.json()).toEqual({ error: "config_invalid", reason: "unclaimed_expiry_minutes_invalid" });
+    expect(await count("SELECT COUNT(*) AS c FROM device_jobs")).toBe(0);
+  });
+
+  it("a failed drop notice is logged and doesn't stop the sweep", async () => {
+    await direct({ to: FRIEND, body: "hi" });
+    await h.setEnv({ NTFY_URL: "https://down.example.test/x" });
     h.setNow(T0 + 30 * MIN);
     await sweep();
-    expect(await claim()).toBeNull();
     expect(await logOf("device_job_expired")).toHaveLength(1);
-    expect(await logOf("direct_send_failed")).toHaveLength(1);
+    expect((await logOf("device_expired_notify_failed"))[0].detail).toContain("reason=ntfy_status_599");
   });
 });
 
@@ -358,11 +444,9 @@ describe("DIRECT_DAILY_CAP default for mac and shortcut", { timeout: 30_000 }, (
 });
 
 describe("stale device alert (10 minutes, one notice per outage)", () => {
-  const ntfyMode = { NOTIFY_MODE: "ntfy", NTFY_URL: NTFY, NTFY_TOKEN: "TEST-ONLY-ntfy-token" };
   const staleNotices = () => ntfyPosts.filter((p) => p.title === "SMS relay device offline");
 
   it("fires once at 10 minutes without a poll, stays quiet for the rest of the outage, and re-arms after a poll", async () => {
-    await h.setEnv(ntfyMode);
     await claim(); // the device polls at T0
     for (const m of [5, 9.9]) {
       h.setNow(T0 + m * MIN);
@@ -387,7 +471,6 @@ describe("stale device alert (10 minutes, one notice per outage)", () => {
   });
 
   it("a device that never polls is caught too (the watch starts with the first sweep)", async () => {
-    await h.setEnv(ntfyMode);
     await sweep();
     h.setNow(T0 + 10 * MIN);
     await sweep();
@@ -395,17 +478,19 @@ describe("stale device alert (10 minutes, one notice per outage)", () => {
     expect((await logOf("device_stale"))[0].detail).toBe("minutes_since_poll=10 ever_polled=0");
   });
 
-  it("NOTIFY_MODE=sms: the notice can't go through the stale device, so it's logged as failed, not queued", async () => {
+  it("if the alarm still runs with NOTIFY_MODE=sms (routes refuse it), the notice is logged as failed, never queued for the device", async () => {
     await claim();
+    await h.setEnv({ NOTIFY_MODE: "sms" });
     h.setNow(T0 + 10 * MIN);
-    await sweep();
+    await alarm();
     expect(await logOf("device_stale")).toHaveLength(1);
-    expect((await logOf("device_stale_notify_failed"))[0].detail).toBe("stale_notice_needs_ntfy");
+    expect((await logOf("device_stale_notify_failed"))[0].detail).toBe("owner_notice_needs_ntfy_in_device_mode");
     expect(await count("SELECT COUNT(*) AS c FROM device_jobs")).toBe(0);
+    expect(gatewayCalls()).toHaveLength(0);
   });
 
   it("android mode never watches a device", async () => {
-    await h.setEnv({ ...ntfyMode, DELIVERY: "android" });
+    await h.setEnv({ DELIVERY: "android" });
     h.setNow(T0 + 120 * MIN);
     await alarm();
     expect(await logOf("device_stale")).toHaveLength(0);

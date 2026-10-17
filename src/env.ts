@@ -61,4 +61,5 @@ export interface Env {
   PING_FROM?: string; // var: sender address on your Email Routing domain (shortcut + email)
   PING_TO?: string; // var: the verified address your iPhone's Apple Mail receives with push (shortcut + email)
   SHORTCUT_NAME?: string; // var: Shortcut name the tap ping opens; default "Relay Send"
+  UNCLAIMED_EXPIRY_MINUTES?: string; // var, mac/shortcut: a text no device claims within this many minutes is dropped and the owner told. Default "30" (1..1440); garbage = config_invalid
 }

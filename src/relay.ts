@@ -9,8 +9,8 @@ import {
   safeName, switchOnUnlessZero, switchOnlyIfOne, validateBody, parseAccounts, parseCountryCode, peopleToContacts, UPLOAD_SOURCE, type ContactRow, type SnapshotContact,
 } from "./direct";
 import {
-  CLAIM_TIMEOUT_MS, DEVICE_DEFAULT_DAILY_CAP, DEVICE_SWEEP_MS, QUEUE_MAX_AGE_MS, STALE_AFTER_MS, TAP_PING_TEXT,
-  deviceTokenProblem, isDevice, parseDelivery, parseOutcome, parseShortcutPing, pingMime, safeDetail, shortcutRunUrl,
+  CLAIM_TIMEOUT_MS, ConfigRefuse, DEVICE_DEFAULT_DAILY_CAP, DEVICE_SWEEP_MS, STALE_AFTER_MS, TAP_PING_TEXT,
+  checkDeviceNotify, deviceTokenProblem, isDevice, parseUnclaimedExpiryMs, parseDelivery, parseOutcome, parseShortcutPing, pingMime, safeDetail, shortcutRunUrl,
   type Delivery, type JobState, type Outcome,
 } from "./device";
 
@@ -22,8 +22,8 @@ type Via = "name" | "candidate" | "number";
 type DirectPlan = { kind: "send" } | { kind: "refuse"; reason: string; status: number; newlyPaused: boolean };
 
 type State = "pending" | "approved_sending" | "queued_device" | "sent" | "send_failed" | "send_uncertain" | "denied";
-/** Who a device job belongs to: a tap approval, a direct send, or a notice to the owner. */
-type JobKind = "tap" | "direct" | "notice";
+/** Who a device job belongs to: a tap approval or a direct send. Owner notices never go through the device. */
+type JobKind = "tap" | "direct";
 interface Job {
   id: string;
   kind: JobKind;
@@ -219,10 +219,12 @@ export class Relay extends DurableObject<Env> {
         if (isDevice(delivery)) {
           const bad = deviceTokenProblem(this.env.DEVICE_TOKEN, this.env.REQUEST_TOKEN);
           if (bad) throw new Refuse(bad, 503);
+          checkDeviceNotify(this.env.NOTIFY_MODE);
+          parseUnclaimedExpiryMs(this.env.UNCLAIMED_EXPIRY_MINUTES);
           if (delivery === "shortcut") parseShortcutPing(this.env.SHORTCUT_PING);
         }
       } catch (e) {
-        if (e instanceof Refuse) console.error(`CONFIG_ERROR reason=${e.code}`);
+        if (e instanceof Refuse) console.error(`CONFIG_ERROR reason=${e instanceof ConfigRefuse ? e.reason : e.code}`);
         throw e;
       }
       const path = url.pathname;
@@ -255,8 +257,9 @@ export class Relay extends DurableObject<Env> {
       return json(404, { error: "unknown_host" });
     } catch (e) {
       if (e instanceof Refuse) {
-        if (!e.silent) this.log("refused", { detail: e.code });
-        return json(e.status, { error: e.code });
+        const reason = e instanceof ConfigRefuse ? e.reason : null;
+        if (!e.silent) this.log("refused", { detail: reason ? `${e.code} reason=${reason}` : e.code });
+        return json(e.status, reason ? { error: e.code, reason } : { error: e.code });
       }
       const msg = e instanceof Error ? e.message : "error";
       if (msg.startsWith("access_")) {
@@ -338,7 +341,9 @@ export class Relay extends DurableObject<Env> {
     } else {
       const owner = this.env.OWNER_NUMBER || "";
       if (!E164.test(owner)) throw new Error("owner_number_not_configured");
-      await this.deliver(owner, msg, { kind: "notice", id: null }); // DELIVERY=mac|shortcut: queued for the device like any text
+      // Device modes refuse NOTIFY_MODE=sms (fetch checks it); the alarm path can still get here, so refuse too.
+      if (this.deviceModeOrNull()) throw new Error("owner_notice_needs_ntfy_in_device_mode");
+      await this.gatewaySend(owner, msg);
     }
   }
 
@@ -1015,7 +1020,7 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
    * The last hop. android: the SMS Gateway, now. mac/shortcut: a queued job the owner's device claims over
    * POST /device/next. Callers run every guard and counter BEFORE this, so a queued job is already approved.
    */
-  private async deliver(to: string, text: string, ref: { kind: JobKind; id: string | null; who?: string; sha?: string }): Promise<Delivered> {
+  private async deliver(to: string, text: string, ref: { kind: JobKind; id: string; who?: string; sha?: string }): Promise<Delivered> {
     const mode = this.delivery();
     if (!isDevice(mode)) return { queued: false, gid: await this.gatewaySend(to, text) };
     if (!E164.test(to)) throw new Error("bad_recipient");
@@ -1160,11 +1165,9 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
       const st: State = sent ? "sent" : uncertain ? "send_uncertain" : "send_failed";
       this.sql.exec("UPDATE requests SET state=? WHERE id=? AND state='queued_device'", st, j.ref);
       this.log(sent ? "sent" : uncertain ? "send_uncertain" : "send_failed", { request_id: j.ref, detail: extra });
-    } else if (j.kind === "direct") {
+    } else {
       const ev = sent ? "direct_sent" : uncertain ? "direct_send_uncertain" : "direct_send_failed";
       this.log(ev, { request_id: j.ref, sha256: j.sha, detail: `${j.who ?? "method=direct"} ${extra}` });
-    } else {
-      this.log(sent ? "device_notice_sent" : "device_notice_not_sent", { detail: extra });
     }
   }
 
@@ -1176,12 +1179,23 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     const mode = this.deviceModeOrNull();
     if (!mode) return;
     const now = this.clock();
-    const stale = this.ctx.storage.transactionSync(() => this.sweepSync(now));
-    if (stale !== null) await this.notifyStale(mode, stale);
+    let expiryMs: number;
+    try {
+      expiryMs = parseUnclaimedExpiryMs(this.env.UNCLAIMED_EXPIRY_MINUTES);
+    } catch {
+      expiryMs = parseUnclaimedExpiryMs(undefined); // garbage: fetch refuses every route; the sweep keeps the default
+    }
+    const { stale, expired } = this.ctx.storage.transactionSync(() => this.sweepSync(now, expiryMs));
+    for (const x of expired) await this.notifyExpired(x, expiryMs);
+    if (stale !== null) await this.notifyStale(mode, stale, expiryMs);
   }
 
-  /** Returns minutes since the last poll when the device has JUST gone stale, else null. */
-  private sweepSync(now: number): number | null {
+  /**
+   * Returns the jobs that just expired (for their owner notices) and, when the device has JUST gone stale,
+   * the minutes since its last poll.
+   */
+  private sweepSync(now: number, expiryMs: number): { stale: number | null; expired: { job: string; ref: string | null; to: string }[] } {
+    const expired: { job: string; ref: string | null; to: string }[] = [];
     const timedOut = this.sql.exec("SELECT id, kind, ref, who, sha, state, lease FROM device_jobs WHERE state='claimed' AND claimed_ms <= ?", now - CLAIM_TIMEOUT_MS).toArray() as unknown as Job[];
     for (const j of timedOut) {
       this.sql.exec("UPDATE device_jobs SET state='claim_timeout', done_ms=? WHERE id=? AND state='claimed'", now, j.id);
@@ -1189,11 +1203,12 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
       this.log("device_claim_timeout", { request_id: j.ref, detail: `job_id=${j.id.slice(0, 8)} timeout_s=${CLAIM_TIMEOUT_MS / 1000}` });
       this.finishJob(j, "claim_timeout");
     }
-    const old = this.sql.exec("SELECT id, kind, ref, who, sha, state, lease FROM device_jobs WHERE state='queued' AND created_ms <= ?", now - QUEUE_MAX_AGE_MS).toArray() as unknown as Job[];
+    const old = this.sql.exec("SELECT id, kind, ref, who, sha, state, lease, recipient FROM device_jobs WHERE state='queued' AND created_ms <= ?", now - expiryMs).toArray() as unknown as (Job & { recipient: string })[];
     for (const j of old) {
       this.sql.exec("UPDATE device_jobs SET state='expired', text=NULL, done_ms=? WHERE id=? AND state='queued'", now, j.id);
-      this.log("device_job_expired", { request_id: j.ref, detail: `job_id=${j.id.slice(0, 8)} max_age_min=${QUEUE_MAX_AGE_MS / 60_000}` });
+      this.log("device_job_expired", { request_id: j.ref, detail: `job_id=${j.id.slice(0, 8)} max_age_min=${expiryMs / 60_000}` });
       this.finishJob(j, "expired");
+      expired.push({ job: j.id, ref: j.ref, to: j.recipient });
     }
     // The watch starts the first time a device mode runs, so a device that never polls is caught too.
     const seen = this.meta("device_last_seen_ms");
@@ -1202,27 +1217,36 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
       const watch = this.meta("device_watch_ms");
       if (watch === null) {
         this.setMeta("device_watch_ms", String(now));
-        return null;
+        return { stale: null, expired };
       }
       since = Number(watch);
     }
-    if (now - since < STALE_AFTER_MS || this.meta("device_stale") === "1") return null;
+    if (now - since < STALE_AFTER_MS || this.meta("device_stale") === "1") return { stale: null, expired };
     this.setMeta("device_stale", "1");
     const minutes = Math.floor((now - since) / 60_000);
     console.error(`DEVICE_STALE minutes_since_poll=${minutes}`);
     this.log("device_stale", { detail: `minutes_since_poll=${minutes} ever_polled=${seen === null ? 0 : 1}` });
-    return minutes;
+    return { stale: minutes, expired };
   }
 
-  /**
-   * The one stale notice per outage, through the owner-notice path. With NOTIFY_MODE=sms that path IS the
-   * stale device, so the notice can't arrive; it's logged as failed instead of queued behind the outage.
-   */
-  private async notifyStale(mode: "mac" | "shortcut", minutes: number) {
-    const what = mode === "mac" ? "Mac" : "iPhone Shortcut";
-    const msg = `SMS relay: your ${what} hasn't checked in for ${minutes} min. Texts wait in the queue (unclaimed ones are dropped after ${QUEUE_MAX_AGE_MS / 60_000} min). Check it's on, awake, logged in and online.`;
+  /** One owner notice per expired text: who it was for (masked) and that it was NOT sent. Never the text. */
+  private async notifyExpired(x: { job: string; ref: string | null; to: string }, expiryMs: number) {
+    const ref = (x.ref ?? x.job).slice(0, 8);
+    const msg = `SMS relay: a text to ${maskNumber(x.to)} wasn't picked up by your device within ${expiryMs / 60_000} min, so it was dropped and NOT sent. ref ${ref}. Ask your bot to send it again once the device is back.`;
     try {
-      if (this.env.NOTIFY_MODE !== "ntfy") throw new Error("stale_notice_needs_ntfy");
+      await this.deliverToOwner(msg, "SMS relay text dropped");
+      this.log("device_expired_notified", { request_id: x.ref, detail: `job_id=${x.job.slice(0, 8)}` });
+    } catch (e) {
+      console.error(`DEVICE_EXPIRED_NOTIFY_FAILED job_id=${x.job.slice(0, 8)} reason=${errCode(e)}`);
+      this.log("device_expired_notify_failed", { request_id: x.ref, detail: `job_id=${x.job.slice(0, 8)} reason=${errCode(e)}` });
+    }
+  }
+
+  /** The one stale notice per outage, through the owner-notice path (ntfy: device modes refuse sms). */
+  private async notifyStale(mode: "mac" | "shortcut", minutes: number, expiryMs: number) {
+    const what = mode === "mac" ? "Mac" : "iPhone Shortcut";
+    const msg = `SMS relay: your ${what} hasn't checked in for ${minutes} min. Texts wait in the queue (unclaimed ones are dropped after ${expiryMs / 60_000} min). Check it's on, awake, logged in and online.`;
+    try {
       await this.deliverToOwner(msg, "SMS relay device offline");
       this.log("device_stale_notified", { detail: "ntfy" });
     } catch (e) {

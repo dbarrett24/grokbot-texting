@@ -10,8 +10,8 @@ export type DeviceDelivery = Exclude<Delivery, "android">;
 export const CLAIM_TIMEOUT_MS = 2 * 60_000;
 /** No poll for this long = the device is stale; the owner gets one notice per outage. */
 export const STALE_AFTER_MS = 10 * 60_000;
-/** An unclaimed job older than this is dropped, not sent late. */
-export const QUEUE_MAX_AGE_MS = 30 * 60_000;
+/** UNCLAIMED_EXPIRY_MINUTES unset: an unclaimed job older than this is dropped (and the owner told), not sent late. */
+export const DEFAULT_UNCLAIMED_EXPIRY_MIN = 30;
 /** While DELIVERY is a device mode, the alarm runs this often to time out claims and watch the device. */
 export const DEVICE_SWEEP_MS = 60_000;
 /** DIRECT_DAILY_CAP when it's unset and DELIVERY is a device mode (Apple ID spam-flag risk). "off" removes it. */
@@ -25,6 +25,28 @@ export function parseDelivery(raw: string | undefined): Delivery {
 }
 
 export const isDevice = (d: Delivery): d is DeviceDelivery => d !== "android";
+
+/** A config refusal that names why (answered as {"error":"config_invalid","reason":...}). */
+export class ConfigRefuse extends Refuse {
+  constructor(public reason: string) {
+    super("config_invalid", 503);
+  }
+}
+
+/**
+ * Device modes need an owner-notice channel that doesn't go through the device: with NOTIFY_MODE=sms the
+ * "your device is offline" notice would be queued for the offline device. So only "ntfy" is accepted.
+ */
+export function checkDeviceNotify(notifyMode: string | undefined): void {
+  if (notifyMode !== "ntfy") throw new ConfigRefuse("notify_mode_must_be_ntfy_for_device_delivery");
+}
+
+/** UNCLAIMED_EXPIRY_MINUTES: unset/"" = 30; whole minutes 1..1440 as plain digits; anything else is config_invalid. */
+export function parseUnclaimedExpiryMs(raw: string | undefined): number {
+  if (raw === undefined || raw === "") return DEFAULT_UNCLAIMED_EXPIRY_MIN * 60_000;
+  if (!/^[0-9]{1,4}$/.test(raw) || Number(raw) < 1 || Number(raw) > 1440) throw new ConfigRefuse("unclaimed_expiry_minutes_invalid");
+  return Number(raw) * 60_000;
+}
 
 /** What the device reports back. Only "sent" and "sent_unverified" count as a send; nothing is ever re-queued. */
 export type Outcome = "sent" | "sent_unverified" | "not_started" | "uncertain";
