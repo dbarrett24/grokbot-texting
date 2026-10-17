@@ -6,7 +6,7 @@
 // Add --dry-run to any step: it checks inputs and prints what it would do, with no Cloudflare, gateway or relay call.
 import { spawnSync } from "node:child_process";
 import { randomBytes, createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, appendFileSync, readdirSync, rmSync } from "node:fs";
 import { resolve as resolveDns4, resolve6, resolveCname } from "node:dns/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -140,6 +140,18 @@ function settingsOrFail(step) {
   if (!s.worker || !existsSync(CONFIG)) { out(step, "fail", { reason: "run_config_first" }); return null; }
   return s;
 }
+// The claim marker records the Worker name AND both hostnames. Deploy and secrets need an exact match, and
+// `config` deletes it whenever any of the three changes, so new hosts always get the DNS check again.
+const markerPath = (s) => join(LOCAL, `claimed-${s.worker}.json`);
+export function claimMatches(s, text) {
+  try { const c = JSON.parse(text); return c.worker === s.worker && c.apiHost === s.apiHost && c.appHost === s.appHost; } catch { return false; }
+}
+function isClaimed(s) { return existsSync(markerPath(s)) && claimMatches(s, readFileSync(markerPath(s), "utf8")); }
+function clearClaims() {
+  if (!existsSync(LOCAL)) return;
+  for (const f of readdirSync(LOCAL)) if (f.startsWith("claimed-")) rmSync(join(LOCAL, f), { force: true });
+}
+
 export function requiredSecrets(s, m) {
   const base = ["REQUEST_TOKEN", "LOG_HASH_KEY", "ACCESS_AUD", "APPROVER_EMAIL", "OWNER_NUMBER", "ALLOWLIST"];
   if (s.delivery === "mac") return [...base, "DEVICE_TOKEN", "NTFY_URL", "NTFY_TOKEN"];
@@ -273,6 +285,7 @@ const steps = {
     const t = renderConfig(readFileSync(join(REPO, "wrangler.toml"), "utf8"), next);
     const left = leftoverPlaceholders(t);
     if (left.length) return out("config", "fail", { reason: "placeholders_left", count: left.length });
+    if (next.worker !== s.worker || next.apiHost !== s.apiHost || next.appHost !== s.appHost) clearClaims();
     saveSettings(next);
     mkdirSync(LOCAL, { recursive: true });
     writeFileSync(CONFIG, t);
@@ -302,7 +315,7 @@ const steps = {
       m.set("GATEWAY_KEY_VERSION", String(d.keyVersion));
       s.deviceKey = true;
     } else s.deviceKey = false;
-    saveSecrets(m); saveSettings(s);
+    if (!DRY) { saveSecrets(m); saveSettings(s); } // a dry run changes nothing on disk
     out("gateway-check", DRY ? "dry_run" : "ok", { devices: 1, device_key: s.deviceKey ? "yes" : "no", next: s.deviceKey ? "confirm-fingerprint" : "show_GATEWAY_PASSPHRASE" });
   },
 
@@ -320,16 +333,20 @@ const steps = {
 
   async claim() {
     const s = settingsOrFail("claim"); if (!s) return;
-    const marker = join(LOCAL, `claimed-${s.worker}`);
-    if (existsSync(marker)) return out("claim", "ok", { worker: s.worker, already: "yes" });
+    if (isClaimed(s)) return out("claim", "ok", { worker: s.worker, already: "yes" });
     if (DRY) return out("claim", "dry_run", { worker: s.worker, would_check: "worker_name_and_dns" });
     const who = wrangler(["whoami"], { step: "claim" });
     if (who.status !== 0 || /not authenticated|not logged in/i.test(`${who.stdout}${who.stderr}`)) return out("claim", "needs_human", { reason: "login_first" });
-    const r = wrangler(["deployments", "list", "--name", s.worker], { step: "claim" });
-    if (r.status === 0) return out("claim", "fail", { reason: "worker_name_in_use", worker: s.worker, hint: "pick_another_name" });
-    if (!/not found|does not exist|10007/i.test(`${r.stdout}${r.stderr}`)) return out("claim", "fail", { reason: "could_not_check_name", log: ".relay-local/logs/claim.log" });
+    // A Worker this setup claimed before (owned-<name>) may be re-claimed with new hosts; any other existing name is refused.
+    const owned = existsSync(join(LOCAL, `owned-${s.worker}`));
+    if (!owned) {
+      const r = wrangler(["deployments", "list", "--name", s.worker], { step: "claim" });
+      if (r.status === 0) return out("claim", "fail", { reason: "worker_name_in_use", worker: s.worker, hint: "pick_another_name" });
+      if (!/not found|does not exist|10007/i.test(`${r.stdout}${r.stderr}`)) return out("claim", "fail", { reason: "could_not_check_name", log: ".relay-local/logs/claim.log" });
+    }
     for (const h of [s.apiHost, s.appHost]) if (await hostHasDns(h)) return out("claim", "fail", { reason: "host_in_use", host: h, hint: "pick_another_host" });
-    writeFileSync(marker, `${new Date().toISOString()}\n`);
+    writeFileSync(markerPath(s), JSON.stringify({ worker: s.worker, apiHost: s.apiHost, appHost: s.appHost, at: new Date().toISOString() }) + "\n");
+    writeFileSync(join(LOCAL, `owned-${s.worker}`), `${new Date().toISOString()}\n`);
     out("claim", "ok", { worker: s.worker });
   },
 
@@ -339,7 +356,7 @@ const steps = {
       const r = wrangler(["deploy", "--dry-run", "--outdir", "dist"], { step: "deploy" });
       return out("deploy", r.status === 0 ? "dry_run" : "fail", { worker: s.worker, built: r.status === 0 ? "yes" : "no", log: ".relay-local/logs/deploy.log" });
     }
-    if (!existsSync(join(LOCAL, `claimed-${s.worker}`))) return out("deploy", "fail", { reason: "run_claim_first" });
+    if (!isClaimed(s)) return out("deploy", "fail", { reason: "run_claim_first" });
     const r = wrangler(["deploy"], { step: "deploy" });
     out("deploy", r.status === 0 ? "ok" : "fail", { worker: s.worker, log: ".relay-local/logs/deploy.log" });
   },
@@ -350,7 +367,7 @@ const steps = {
     const { payload, missing } = buildPayload(s, m);
     if (missing.length) return out("secrets", "fail", { reason: "missing", names: missing.join(",") });
     if (DRY) return out("secrets", "dry_run", { would_set: Object.keys(payload).length, names: Object.keys(payload).join(",") });
-    if (!existsSync(join(LOCAL, `claimed-${s.worker}`))) return out("secrets", "fail", { reason: "run_claim_first" });
+    if (!isClaimed(s)) return out("secrets", "fail", { reason: "run_claim_first" });
     const r = wrangler(["secret", "bulk"], { input: JSON.stringify(payload), step: "secrets" });
     if (r.status !== 0) return out("secrets", "fail", { log: ".relay-local/logs/secrets.log" });
     const l = wrangler(["secret", "list", "--format", "json"], { step: "secrets" });
@@ -438,7 +455,7 @@ const steps = {
     const m = loadSecrets();
     const s = loadSettings();
     const { missing } = s.worker ? buildPayload(s, m) : { missing: ["config"] };
-    out("status", "ok", { worker: s.worker || "none", delivery: s.delivery || "none", have: [...m.keys()].join(","), missing: missing.join(",") || "none", claimed: s.worker && existsSync(join(LOCAL, `claimed-${s.worker}`)) ? "yes" : "no" });
+    out("status", "ok", { worker: s.worker || "none", delivery: s.delivery || "none", have: [...m.keys()].join(","), missing: missing.join(",") || "none", claimed: s.worker && isClaimed(s) ? "yes" : "no" });
   },
 };
 

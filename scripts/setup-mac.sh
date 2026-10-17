@@ -148,8 +148,11 @@ step_mac_permissions() {
   # Opens the Full Disk Access list and shows node in Finder, so the owner can drag it in.
   [ "$(uname -s)" = "Darwin" ] || { status mac-permissions fail reason=needs_a_mac; return 1; }
   [ "$DRY" = 1 ] && { status mac-permissions dry_run would_open=full_disk_access_and_node_in_finder; return; }
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" && open -R "$(command -v node)" \
-    && status mac-permissions needs_human next=drag_node_into_full_disk_access
+  if open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" && open -R "$(command -v node)"; then
+    status mac-permissions needs_human next=drag_node_into_full_disk_access
+  else
+    status mac-permissions fail reason=open_failed next=system_settings_privacy_full_disk_access; return 1
+  fi
 }
 
 case "$STEP" in

@@ -60,6 +60,55 @@ describe.skipIf(process.platform === "win32")("claim guard", () => {
       expect(r.out).toContain(`reason=host_in_use host=${h}`); expect(claimed()).toBe(false);
     }
   });
+  it("VET-REPRO B1: changing hosts after a claim re-runs the host check", () => {
+    run(["claim"], { FAKE_WORKER: "missing" });
+    run(["config", "--domain", "taken.test"]);
+    const r = run(["claim"], { FAKE_WORKER: "missing", FAKE_DNS_USED: "api.taken.test" });
+    expect(r.out).toContain("reason=host_in_use");
+  });
+  it("config clears the claim when the worker or either host changes, and keeps it otherwise", () => {
+    for (const change of [["--worker", "relay-u"], ["--api-host", "x-api.owner.test"], ["--app-host", "x-app.owner.test"], ["--domain", "other.test"]]) {
+      run(["config", "--worker", "relay-t", "--domain", "owner.test", "--api-host", "api.owner.test", "--app-host", "app.owner.test"]);
+      expect(run(["claim"], { FAKE_WORKER: "missing" }).out).toContain("result=ok");
+      run(["config", "--team", "t2"]);
+      expect(claimed()).toBe(true);
+      run(["config", ...change]);
+      expect(claimed()).toBe(false);
+      expect(run(["deploy"]).out).toContain("reason=run_claim_first");
+      expect(run(["secrets"]).out).not.toContain("result=ok");
+    }
+  });
+  it("deploy refuses a marker whose hosts don't match the settings exactly", () => {
+    run(["claim"], { FAKE_WORKER: "missing" });
+    const f = join(dir, ".relay-local", "claimed-relay-t.json");
+    const c = JSON.parse(readFileSync(f, "utf8"));
+    for (const k of ["worker", "apiHost", "appHost"]) {
+      writeFileSync(f, JSON.stringify({ ...c, [k]: c[k] + "x" }));
+      expect(run(["deploy"]).out).toContain("reason=run_claim_first");
+      expect(run(["claim"], { FAKE_WORKER: "missing", FAKE_DNS_USED: "api.owner.test" }).out).toContain("reason=host_in_use");
+    }
+    writeFileSync(f, "not json");
+    expect(run(["deploy"]).out).toContain("reason=run_claim_first");
+    writeFileSync(f, JSON.stringify(c));
+    expect(run(["deploy"]).out).toContain("result=ok");
+    expect(existsSync(join(dir, "fake.deploy"))).toBe(true);
+  });
+  it("a re-claim of this setup's own Worker skips the name check but still checks the new hosts", () => {
+    run(["claim"], { FAKE_WORKER: "missing" });
+    run(["config", "--domain", "new.test"]);
+    expect(run(["claim"], { FAKE_WORKER: "exists", FAKE_DNS_USED: "app.new.test" }).out).toContain("reason=host_in_use host=app.new.test");
+    expect(run(["claim"], { FAKE_WORKER: "exists" }).out).toContain("RELAY_STATUS step=claim result=ok");
+    run(["config", "--worker", "someone-else"]);
+    expect(run(["claim"], { FAKE_WORKER: "exists" }).out).toContain("reason=worker_name_in_use");
+  });
+  it("gateway-check --dry-run writes nothing", () => {
+    const sf = join(dir, ".relay-local", "secrets.env"), cf = join(dir, ".relay-local", "settings.json");
+    writeFileSync(sf, 'GATEWAY_USER="TEST-ONLY-u"\nGATEWAY_PASS="TEST-ONLY-p"\n');
+    const before = [readFileSync(sf, "utf8"), readFileSync(cf, "utf8")];
+    const r = run(["gateway-check", "--dry-run"], { RELAY_DRYRUN_DEVICES: '[{"id":"dev-TEST-1"}]' });
+    expect(r.out).toContain("result=dry_run");
+    expect([readFileSync(sf, "utf8"), readFileSync(cf, "utf8")]).toEqual(before);
+  });
   it("asks for the human sign-in instead of guessing when not logged in", () => {
     const r = run(["claim"], { FAKE_LOGIN: "no", FAKE_WORKER: "missing" });
     expect(r.out).toContain("result=needs_human"); expect(r.code).toBe(2); expect(claimed()).toBe(false);
