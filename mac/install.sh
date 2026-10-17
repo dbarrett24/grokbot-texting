@@ -31,7 +31,7 @@ IMSG="$(command -v imsg || true)"
 [ -n "$IMSG" ] || die "imsg is needed: brew install steipete/tap/imsg"
 VERSION="$("$IMSG" --version)"
 "$NODE" --input-type=module -e "import { versionOk } from '$HERE/relay-device.mjs'; process.exit(versionOk(process.argv[1]) ? 0 : 1)" "$VERSION" \
-  || die "imsg $VERSION is too old; 0.6.0+ is required (brew upgrade imsg)"
+  || die "imsg $VERSION is too old; 0.14.0+ is required (brew upgrade imsg)"
 
 printf 'Relay URL (your REQUEST_HOST, like https://api.example.com): '
 read -r RELAY_URL
@@ -68,12 +68,16 @@ Three steps only you can do on this Mac:
    Until it's on, every send fails and the relay logs it (nothing is retried).
 
 2. Full Disk Access for node (recommended). It lets imsg read the Messages database to confirm each
-   text really went out, and catch the macOS 26 "sent but not delivered" bug. Without it, sends report
+   text really went out, and check for the macOS 26 "sent but not delivered" bug. Without it, sends report
    "sent_unverified". System Settings > Privacy & Security > Full Disk Access > + > $NODE
 
 3. Keep the Mac awake and logged in. System Settings > Energy (or Battery > Options):
    "Prevent automatic sleeping when the display is off". With FileVault on, after any restart nothing
    sends until you log in again; the relay warns you if the Mac goes quiet for 10 minutes.
+
+Be at this Mac for the first test text: that's when the Automation prompt appears.
+After "brew upgrade node" (or a macOS or imsg update), re-run this script and re-check steps 1 and 2:
+macOS can silently drop both permissions, and the next text then comes back "uncertain".
 
 For green-bubble SMS, also turn on Text Message Forwarding on the iPhone for this Mac
 (Settings > Apps > Messages > Text Message Forwarding). The iPhone must be on and online for SMS.

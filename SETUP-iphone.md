@@ -16,7 +16,15 @@ Two ways to do the claiming:
 | 2 (fallback) | **An iPhone Shortcut** woken by an email | Usually, but **best-effort**: seconds to 15+ minutes, sometimes not at all | iOS 17+, Apple Mail with a push account |
 | 2b | The same Shortcut, **one tap per text** | No, you tap a notification | iOS 17+ and ntfy |
 
-Do DEPLOY.md first (sections for Cloudflare, Access, secrets and contacts), but **skip the Android phone and SMS Gateway steps**. Then come back here.
+**Apple ID risk, on every path:** Apple can flag an Apple ID that sends automated iMessages, which blocks new conversations until you contact Apple. Keep it to personal texts to your contacts (the 25-a-day default cap helps). See [Honest limits](#honest-limits).
+
+Do DEPLOY.md first, with these changes for an iPhone:
+- **Skip section 1** (the Android phone and SMS Gateway app).
+- **Section 5.3:** it says to leave `NOTIFY_MODE = "sms"`. Set it to `"ntfy"` instead (see below). Where the two files differ, this one wins.
+- **Section 6:** skip the four `GATEWAY_*` `secret put` lines, and ignore the `GATEWAY_*` names in its `secret list` check. Add the secrets below instead.
+- **Section 10:** the test answer is **202 `"state":"queued"`**, not `"state":"sent"`, because the device sends it. Do that test only after step 8 of your path below, when the device is set up. (DEPLOY's `<API_HOST>` is the same host this file calls `<REQUEST_HOST>`.)
+
+Then come back here.
 
 ## Worker settings for both paths
 
@@ -52,18 +60,23 @@ Device modes **require `NOTIFY_MODE = "ntfy"`**. With `"sms"` your notices (appr
 
 ### When the device goes quiet
 
-If the device hasn't polled for **10 minutes** (Mac asleep, logged out after a restart, Wi-Fi down, Shortcut not firing), the Worker logs `device_stale` and sends you **one** notice for that outage through the owner-notice path. When the device polls again it logs `device_back`, and the next outage gets its own notice.
+The Worker logs `device_stale` and sends you **one** notice per outage through the owner-notice path:
+- **Mac:** the helper polls every few seconds, so the notice goes out when the Mac hasn't polled for **10 minutes** (asleep, logged out after a restart, Wi-Fi down, helper stopped). This holds even when nothing is queued.
+- **Shortcut:** a healthy Shortcut only runs when it's pinged, so a quiet phone is normal. The notice goes out when a queued text has waited **10 minutes** without being picked up (automation not firing, phone offline).
+
+When the device polls again it logs `device_back`, and the next outage gets its own notice.
 
 That notice goes through ntfy, never through the device.
 
 ## Path 1: a Mac that stays on (recommended)
 
-The helper (`mac/relay-device.mjs`) runs as a LaunchAgent in your login session. Every 5 seconds it makes an **outbound HTTPS** request to `https://<REQUEST_HOST>/device/next`. There is no inbound port, no tunnel and no Cloudflare login on the Mac. When it gets a text, it sends it with [`imsg`](https://imsg.sh) (0.6.0 or newer), which drives Messages through Apple's public AppleScript surface: **System Integrity Protection stays on**, and no BlueBubbles Private API or other injection is used. Then it reports the result once.
+The helper (`mac/relay-device.mjs`) runs as a LaunchAgent in your login session. Every 5 seconds it makes an **outbound HTTPS** request to `https://<REQUEST_HOST>/device/next`. There is no inbound port, no tunnel and no Cloudflare login on the Mac. When it gets a text, it sends it with [`imsg`](https://imsg.sh) (0.14.0 or newer, for its `not_started` / `may_have_completed` / `still_in_flight` results), which drives Messages through Apple's public AppleScript surface: **System Integrity Protection stays on**, and no BlueBubbles Private API or other injection is used. Then it reports the result once.
 
 How results are read:
 - `sent`: imsg found the outgoing message in the Messages database.
 - `sent_unverified`: Messages accepted it, but imsg couldn't read the database to confirm (no Full Disk Access).
-- `uncertain`: imsg can't tell if it went out (including macOS 26's "sent but never delivered" ghost-row bug, which imsg 0.6.0+ detects, and a 90-second timeout). Not retried: check Messages before sending again.
+- `uncertain`: imsg can't tell if it went out (including a 90-second timeout, and macOS 26's "sent but never delivered" ghost-row bug where imsg checks for it). Not retried: check Messages before sending again.
+- About the ghost-row bug: imsg checks for it on group chats and on direct chats that already exist in Messages. It does **not** check a first text to someone you've never messaged from this Mac, so that one can come back `sent` or `sent_unverified` even if it never arrived.
 - `not_started`: it never left. Also not retried; the bot can send a new one.
 
 ### Steps (about 20 minutes)
@@ -73,9 +86,11 @@ How results are read:
 3. **Tools.** `brew install node steipete/tap/imsg`
 4. **Install the helper.** From this repo on the Mac: `bash mac/install.sh`. It asks for your relay URL (`https://<REQUEST_HOST>`) and the `DEVICE_TOKEN`, which goes into your **login Keychain** only, never a file. It installs `~/Library/LaunchAgents/org.smsrelay.device.plist` and starts it. Log: `~/Library/Logs/sms-relay-device.log` (job ids and outcomes only, never numbers or text).
 5. **Automation permission (required).** The first time a text goes out, macOS asks *"node wants access to control Messages"*. Click **Allow**. Missed it? System Settings > Privacy & Security > Automation > node > Messages on. Until then every send fails (and isn't retried).
-6. **Full Disk Access (recommended).** System Settings > Privacy & Security > Full Disk Access > add your `node` binary (install.sh prints its path). This lets imsg confirm each send and catch the ghost-row bug.
+6. **Full Disk Access (recommended).** System Settings > Privacy & Security > Full Disk Access > add your `node` binary (install.sh prints its path). This lets imsg confirm each send and check for the ghost-row bug.
+
+   **After `brew upgrade node`** (or a macOS or imsg update), check steps 5 and 6 again. The `node` binary's path changes when Homebrew upgrades it, and macOS can silently drop both permissions. The next text then waits on a prompt nobody sees and comes back `uncertain`. Re-run `bash mac/install.sh` so the LaunchAgent points at the new path, re-check both permissions, then send yourself a test (step 8).
 7. **Keep it awake.** System Settings > Energy: "Prevent automatic sleeping when the display is off". Leave it plugged in and on the network.
-8. **Test.** Ask your bot to text **your own number** something harmless, and watch for `direct_sent` on `https://<APPROVE_HOST>/log`. Then send one to a friend who knows it's a test.
+8. **Test, sitting at the Mac.** Be at the Mac for the first test: that's when the Automation prompt from step 5 appears, and nothing sends until you click Allow. Ask your bot to text **your own number** something harmless (or run DEPLOY.md section 10 and expect 202 `queued`), and watch for `direct_sent` on `https://<APPROVE_HOST>/log`. Then send one to a friend who knows it's a test.
 
 To stop it: `bash mac/uninstall.sh` (add `--forget` to remove the token from the Keychain), or the Worker's `DISABLED = "1"`.
 
@@ -113,7 +128,7 @@ Optional safety net: a few **Time of Day** automations (say hourly 8 AM to 9 PM)
 **Limits, plainly:**
 - Gmail in Apple Mail only *fetches* (about every 15 minutes), and the Gmail app never triggers automations. Use a **push** account (iCloud Mail, or another IMAP IDLE / Exchange account).
 - Low Power Mode and Background App Refresh settings delay it.
-- iOS has been seen to silently stop an automation until you open and re-save it. The 10-minute stale notice is how you'll find out.
+- iOS has been seen to silently stop an automation until you open and re-save it. You'll find out from the stale notice once a queued text has waited 10 minutes, and from the "dropped" notice for each text that expires.
 - The device token lives inside the Shortcut, and Shortcuts sync through iCloud. Don't share the Shortcut; if you do by mistake, rotate `DEVICE_TOKEN`.
 
 ### 2b: tap once per text
@@ -132,7 +147,8 @@ The Worker posts an ntfy notification ("A text is waiting. Tap to send it.", no 
 
 - **The Mac must stay awake, logged in and online.** A LaunchAgent can't run before you log in.
 - **FileVault and restarts:** with FileVault on (as it should be), a Mac that restarts after a power cut or update waits at the login screen, and nothing sends until you log in. You'll get the stale notice after 10 minutes.
-- **macOS 26 send bug:** Messages can report success while writing an empty message that never arrives. imsg 0.6.0+ catches this and the relay records `uncertain`, not `sent`. Re-test after every macOS update.
+- **macOS 26 send bug:** Messages can report success while writing an empty message that never arrives. imsg 0.14.0+ catches this on group chats and existing direct chats, and the relay records `uncertain`, not `sent`. A first text to a new number isn't checked. Re-test after every macOS update.
+- **Upgrades can drop permissions:** after `brew upgrade node`, or a macOS or imsg update, re-check Automation and Full Disk Access (Path 1, steps 5 and 6) and send yourself a test.
 - **Apple ID spam flags:** Apple can flag an Apple ID that sends automated or bulk iMessages, which blocks new conversations; recovery means contacting Apple. Keep it personal: contacts only, one recipient per text, the 25-a-day default cap, never a VM.
 - **SMS needs the iPhone.** Green-bubble texts relay through your iPhone; if it's off or offline they fail.
 - **One outgoing number.** If your Apple ID has several numbers, Messages' "Start new conversations from" setting decides which one is used.
