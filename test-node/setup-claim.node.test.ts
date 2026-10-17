@@ -2,18 +2,20 @@
 // against a fake `npx wrangler` and a fake DNS. Offline: no Cloudflare, gateway, relay or real DNS call.
 import { describe, it, expect, beforeEach } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, existsSync, statSync, chmodSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, existsSync, statSync, chmodSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const FAKE_NPX = `#!/bin/sh
-# fake npx: "npx wrangler <args>"; behaviour from FAKE_WORKER (exists|missing|error) and FAKE_LOGIN (yes|no)
+# fake npx: "npx wrangler <args>"; behaviour from FAKE_WORKER (exists|missing|error), FAKE_LOGIN (yes|no),
+# FAKE_ACCOUNTS (comma-separated account ids, default acct-a) and FAKE_DEPLOY (ok|fail)
 shift
 case "$1" in
-  whoami) [ "$FAKE_LOGIN" = no ] && { echo "You are not authenticated."; exit 1; }; echo "logged in"; exit 0 ;;
+  whoami) [ "$FAKE_LOGIN" = no ] && { echo '{"loggedIn":false}'; exit 1; }
+    exec node -e 'const a=(process.env.FAKE_ACCOUNTS ?? "acct-a").split(",").filter(Boolean).map((id)=>({id,name:"n"})); console.log(JSON.stringify({loggedIn:true,accounts:a}))' ;;
   deployments) case "$FAKE_WORKER" in exists) echo "Deployment 1"; exit 0 ;; missing) echo "Worker not found [code: 10007]" >&2; exit 1 ;; *) echo "network down" >&2; exit 1 ;; esac ;;
-  deploy) echo deployed > "$FAKE_LOG.deploy"; exit 0 ;;
+  deploy) [ "$FAKE_DEPLOY" = fail ] && exit 1; echo deployed > "$FAKE_LOG.deploy"; exit 0 ;;
   secret) [ "$2" = bulk ] && { cat > "$FAKE_LOG.stdin"; echo "$*" > "$FAKE_LOG.argv"; }; exit 0 ;;
 esac
 exit 0
@@ -82,7 +84,7 @@ describe.skipIf(process.platform === "win32")("claim guard", () => {
     run(["claim"], { FAKE_WORKER: "missing" });
     const f = join(dir, ".relay-local", "claimed-relay-t.json");
     const c = JSON.parse(readFileSync(f, "utf8"));
-    for (const k of ["worker", "apiHost", "appHost"]) {
+    for (const k of ["worker", "apiHost", "appHost", "accountId"]) {
       writeFileSync(f, JSON.stringify({ ...c, [k]: c[k] + "x" }));
       expect(run(["deploy"]).out).toContain("reason=run_claim_first");
       expect(run(["claim"], { FAKE_WORKER: "missing", FAKE_DNS_USED: "api.owner.test" }).out).toContain("reason=host_in_use");
@@ -93,13 +95,68 @@ describe.skipIf(process.platform === "win32")("claim guard", () => {
     expect(run(["deploy"]).out).toContain("result=ok");
     expect(existsSync(join(dir, "fake.deploy"))).toBe(true);
   });
-  it("a re-claim of this setup's own Worker skips the name check but still checks the new hosts", () => {
-    run(["claim"], { FAKE_WORKER: "missing" });
+  // Ownership: written only after a successful deploy, tied to the signed-in Cloudflare account and the hosts deployed.
+  const deployed = () => { expect(run(["claim"], { FAKE_WORKER: "missing" }).out).toContain("result=ok"); expect(run(["deploy"]).out).toContain("result=ok"); };
+  const owned = () => join(dir, ".relay-local", "owned-relay-t.json");
+  it("a re-claim of this setup's own deployed Worker skips the name check but still checks the new hosts", () => {
+    deployed();
+    expect(JSON.parse(readFileSync(owned(), "utf8"))).toEqual({ worker: "relay-t", accountId: "acct-a", hosts: ["api.owner.test", "app.owner.test"] });
     run(["config", "--domain", "new.test"]);
     expect(run(["claim"], { FAKE_WORKER: "exists", FAKE_DNS_USED: "app.new.test" }).out).toContain("reason=host_in_use host=app.new.test");
     expect(run(["claim"], { FAKE_WORKER: "exists" }).out).toContain("RELAY_STATUS step=claim result=ok");
     run(["config", "--worker", "someone-else"]);
     expect(run(["claim"], { FAKE_WORKER: "exists" }).out).toContain("reason=worker_name_in_use");
+  });
+  it("N1: a stale ownership record under a different Cloudflare account is refused", () => {
+    deployed();
+    run(["config", "--domain", "new.test"]);
+    expect(run(["claim"], { FAKE_WORKER: "exists", FAKE_ACCOUNTS: "acct-b" }).out).toContain("reason=worker_name_in_use");
+    expect(run(["deploy"], { FAKE_ACCOUNTS: "acct-b" }).out).toContain("reason=run_claim_first");
+  });
+  it("N1: an old-style or hand-written ownership file without the account doesn't count", () => {
+    writeFileSync(join(dir, ".relay-local", "owned-relay-t"), "2026-10-17T00:00:00Z\n");
+    writeFileSync(owned(), JSON.stringify({ worker: "relay-t", hosts: ["api.owner.test"] }));
+    expect(run(["claim"], { FAKE_WORKER: "exists" }).out).toContain("reason=worker_name_in_use");
+  });
+  it("ownership is written only after a successful deploy", () => {
+    run(["claim"], { FAKE_WORKER: "missing" });
+    expect(existsSync(owned())).toBe(false);
+    expect(run(["deploy"], { FAKE_DEPLOY: "fail" }).out).toContain("result=fail");
+    expect(existsSync(owned())).toBe(false);
+    run(["config", "--domain", "new.test"]);
+    expect(run(["claim"], { FAKE_WORKER: "exists" }).out).toContain("reason=worker_name_in_use");
+  });
+  it("N2: after a deploy, changing one host passes on the unchanged host and DNS-checks the new one", () => {
+    deployed();
+    run(["config", "--app-host", "page.owner.test"]);
+    const both = "api.owner.test,app.owner.test";
+    expect(run(["claim"], { FAKE_WORKER: "exists", FAKE_DNS_USED: `${both},page.owner.test` }).out).toContain("reason=host_in_use host=page.owner.test");
+    expect(run(["claim"], { FAKE_WORKER: "exists", FAKE_DNS_USED: both }).out).toContain("RELAY_STATUS step=claim result=ok");
+    expect(run(["deploy"]).out).toContain("result=ok");
+    expect(JSON.parse(readFileSync(owned(), "utf8")).hosts).toEqual(["api.owner.test", "app.owner.test", "page.owner.test"]);
+  });
+  it("N2: a lost claim marker after a deploy re-claims without tripping on the owner's own DNS", () => {
+    deployed();
+    rmSync(join(dir, ".relay-local", "claimed-relay-t.json"));
+    expect(run(["claim"], { FAKE_WORKER: "exists", FAKE_DNS_USED: "api.owner.test,app.owner.test" }).out).toContain("RELAY_STATUS step=claim result=ok");
+  });
+  it("signing in to another account after a claim blocks deploy and secrets", () => {
+    run(["claim"], { FAKE_WORKER: "missing" });
+    expect(run(["deploy"], { FAKE_ACCOUNTS: "acct-b" }).out).toContain("reason=run_claim_first");
+    expect(existsSync(join(dir, "fake.deploy"))).toBe(false);
+    const full = { REQUEST_TOKEN: "TEST-ONLY-r", LOG_HASH_KEY: "TEST-ONLY-l", ACCESS_AUD: "a".repeat(64), APPROVER_EMAIL: "o@example.test", OWNER_NUMBER: "+15555550100", OWNER_NAME: "Test Owner", GATEWAY_USER: "TEST-ONLY-u", GATEWAY_PASS: "TEST-ONLY-p", GATEWAY_DEVICE_ID: "d1", GATEWAY_PASSPHRASE: "TEST-ONLY-passphrase" };
+    writeFileSync(join(dir, ".relay-local", "secrets.env"), Object.entries(full).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join("\n") + "\n");
+    expect(run(["secrets"], { FAKE_ACCOUNTS: "acct-b" }).out).toContain("reason=run_claim_first");
+    expect(existsSync(join(dir, "fake.stdin"))).toBe(false);
+  });
+  it("an ownership record for a different Worker name doesn't count", () => {
+    writeFileSync(owned(), JSON.stringify({ worker: "other", accountId: "acct-a", hosts: ["api.owner.test", "app.owner.test"] }));
+    expect(run(["claim"], { FAKE_WORKER: "exists" }).out).toContain("reason=worker_name_in_use");
+  });
+  it("refuses to guess when several accounts are signed in, or none", () => {
+    expect(run(["claim"], { FAKE_WORKER: "missing", FAKE_ACCOUNTS: "acct-a,acct-b" }).out).toContain("reason=several_accounts");
+    expect(run(["claim"], { FAKE_WORKER: "missing", FAKE_ACCOUNTS: "" }).out).toContain("reason=no_account");
+    expect(claimed()).toBe(false);
   });
   it("gateway-check --dry-run writes nothing", () => {
     const sf = join(dir, ".relay-local", "secrets.env"), cf = join(dir, ".relay-local", "settings.json");

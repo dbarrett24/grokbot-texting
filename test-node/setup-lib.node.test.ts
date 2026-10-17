@@ -3,7 +3,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 // @ts-expect-error plain .mjs script, no types
-import { statusLine, parseEnv, formatEnv, typeablePassphrase, renderConfig, leftoverPlaceholders, buildPayload, requiredSecrets, fingerprintOf, ASKABLE, TEST_BODY } from "../scripts/setup-lib.mjs";
+import { accountFrom, statusLine, parseEnv, formatEnv, typeablePassphrase, renderConfig, leftoverPlaceholders, buildPayload, requiredSecrets, fingerprintOf, ASKABLE, TEST_BODY } from "../scripts/setup-lib.mjs";
 
 const TEMPLATE = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
 const BASE = { worker: "sms-relay-test", apiHost: "t-api.example.test", appHost: "t-app.example.test", team: "test-team", country: "+1", timezone: "America/Edmonton", startDate: "2026-10-01", google: "primary", delivery: "android", groupMms: "0" };
@@ -94,5 +94,21 @@ describe("owner-entered values", () => {
   });
   it("the test text follows the line-break rule", () => {
     expect(TEST_BODY).toBe("Hi,\n\nThis is a relay test. Would you reply OK when you see it?");
+  });
+});
+
+describe("signed-in Cloudflare account (wrangler whoami --json)", () => {
+  const ok = JSON.stringify({ loggedIn: true, accounts: [{ id: "acct-a", name: "n" }] });
+  it("returns the one account id", () => {
+    expect(accountFrom({ status: 0, stdout: `banner\n${ok}\n` })).toEqual({ id: "acct-a" });
+  });
+  it("treats a non-zero exit or loggedIn:false as not signed in", () => {
+    expect(accountFrom({ status: 1, stdout: ok })).toEqual({ reason: "login_first" });
+    expect(accountFrom({ status: 0, stdout: JSON.stringify({ loggedIn: false, accounts: [{ id: "acct-a" }] }) })).toEqual({ reason: "login_first" });
+    expect(accountFrom({ status: 0, stdout: "not json" })).toEqual({ reason: "login_first" });
+  });
+  it("refuses to pick when there are several accounts or none", () => {
+    expect(accountFrom({ status: 0, stdout: JSON.stringify({ loggedIn: true, accounts: [{ id: "a" }, { id: "b" }] }) })).toEqual({ reason: "several_accounts" });
+    expect(accountFrom({ status: 0, stdout: JSON.stringify({ loggedIn: true, accounts: [] }) })).toEqual({ reason: "no_account" });
   });
 });
