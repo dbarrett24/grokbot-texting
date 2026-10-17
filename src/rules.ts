@@ -26,6 +26,8 @@ export function hasLink(text: string): boolean {
 export class Refuse extends Error {
   /** silent: answered without a log row (the lookup/refusal rate limit). */
   silent = false;
+  /** Extra digit-free fields for the JSON answer (multi-send: which entry failed). Never a number. */
+  extra?: Record<string, unknown>;
   constructor(public code: string, public status = 400) {
     super(code);
   }
@@ -70,6 +72,17 @@ export function validateRequestBody(body: unknown, allow: Map<string, string>, m
   // Links in the message text are allowed unless BLOCK_LINKS = "1".
   if (blockLinks && hasLink(text)) throw new Refuse("links_not_allowed");
   return { to, text };
+}
+
+/**
+ * Text checks for a tap request filed by contact name or candidate id: the same rules as the text part of
+ * validateRequestBody (non-empty, length cap, links only when BLOCK_LINKS is on).
+ */
+export function validateTapText(raw: unknown, maxChars: number, blockLinks: boolean): string {
+  if (typeof raw !== "string" || raw.trim() === "") throw new Refuse("empty_text");
+  if (Array.from(raw).length > maxChars) throw new Refuse("text_too_long");
+  if (blockLinks && hasLink(raw)) throw new Refuse("links_not_allowed");
+  return raw;
 }
 
 // ---------- config ----------

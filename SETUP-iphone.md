@@ -145,6 +145,7 @@ The Worker posts an ntfy notification ("A text is waiting. Tap to send it.", no 
 
 ## Honest limits
 
+- **No group texts.** Both paths send 1:1 texts only. A `"group": true` send is refused with 409 `group_mms_unsupported_delivery` (even with `GROUP_MMS = "1"`), before anything is counted or sent. Multi-send still works: up to 3 people get separate copies, each queued as its own text and sent one at a time in order. With `SHORTCUT_PING = "tap"` that is one tap per copy.
 - **The Mac must stay awake, logged in and online.** A LaunchAgent can't run before you log in.
 - **FileVault and restarts:** with FileVault on (as it should be), a Mac that restarts after a power cut or update waits at the login screen, and nothing sends until you log in. You'll get the stale notice after 10 minutes.
 - **macOS 26 send bug:** Messages can report success while writing an empty message that never arrives. imsg 0.14.0+ catches this on group chats and existing direct chats, and the relay records `uncertain`, not `sent`. A first text to a new number isn't checked. Re-test after every macOS update.

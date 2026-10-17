@@ -39,6 +39,7 @@ Commands are written for zsh (the macOS default); bash equivalents are given whe
 ## 1. Phone: SMS Gateway for Android
 1. **HUMAN STEP:** Install the app. On the phone, open https://github.com/capcom6/android-sms-gateway/releases.
    - Pick the newest release **not** marked Pre-release and download the `.apk` under Assets. Check that the page belongs to `capcom6/android-sms-gateway`.
+   - Versions that matter (from the app's changelog, https://github.com/capcom6/android-sms-gateway/blob/master/CHANGELOG.md): **v1.74.0** or later is needed for group MMS (optional, section 12). **v1.77.0** and later publish a device key, so step 9 below applies; the newest release does. The app shows its version in its Settings, under Information.
    - Allow your browser to install apps when Android asks, then turn that permission back off after installing.
    - Docs: https://docs.sms-gate.app/getting-started/
 2. **HUMAN STEP:** Grant the SMS permission when asked. Allow notifications.
@@ -50,7 +51,8 @@ Commands are written for zsh (the macOS default); bash equivalents are given whe
 5. Leave webhooks, SMS forwarding and the email bridge **off**.
 6. The Cloud Server section now shows a **username** and **password**. Leave them on screen; you'll type them into hidden prompts in section 6. The same login opens dashboard.sms-gate.app, which can read your messages, so treat it like a bank password.
 7. **Encryption passphrase.** On your computer, run `openssl rand -base64 32`. It prints 44 characters.
-   - **HUMAN STEP:** In the app's settings, enter that exact value as the **encryption passphrase**.
+   - **HUMAN STEP:** In the app, open the **Settings** tab, find the **Encryption** section and tap **Passphrase**. Enter that exact value. (The docs say only that the passphrase is set in the device's own settings; the screen names here come from the app's source, v1.77.x.)
+   - With app v1.77.0 or newer the relay encrypts to the device key from step 9 instead, and the passphrase is only a fallback. Set it anyway.
    - Keep the terminal window open; you'll paste the same value in section 6. The relay refuses passphrases shorter than 32 characters.
    - Background: https://docs.sms-gate.app/privacy/encryption/
 8. **Device id.** On your computer, run this. `read -s` hides what you type:
@@ -58,7 +60,12 @@ Commands are written for zsh (the macOS default); bash equivalents are given whe
    read -r "U?SMS Gateway username: "; read -rs "P?password (hidden): "; echo
    curl -s -u "$U:$P" https://api.sms-gate.app/3rdparty/v1/devices; echo; unset P
    ```
-   (In bash, use `read -r -p "username: " U; read -rs -p "password: " P`.) Note your phone's `id` from the output. If the output shows a `publicKey`, see "Known limits".
+   (In bash, use `read -r -p "username: " U; read -rs -p "password: " P`.) Note your phone's `id` from the output, and whether it shows a `publicKey` and a `keyVersion`.
+9. **Device key (app v1.77.0 or newer: the `devices` output shows a `publicKey`).** The relay refuses to send until you pin that key, so a server that swapped it can't read your texts. https://docs.sms-gate.app/privacy/encryption/ ("Trust model and key verification")
+   - **HUMAN STEP:** In the app: **Settings**, **Device…**, **Device Key**, **Key fingerprint**. Tap it to copy. It looks like `A1B2:C3D4:…`, 16 groups of 4.
+   - Note the `keyVersion` number from the `devices` output in step 8.
+   - In the same **Device Key** section, set **Automatic key rotation** to **Disabled**. Every new key (rotated by hand or automatically) stops the relay until you pin it again (section 14).
+   - You'll store both in section 6. If there's no `publicKey`, skip this step.
 
 **Check:** the app shows **Online**, and the `devices` call lists exactly one device: yours.
 
@@ -112,7 +119,7 @@ npm test && npm run typecheck
    CAP_START_DATE = "YYYY-MM-DD"                 # today; only used if you turn on tap-to-approve
    GOOGLE_ACCOUNTS = "primary"                   # one label per Google account, e.g. "primary,work"
    ```
-3. Leave the rest as shipped: `DIRECT_SEND = "1"`, `ALLOW_EMAIL_OTP = "1"`, `REQUIRED_AMR = "otp"`, `NOTIFY_MODE = "sms"`, `CONTACTS_SNAPSHOT_ONLY = "0"`, `RUNAWAY_PAUSE = "0"`, `DISABLED = "0"`, `workers_dev = false`.
+3. Leave the rest as shipped: `DIRECT_SEND = "1"`, `ALLOW_EMAIL_OTP = "1"`, `REQUIRED_AMR = "otp"`, `NOTIFY_MODE = "sms"`, `CONTACTS_SNAPSHOT_ONLY = "0"`, `RUNAWAY_PAUSE = "0"`, `GROUP_MMS = "0"`, `DISABLED = "0"`, `workers_dev = false`.
 
 **TIMEZONE** has no default. If it's missing or misspelled, the relay refuses everything with `timezone_not_configured` or `timezone_invalid` until you fix it.
 
@@ -124,6 +131,8 @@ npm test && npm run typecheck
 
 ## 6. Sign in to Cloudflare and store the secrets
 Each `secret put` asks for its value at a hidden prompt. Type or paste it there, nowhere else.
+
+The Worker doesn't exist yet, so the **first** `secret put` asks: `There doesn't seem to be a Worker called "sms-relay". Do you want to create a new Worker with that name and add secrets to it?` Answer **yes**. Wrangler creates an empty placeholder Worker (it answers nothing useful) and adds the secret; section 7's deploy replaces it with the relay. The later `secret put` lines don't ask again. (Cloudflare's docs don't describe this prompt; it is in Wrangler's own code, checked in Wrangler 4.151.1, the version this repo installs.)
 ```sh
 npx wrangler login                 # HUMAN STEP: browser sign-in to the NEW account, with your passkey
 npx wrangler whoami                # must show the new account
@@ -139,8 +148,13 @@ npx wrangler secret put OWNER_NUMBER         # YOUR OWN number, + and country co
 npx wrangler secret put ALLOWLIST            # {"+<your number>":"Your Name"}: your own number, so you can test
 openssl rand -base64 32 | tr -d '\n' | npx wrangler secret put LOG_HASH_KEY   # made and stored without showing it
 ```
+If your phone has a device key (section 1, step 9), also:
+```sh
+npx wrangler secret put GATEWAY_PINNED_FINGERPRINT   # the Key fingerprint from the app, A1B2:C3D4:... exactly
+npx wrangler secret put GATEWAY_KEY_VERSION          # the keyVersion number, e.g. 1
+```
 
-**Check:** `npx wrangler secret list` shows these names (values are never shown): REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, GATEWAY_PASSPHRASE, OWNER_NUMBER, ALLOWLIST, LOG_HASH_KEY.
+**Check:** `npx wrangler secret list` shows these names (values are never shown): REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, GATEWAY_PASSPHRASE, OWNER_NUMBER, ALLOWLIST, LOG_HASH_KEY, plus GATEWAY_PINNED_FINGERPRINT and GATEWAY_KEY_VERSION if you have a device key.
 
 ## 7. First deploy
 ```sh
@@ -206,6 +220,8 @@ Read-only access to your contacts' names and numbers. Emails, notes and addresse
 
 ## 10. Test text to yourself
 Your own number is on the list through `ALLOWLIST` (your own contact card usually isn't in the sync).
+
+**Your bot can run this test for you** once it holds the token (section 11): it does the lookup, reads the test text back to you, sends it after your yes, and reads you the answer. Then skip the curl commands below and use the same **Check**. To run it yourself instead:
 ```sh
 read -rs "RT?Bot token (hidden): "; echo
 API=https://<API_HOST>
@@ -225,33 +241,37 @@ unset RT CID
 
 **Check:**
 - The answer has `"state":"sent"`, and the text arrives on your phone with blank lines between the parts.
+- `"sent"` means SMS Gateway's cloud accepted the encrypted text for your phone and gave it an id. It is not a delivery receipt: the phone sends it when it picks it up (right away if it's Online), and the app shows the real status.
 - `https://<APPROVE_HOST>/log` shows `direct_sent` with hashes only, never a number or the text.
 - A number on no list gets 403 `recipient_not_on_allowlist`.
-- If you get HTTP 502 `send_failed`: look in `/log`. Check the phone is Online and the passphrase matches the app exactly.
+- If you get HTTP 502 `send_failed`: look in `/log`. Check the phone is Online and the passphrase matches the app exactly. `device_key_present_but_no_pin` or `device_key_pin_mismatch` in the log means section 1 step 9 / section 6: pin (or re-pin) the device key.
 - Error 1102 or "exceeded CPU" means upgrade to Workers Paid.
 
 **Formatting rule (standard):** put a line break (a blank line) between the greeting, the ask and any link. No wall of text, and soft asks ("Would you be able to..."), not commands. In JSON, a line break is `\n`.
 
 ## 11. Connect your bot
 1. **HUMAN STEP:** Give the bot the token from section 6 **only through its secret prompt**. Never paste it into chat.
+   - On Grok Bot, store it as the secret named **`SMS_RELAY_TOKEN`**. Be aware that other bots of yours running on the same Grok Bot computer can read that secret too, so anyone who controls one of those bots can text your list. Keep only bots you trust there, and rotate the token (section 14) if that changes.
    - Tell the bot the `<API_HOST>` address.
    - Close the terminal that showed the token.
 2. The bot's rules:
-   - Read every text back word for word with the resolved name (`resolve: true` first, then send by `candidate_id`).
-   - Wait for your yes on that exact text. On voice, one text at a time.
-   - Any edit needs a fresh yes.
-   - One recipient per text.
+   - Look every name up first (`resolve: true`), then send by `candidate_id` (or `candidate_ids`).
+   - Read every text back word for word with the resolved names. Wait for your yes on that exact text. On voice, one text at a time.
+   - Any edit to the words or the people needs a fresh yes.
+   - Up to 3 people per text, sent as **separate copies**, and the read-back says "separate copies". A group thread (`"group": true`) only if you turned on `GROUP_MMS` and asked for a group. Not on the iPhone paths: there a group request is refused (`group_mms_unsupported_delivery`).
    - Follow the formatting rule in section 10.
-   - Stop and tell you on anything other than `sent`.
+   - Stop and tell you on anything other than `sent`. On a partial multi-send, say who got it and who didn't; never retry by itself.
+3. Have the bot run the section 10 test now.
 
-**Check:** ask the bot to text you "test". It reads it back, waits for your yes, sends it, and the text arrives.
+**Check:** the bot's section 10 test passes: it reads the test back, waits for your yes, sends it, and the text arrives.
 
 ## 12. Optional switches
 Each one is a `[vars]` line in `wrangler.toml`, followed by `npx wrangler deploy`.
 
 | Want | Set | Effect |
 |---|---|---|
-| **Tap-to-approve** | `DIRECT_SEND = "0"` | The bot can no longer send directly. It files a request (`POST /request`), you get a text, and you approve on your phone after the PIN and passkey. Add every allowed recipient to the `ALLOWLIST` secret. Limits below. |
+| **Tap-to-approve** | `DIRECT_SEND = "0"` | The bot can no longer send directly. It files a request (`POST /request`) by contact name or by number, you get a text, and you approve on your phone after the PIN and passkey. By name, anyone on your list can be chosen (needs `LOG_HASH_KEY`); by number, only `ALLOWLIST` numbers. Limits below. |
+| **Group MMS** | `GROUP_MMS = "1"` | Lets the bot send one group text (a shared thread) to 2–3 people instead of separate copies. Needs `OWNER_NUMBER` set (section 6) and app v1.74.0+, with mobile data on. Live-test first: one group to two numbers you control, then check each phone shows one thread and a reply reaches everyone (README "Group MMS"). Android (SMS Gateway) only: with `DELIVERY = "mac"` or `"shortcut"` (SETUP-iphone.md) every group send is refused with 409 `group_mms_unsupported_delivery`, and nothing is sent. |
 | **Daily cap** | `DIRECT_DAILY_CAP = "25"` (any whole number) | Sends past the cap that day (in `TIMEZONE`) are refused with `direct_daily_cap_reached`. |
 | **Link block** | `BLOCK_LINKS = "1"` | Texts containing a link (URL, domain, IP address, including disguised ones) are refused with `links_not_allowed`, on both flows. |
 | Per-minute cap | `DIRECT_PER_MINUTE_MAX = "5"` | Limits bursts. |
@@ -287,6 +307,7 @@ Rollback doesn't undo secrets or stored data.
 | Gateway password | Regenerate it in the app's Cloud Server settings, then `npx wrangler secret put GATEWAY_PASS` |
 | Passphrase | New `openssl rand -base64 32`. Set it in the app **and** with `npx wrangler secret put GATEWAY_PASSPHRASE` right after. Texts fail until both match |
 | Log key | `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler secret put LOG_HASH_KEY` (stored contacts are re-hashed on the next send) |
+| Device key | In the app, Settings, Device…, Device Key, **Rotate device key**. Then read the new Key fingerprint and `keyVersion` (section 1 steps 8–9) and `secret put` both `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION`. Sends refuse until both match |
 | Google access | Remove the app at https://myaccount.google.com/permissions, then rerun section 9 step 5 |
 
 Do it right away if a phone, computer or bot that held one is lost or compromised.
@@ -297,14 +318,15 @@ Do it right away if a phone, computer or bot that held one is lost or compromise
 3. DNS: remove any records left for `<API_HOST>` and `<APPROVE_HOST>`.
 4. Google: remove the app at https://myaccount.google.com/permissions for each account, then delete the Cloud project (https://console.cloud.google.com/, IAM & Admin, Settings, Shut down).
 5. Phone: go Offline, turn off Cloud Server, then uninstall SMS Gateway.
-6. Bot: delete the stored token.
+6. Bot: delete the stored token (`SMS_RELAY_TOKEN` on Grok Bot).
 7. Optional: cancel the domain and close the Cloudflare account and the dedicated email.
 
 **Check:** `curl -si https://<API_HOST>/send` no longer reaches the relay, and https://myaccount.google.com/permissions no longer lists the app.
 
 ## Known limits
 - **Android only.** iPhone pickup is planned.
-- **Device-key mode:** if the `devices` call in 1.8 ever shows a `publicKey`, the relay refuses to send until you set `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` from the app. That's deliberate.
+- **`sent` is not delivered.** It means SMS Gateway's cloud accepted the text for your phone (section 10).
+- **Device-key mode:** when the `devices` call shows a `publicKey` (app v1.77.0+), the relay refuses to send until `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` match it (section 1 step 9). A rotated key stops sending until you re-pin. That's deliberate.
 - **The phone is the sender.** If it's off, offline, or Android kills the app, texts wait in the cloud queue. The app checks in at least every 15 minutes.
 - **Who can send:** anyone with the bot token can text anyone on your list with no tap. Guard the token like a password, and use section 13 if it leaks.
 - **Sign-in:** with `ALLOW_EMAIL_OTP = "1"` the passkey requirement rests on your Access policy alone (section 3).
