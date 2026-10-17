@@ -630,7 +630,7 @@ export class Relay extends DurableObject<Env> {
     if (d.queued) {
       // Every guard and counter above already ran. The device reports the outcome to /device/result.
       let notified: boolean | undefined;
-      if (cfg.notifyEach) notified = await this.notifyDirectEach(id, label, text, now);
+      if (cfg.notifyEach) notified = await this.notifyDirectEach(id, label, text, now, true);
       return json(202, { id, state: "queued", method: "direct", to: label, ...(notified === undefined ? {} : { notified }) });
     }
     const gid = d.gid;
@@ -653,12 +653,14 @@ export class Relay extends DurableObject<Env> {
     }
   }
 
-  private async notifyDirectEach(id: string, label: string, text: string, now: number): Promise<boolean> {
+  private async notifyDirectEach(id: string, label: string, text: string, now: number, queued = false): Promise<boolean> {
     const chars = [...text];
     const preview = chars.length > 80 ? chars.slice(0, 80).join("") + "…" : text;
-    const msg = `SMS relay direct send to ${label} at ${this.fmtTime(now)}: "${preview}" ref ${id.slice(0, 8)}. Log: https://${this.env.APPROVE_HOST}/log`;
+    // A queued text hasn't gone anywhere yet: say so, and name the device that will send it.
+    const what = queued ? `text queued for your ${this.delivery() === "mac" ? "Mac" : "iPhone Shortcut"} to send to` : "direct send to";
+    const msg = `SMS relay ${what} ${label} at ${this.fmtTime(now)}: "${preview}" ref ${id.slice(0, 8)}. Log: https://${this.env.APPROVE_HOST}/log`;
     try {
-      await this.deliverToOwner(msg, "SMS relay direct send");
+      await this.deliverToOwner(msg, queued ? "SMS relay text queued" : "SMS relay direct send");
       this.log("direct_notified", { request_id: id });
       return true;
     } catch (e) {
@@ -984,17 +986,21 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     this.sql.exec("UPDATE requests SET state='approved_sending', decided_ms=? WHERE id=?", now, id);
     this.sql.exec("INSERT INTO sends(ms,day,request_id) VALUES(?,?,?)", now, day, id);
     this.log("approved", { request_id: id, recipient: r.recipient, sha256: logSha, detail: `method=${who.method} by=${who.email}` });
+    let queuedJob: string | null = null;
     try {
-      const d = await this.deliver(r.recipient, r.text, { kind: "tap", id });
-      if (d.queued) {
-        this.sql.exec("UPDATE requests SET state='queued_device', gateway_id=? WHERE id=?", d.job, id);
-        return json(202, { id, state: "queued" });
-      }
+      // queued_device is written in the same step as the job (before the Shortcut ping is awaited), so a claim
+      // and result that land during the ping still find the request row and record the outcome on it.
+      const d = await this.deliver(r.recipient, r.text, { kind: "tap", id }, (job) => {
+        queuedJob = job;
+        this.sql.exec("UPDATE requests SET state='queued_device', gateway_id=? WHERE id=?", job, id);
+      });
+      if (d.queued) return json(202, { id, state: "queued" });
       const gid = d.gid;
       this.sql.exec("UPDATE requests SET state='sent', gateway_id=? WHERE id=?", gid, id);
       this.log("sent", { request_id: id, recipient: r.recipient, sha256: logSha, detail: gid });
       return json(200, { id, state: "sent" });
     } catch (e) {
+      if (queuedJob !== null) return json(202, { id, state: "queued" }); // the job is queued; the device reports its outcome
       this.sql.exec("UPDATE requests SET state='send_failed' WHERE id=?", id);
       this.log("send_failed", { request_id: id, recipient: r.recipient, sha256: logSha, detail: errCode(e) });
       return json(502, { id, state: "send_failed" });
@@ -1020,7 +1026,12 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
    * The last hop. android: the SMS Gateway, now. mac/shortcut: a queued job the owner's device claims over
    * POST /device/next. Callers run every guard and counter BEFORE this, so a queued job is already approved.
    */
-  private async deliver(to: string, text: string, ref: { kind: JobKind; id: string; who?: string; sha?: string }): Promise<Delivered> {
+  private async deliver(
+    to: string,
+    text: string,
+    ref: { kind: JobKind; id: string; who?: string; sha?: string },
+    onQueued?: (job: string) => void,
+  ): Promise<Delivered> {
     const mode = this.delivery();
     if (!isDevice(mode)) return { queued: false, gid: await this.gatewaySend(to, text) };
     if (!E164.test(to)) throw new Error("bad_recipient");
@@ -1029,6 +1040,7 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
       "INSERT INTO device_jobs(id,created_ms,kind,ref,recipient,text,state,who,sha) VALUES(?,?,?,?,?,?,'queued',?,?)",
       job, this.clock(), ref.kind, ref.id, to, text, ref.who ?? null, ref.sha ?? null,
     );
+    onQueued?.(job); // synchronous with the INSERT: nothing else runs before the caller's state is saved
     this.log("device_queued", { request_id: ref.id, detail: `job_id=${job.slice(0, 8)} kind=${ref.kind} via=${mode}` });
     await this.ensureDeviceAlarm();
     if (mode === "shortcut") await this.pingShortcut();
@@ -1096,6 +1108,7 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
    */
   private async deviceNext(req: Request): Promise<Response> {
     await this.requireDeviceToken(req);
+    await this.ensureDeviceAlarm(); // a check-in arms the minute sweep, so a device that then dies is noticed in 10 min
     await this.deviceSweep(); // time out stuck claims first, so a dead one never blocks the queue
     const now = this.clock();
     const out = this.ctx.storage.transactionSync(() => {
@@ -1185,7 +1198,7 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     } catch {
       expiryMs = parseUnclaimedExpiryMs(undefined); // garbage: fetch refuses every route; the sweep keeps the default
     }
-    const { stale, expired } = this.ctx.storage.transactionSync(() => this.sweepSync(now, expiryMs));
+    const { stale, expired } = this.ctx.storage.transactionSync(() => this.sweepSync(mode, now, expiryMs));
     for (const x of expired) await this.notifyExpired(x, expiryMs);
     if (stale !== null) await this.notifyStale(mode, stale, expiryMs);
   }
@@ -1194,7 +1207,7 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
    * Returns the jobs that just expired (for their owner notices) and, when the device has JUST gone stale,
    * the minutes since its last poll.
    */
-  private sweepSync(now: number, expiryMs: number): { stale: number | null; expired: { job: string; ref: string | null; to: string }[] } {
+  private sweepSync(mode: "mac" | "shortcut", now: number, expiryMs: number): { stale: number | null; expired: { job: string; ref: string | null; to: string }[] } {
     const expired: { job: string; ref: string | null; to: string }[] = [];
     const timedOut = this.sql.exec("SELECT id, kind, ref, who, sha, state, lease FROM device_jobs WHERE state='claimed' AND claimed_ms <= ?", now - CLAIM_TIMEOUT_MS).toArray() as unknown as Job[];
     for (const j of timedOut) {
@@ -1210,7 +1223,19 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
       this.finishJob(j, "expired");
       expired.push({ job: j.id, ref: j.ref, to: j.recipient });
     }
-    // The watch starts the first time a device mode runs, so a device that never polls is caught too.
+    // shortcut: a healthy Shortcut only polls when pinged, so a poll gap means nothing. Stale = the oldest
+    // queued text has waited STALE_AFTER_MS unclaimed. The next poll (device_back) re-arms the notice.
+    if (mode === "shortcut") {
+      const oldest = this.sql.exec("SELECT MIN(created_ms) AS m FROM device_jobs WHERE state='queued'").one().m as number | null;
+      if (oldest === null || now - oldest < STALE_AFTER_MS || this.meta("device_stale") === "1") return { stale: null, expired };
+      this.setMeta("device_stale", "1");
+      const waited = Math.floor((now - oldest) / 60_000);
+      console.error(`DEVICE_STALE minutes_unclaimed=${waited}`);
+      this.log("device_stale", { detail: `minutes_unclaimed=${waited} via=shortcut` });
+      return { stale: waited, expired };
+    }
+    // mac: the helper polls every few seconds, so 10 minutes without a poll is an outage. The watch starts
+    // the first time a device mode runs, so a Mac that never polls is caught too.
     const seen = this.meta("device_last_seen_ms");
     let since = seen === null ? null : Number(seen);
     if (since === null) {
@@ -1244,8 +1269,11 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
 
   /** The one stale notice per outage, through the owner-notice path (ntfy: device modes refuse sms). */
   private async notifyStale(mode: "mac" | "shortcut", minutes: number, expiryMs: number) {
-    const what = mode === "mac" ? "Mac" : "iPhone Shortcut";
-    const msg = `SMS relay: your ${what} hasn't checked in for ${minutes} min. Texts wait in the queue (unclaimed ones are dropped after ${expiryMs / 60_000} min). Check it's on, awake, logged in and online.`;
+    const drop = `unclaimed ones are dropped after ${expiryMs / 60_000} min`;
+    const msg =
+      mode === "mac"
+        ? `SMS relay: your Mac hasn't checked in for ${minutes} min. Texts wait in the queue (${drop}). Check it's on, awake, logged in and online.`
+        : `SMS relay: a text has waited ${minutes} min and your iPhone Shortcut hasn't picked it up. Texts wait in the queue (${drop}). Check the automation still runs (open Shortcuts > Automation) and the iPhone is online.`;
     try {
       await this.deliverToOwner(msg, "SMS relay device offline");
       this.log("device_stale_notified", { detail: "ntfy" });

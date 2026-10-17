@@ -6,12 +6,12 @@
 import { execFile, execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-export const MIN_IMSG = [0, 6, 0]; // 0.6.0 added the macOS 26 ghost-row (sent-but-not-delivered) check
+export const MIN_IMSG = [0, 14, 0]; // 0.14.0 added the delivery dispositions (not_started / may_have_completed / still_in_flight)
 export const IMSG_TIMEOUT_MS = 90_000; // under the relay's 2-minute claim timeout
 const HEX32 = /^[a-f0-9]{32}$/;
 const E164 = /^\+[1-9]\d{6,14}$/;
 
-/** True when `imsg --version` output is 0.6.0 or newer. */
+/** True when `imsg --version` output is 0.14.0 or newer. */
 export function versionOk(out) {
   const m = String(out).match(/(\d+)\.(\d+)\.(\d+)/);
   if (!m) return false;
@@ -36,8 +36,10 @@ export function relayOrigin(raw) {
 /**
  * imsg's result → the relay's outcome. imsg prints {"status":"sent"} (plus id/guid when it saw the row in
  * chat.db) and exits 0 on success. On failure it exits non-zero and names one disposition:
- * not_started (never dispatched), may_have_completed or still_in_flight (unknown; never retry). Its ghost-row
- * and no-row checks report may_have_completed, so "sent but not delivered" lands in "uncertain", not "sent".
+ * not_started (never dispatched), may_have_completed or still_in_flight (unknown; never retry). Where imsg runs
+ * its ghost-row / no-row check (chat targets and existing direct chats; not a first text to a new number) it
+ * reports may_have_completed, so "sent but not delivered" lands in "uncertain", not "sent". A ghost row imsg
+ * doesn't check can still come back as "sent" or "sent_unverified".
  */
 export function classify({ code, stdout, stderr, timedOut }) {
   if (timedOut) return { outcome: "uncertain", detail: "imsg_timeout" };
@@ -100,7 +102,9 @@ export async function pollOnce({ origin, token, fetch: f = fetch, runImsg, log =
   if (typeof job.to !== "string" || !E164.test(job.to) || typeof job.text !== "string" || !job.text) {
     res = { outcome: "not_started", detail: "helper_bad_job" }; // imsg never ran
   } else {
-    res = classify(await runImsg(["send", "--to", job.to, "--text", job.text, "--service", "auto", "--json"]));
+    // "--opt=value": imsg takes everything after the first "=" verbatim, so a text starting with "-" (or "--")
+    // is never read as an option.
+    res = classify(await runImsg(["send", `--to=${job.to}`, `--text=${job.text}`, "--service", "auto", "--json"]));
   }
   const report = JSON.stringify({ id: job.id, lease: job.lease, outcome: res.outcome, detail: res.detail });
   // Reporting can be repeated safely (the relay records one result per claim); the SEND is never repeated.
@@ -129,7 +133,7 @@ async function main() {
   const service = process.env.KEYCHAIN_SERVICE || "sms-relay-device-token";
   const pollMs = Math.max(2, Number(process.env.POLL_SECONDS) || 5) * 1000;
   const version = execFileSync(imsg, ["--version"], { encoding: "utf8" });
-  if (!versionOk(version)) throw new Error(`imsg ${version.trim()} is too old; 0.6.0 or newer is required (brew upgrade imsg)`);
+  if (!versionOk(version)) throw new Error(`imsg ${version.trim()} is too old; 0.14.0 or newer is required (brew upgrade imsg)`);
   if (process.argv.includes("--check")) {
     keychainToken(service); // throws if the token isn't in the Keychain
     log(`ok: imsg ${version.trim()}, token found, relay ${origin}`);

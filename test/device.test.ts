@@ -168,6 +168,21 @@ describe("every existing guard runs before a job is queued", () => {
     expect(await count("SELECT COUNT(*) AS c FROM device_jobs WHERE kind='tap' AND ref=?", id)).toBe(1);
     expect(gatewayCalls()).toHaveLength(0);
   });
+
+  it("tap flow: if something fails after the job is queued, the request stays queued_device (never send_failed)", async () => {
+    const id = ((await (await postRequest(h, { to: FRIEND, text: "pick up at 5?" })).json()) as any).id;
+    await runIn(h.relay, async (i) => {
+      i.ensureDeviceAlarm = async () => {
+        throw new Error("storage_hiccup");
+      };
+    });
+    const r = await approve(h, id);
+    expect(r.status).toBe(202);
+    expect(await r.json()).toEqual({ id, state: "queued" });
+    expect((await sql("SELECT state FROM requests WHERE id=?", id))[0].state).toBe("queued_device");
+    expect((await sql("SELECT state FROM device_jobs WHERE ref=?", id)).map((x) => x.state)).toEqual(["queued"]);
+    expect(await logOf("send_failed")).toHaveLength(0);
+  });
 });
 
 describe("claim and result", () => {
@@ -489,6 +504,69 @@ describe("stale device alert (10 minutes, one notice per outage)", () => {
     expect(gatewayCalls()).toHaveLength(0);
   });
 
+  describe("shortcut: stale means a text left unclaimed, not a poll gap", () => {
+    const SC = { DELIVERY: "shortcut", PING_FROM: "relay@example.test", PING_TO: "owner@example.test" };
+    beforeEach(async () => h.setEnv(SC));
+
+    it("a Shortcut that never polls, with nothing queued, is never stale", async () => {
+      for (const m of [0, 10, 60, 600]) {
+        h.setNow(T0 + m * MIN);
+        await alarm();
+      }
+      expect(await logOf("device_stale")).toHaveLength(0);
+      expect(staleNotices()).toHaveLength(0);
+    });
+
+    it("idle after a healthy poll is not stale", async () => {
+      expect((await direct({ to: FRIEND, body: "hi" })).status).toBe(202);
+      const j = await claim();
+      expect((await result({ id: j.id, lease: j.lease, outcome: "sent_unverified" })).status).toBe(200);
+      for (const m of [11, 30, 120]) {
+        h.setNow(T0 + m * MIN);
+        await alarm();
+      }
+      expect(await logOf("device_stale")).toHaveLength(0);
+    });
+
+    it("fires once when the oldest queued text has waited 10 min, stays quiet, and re-arms after the next poll", async () => {
+      expect((await direct({ to: FRIEND, body: "one" })).status).toBe(202);
+      h.setNow(T0 + 9.9 * MIN);
+      await alarm();
+      expect(staleNotices()).toHaveLength(0);
+      for (const m of [10, 11, 15]) {
+        h.setNow(T0 + m * MIN);
+        await alarm();
+      }
+      expect(staleNotices()).toHaveLength(1);
+      expect((await logOf("device_stale"))[0].detail).toBe("minutes_unclaimed=10 via=shortcut");
+      expect(staleNotices()[0].body).not.toContain("5555");
+      h.setNow(T0 + 16 * MIN);
+      const j = await claim(); // the Shortcut runs again
+      expect(await logOf("device_back")).toHaveLength(1);
+      await result({ id: j.id, lease: j.lease, outcome: "sent_unverified" });
+      h.setNow(T0 + 20 * MIN);
+      expect((await direct({ to: FRIEND, body: "two" })).status).toBe(202);
+      h.setNow(T0 + 30 * MIN);
+      await alarm();
+      expect(staleNotices()).toHaveLength(2); // a new outage gets its own notice
+    });
+
+    it("the wait counts from the oldest queued text, not the newest", async () => {
+      expect((await direct({ to: FRIEND, body: "one" })).status).toBe(202);
+      h.setNow(T0 + 8 * MIN);
+      expect((await direct({ to: TWO, body: "two" })).status).toBe(202);
+      h.setNow(T0 + 10 * MIN);
+      await alarm();
+      expect((await logOf("device_stale"))[0]?.detail).toBe("minutes_unclaimed=10 via=shortcut");
+    });
+  });
+
+  it("mac: a check-in arms the minute sweep even with an empty queue", async () => {
+    expect(await claim()).toBeNull();
+    const at = await runIn(h.relay, async (i) => i.ctx.storage.getAlarm());
+    expect(at - Date.now()).toBeLessThanOrEqual(60_000);
+  });
+
   it("android mode never watches a device", async () => {
     await h.setEnv({ DELIVERY: "android" });
     h.setNow(T0 + 120 * MIN);
@@ -505,6 +583,17 @@ describe("stale device alert (10 minutes, one notice per outage)", () => {
     await h.setEnv({ DELIVERY: "android" });
     await alarm();
     expect((await runIn(h.relay, async (i) => i.ctx.storage.getAlarm())) - Date.now()).toBeGreaterThan(3_600_000);
+  });
+});
+
+describe("per-send notice (DIRECT_NOTIFY_EACH) in a device mode", () => {
+  it.each([["mac", "Mac"], ["shortcut", "iPhone Shortcut"]])("DELIVERY=%s: says the text is queued, not sent", async (mode, what) => {
+    await h.setEnv({ DELIVERY: mode, DIRECT_NOTIFY_EACH: "1", PING_FROM: "relay@example.test", PING_TO: "owner@example.test" });
+    expect((await direct({ to: FRIEND, body: "see you at 6" })).status).toBe(202);
+    const n = ntfyPosts.filter((p) => p.title === "SMS relay text queued");
+    expect(n).toHaveLength(1);
+    expect(n[0].body).toContain(`SMS relay text queued for your ${what} to send to`);
+    expect(n[0].body).not.toContain("direct send to");
   });
 });
 

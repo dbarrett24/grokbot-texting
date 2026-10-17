@@ -23,6 +23,21 @@ if (mode === "sent_nodb") { console.log(JSON.stringify({ status: "sent" })); pro
 if (mode === "ghost") { console.error("applescript send failed (may_have_completed): no outgoing row joined the chat. The operation may execute or may already have executed; retry is not safe."); process.exit(1); }
 if (mode === "not_started") { console.error("applescript send failed (not_started): target resolution failed. The operation did not start; retry is safe."); process.exit(1); }
 if (mode === "hang") { setTimeout(() => {}, 60000); }
+if (mode === "parser") {
+  // Like imsg's option parser: "--opt=value" takes everything after the first "=" verbatim; in "--opt value"
+  // a value that starts with "-" (and isn't a number) is read as another option, so the value is missing.
+  const a = process.argv.slice(2); const got = {};
+  for (let i = 1; i < a.length; i++) {
+    const m = a[i].match(/^--([a-z]+)=(.*)$/s);
+    if (m) { got[m[1]] = m[2]; continue; }
+    if (a[i] === "--json") continue;
+    const v = a[i + 1];
+    if (v === undefined || (v.startsWith("-") && !/^-[0-9.]+$/.test(v))) { console.error("Error: missing value for " + a[i]); process.exit(64); }
+    got[a[i].slice(2)] = v; i++;
+  }
+  fs.writeFileSync(${JSON.stringify(join(dir, "parsed.json"))}, JSON.stringify(got));
+  console.log(JSON.stringify({ status: "sent", id: 7 })); process.exit(0);
+}
 `);
   chmodSync(fakeImsg, 0o755);
 });
@@ -41,8 +56,8 @@ function fakeRelay(opts: { job?: unknown; resultStatus?: number[] } = {}) {
   return { f, posts, results: () => posts.filter((p) => p.url.endsWith("/device/result")).map((p) => p.body) };
 }
 
-describe("imsg version gate (0.6.0+, for the macOS 26 ghost-row check)", () => {
-  it.each([["0.6.0", true], ["imsg 0.17.0", true], ["1.0.0", true], ["0.5.9", false], ["0.5.10", false], ["garbage", false]])("%j → %s", (v, ok) => {
+describe("imsg version gate (0.14.0+, for the not_started / may_have_completed / still_in_flight dispositions)", () => {
+  it.each([["0.14.0", true], ["imsg 0.17.0", true], ["0.14.1", true], ["1.0.0", true], ["0.13.9", false], ["0.6.0", false], ["0.5.10", false], ["garbage", false]])("%j → %s", (v, ok) => {
     expect(versionOk(v)).toBe(ok);
   });
 });
@@ -74,7 +89,7 @@ describe("pollOnce against a fake relay and a fake imsg process", () => {
     const logs: string[] = [];
     const r = await pollOnce({ origin: "https://api.example.test", token: "TEST-ONLY-device", fetch: relay.f, runImsg: imsgRunner(fakeImsg), log: (m: string) => logs.push(m) });
     expect(r.state).toBe("done");
-    expect(imsgCalls()).toEqual([["send", "--to", JOB.to, "--text", JOB.text, "--service", "auto", "--json"]]);
+    expect(imsgCalls()).toEqual([["send", `--to=${JOB.to}`, `--text=${JOB.text}`, "--service", "auto", "--json"]]);
     expect(relay.results()).toEqual([{ id: JOB.id, lease: JOB.lease, outcome: "sent", detail: "imsg_row_confirmed" }]);
     expect(relay.posts.every((p) => p.auth === "Bearer TEST-ONLY-device")).toBe(true);
     // Log lines never carry the number or the text.
@@ -115,6 +130,16 @@ describe("pollOnce against a fake relay and a fake imsg process", () => {
     const relay = fakeRelay({ resultStatus: [409] });
     expect((await pollOnce({ origin: "https://api.example.test", token: "t", fetch: relay.f, runImsg: imsgRunner(fakeImsg) })).state).toBe("done");
     expect(imsgCalls()).toHaveLength(1);
+  });
+
+  it.each(["-see you there", "--", "--text=x", "a=b=c", "- dash and = equals"])("a text like %j reaches imsg verbatim (never read as an option)", async (text) => {
+    setMode("parser");
+    resetCalls();
+    writeFileSync(join(dir, "parsed.json"), "{}");
+    const relay = fakeRelay({ job: { ...JOB, text } });
+    await pollOnce({ origin: "https://api.example.test", token: "t", fetch: relay.f, runImsg: imsgRunner(fakeImsg) });
+    expect(JSON.parse(readFileSync(join(dir, "parsed.json"), "utf8"))).toEqual({ to: JOB.to, text, service: "auto" });
+    expect(relay.results()[0]).toMatchObject({ outcome: "sent" });
   });
 
   it("an empty queue never runs imsg", async () => {
