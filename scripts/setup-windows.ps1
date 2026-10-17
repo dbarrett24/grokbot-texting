@@ -2,7 +2,7 @@
 Texting relay setup for Windows (Android phones). Your bot runs these steps on YOUR computer, one at a time;
 each prints RELAY_STATUS lines it can read. Nothing here needs admin rights.
   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-windows.ps1 <step> [--dry-run] [options]
-Steps: node install-node fetch deps test login, and (via scripts\setup-lib.mjs) keys ask show-passphrase config
+Steps: node install-node fetch deps test login, and (via scripts\setup-lib.mjs) keys ask show config
        gateway-check confirm-fingerprint claim deploy secrets google smoke resolve test-send copy-token
        clear-clipboard status
 Secrets never appear on screen, in a log, or on a command line. They stay in .relay-local\ (gitignored).
@@ -145,7 +145,7 @@ function Step-Login {
   else { Write-Status 'login' 'needs_human' @('reason=sign_in_failed'); exit 2 }
 }
 
-$LibSteps = @('keys', 'ask', 'show-passphrase', 'config', 'gateway-check', 'confirm-fingerprint', 'claim', 'deploy', 'secrets',
+$LibSteps = @('keys', 'ask', 'show', 'config', 'gateway-check', 'confirm-fingerprint', 'claim', 'deploy', 'secrets',
   'google', 'smoke', 'resolve', 'test-send', 'copy-token', 'clear-clipboard', 'status')
 
 switch ($Step) {

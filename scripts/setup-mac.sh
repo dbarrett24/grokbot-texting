@@ -2,8 +2,8 @@
 # Texting relay setup for macOS (Linux works too, for testing). Your bot runs these steps on YOUR computer,
 # one at a time; each prints RELAY_STATUS lines it can read. Nothing here needs sudo.
 #   bash scripts/setup-mac.sh <step> [--dry-run] [options]
-# Steps: node install-node fetch deps test login iphone-helper, and (via scripts/setup-lib.mjs) keys ask
-#        show-passphrase config gateway-check confirm-fingerprint claim deploy secrets google smoke resolve
+# Steps: node install-node fetch deps test login iphone-helper mac-permissions, and (via scripts/setup-lib.mjs) keys ask
+#        show config gateway-check confirm-fingerprint claim deploy secrets google smoke resolve
 #        test-send copy-token clear-clipboard status
 # Secrets never appear on screen, in a log, or on a command line. They stay in .relay-local/ (gitignored).
 set -euo pipefail
@@ -144,6 +144,14 @@ step_iphone_helper() {
   else status iphone-helper fail log=.relay-local/logs/iphone-helper.log; return 1; fi
 }
 
+step_mac_permissions() {
+  # Opens the Full Disk Access list and shows node in Finder, so the owner can drag it in.
+  [ "$(uname -s)" = "Darwin" ] || { status mac-permissions fail reason=needs_a_mac; return 1; }
+  [ "$DRY" = 1 ] && { status mac-permissions dry_run would_open=full_disk_access_and_node_in_finder; return; }
+  open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" && open -R "$(command -v node)" \
+    && status mac-permissions needs_human next=drag_node_into_full_disk_access
+}
+
 case "$STEP" in
   node) step_node ;;
   install-node) step_install_node ;;
@@ -152,7 +160,8 @@ case "$STEP" in
   test) step_test ;;
   login) step_login ;;
   iphone-helper) step_iphone_helper ;;
-  keys|ask|show-passphrase|config|gateway-check|confirm-fingerprint|claim|deploy|secrets|google|smoke|resolve|test-send|copy-token|clear-clipboard|status)
+  mac-permissions) step_mac_permissions ;;
+  keys|ask|show|config|gateway-check|confirm-fingerprint|claim|deploy|secrets|google|smoke|resolve|test-send|copy-token|clear-clipboard|status)
     need_repo
     command -v node >/dev/null 2>&1 || { status "$STEP" fail reason=no_node next=install-node; exit 1; }
     exec node "$DIR/scripts/setup-lib.mjs" "$STEP" "$@" ;;

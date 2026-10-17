@@ -70,6 +70,7 @@ const GENERATORS = {
   LOG_HASH_KEY: () => randomBytes(32).toString("base64"),
   GATEWAY_PASSPHRASE: typeablePassphrase,
   DEVICE_TOKEN: () => randomBytes(32).toString("hex"),
+  NTFY_URL: () => `https://ntfy.sh/relay-${randomBytes(16).toString("hex")}`, // the long random topic name keeps it private
 };
 
 // ---------- validation of owner-entered values (never echoed) ----------
@@ -82,7 +83,6 @@ export const ASKABLE = {
   OWNER_NAME: { prompt: "Your name, as you want the relay to know you (for the test text)", hidden: false, ok: (v) => /^[^\d"\\]{1,60}$/.test(v.trim()), fix: (v) => v.trim() },
   GOOGLE_CLIENT_ID: { prompt: "Google Cloud: the Client ID", hidden: false, ok: (v) => /\.apps\.googleusercontent\.com$/.test(v) },
   GOOGLE_CLIENT_SECRET: { prompt: "Google Cloud: the Client secret", hidden: true, ok: (v) => /^\S{10,200}$/.test(v) },
-  NTFY_URL: { prompt: "ntfy: your private topic link, starting with https://", hidden: false, ok: (v) => /^https:\/\/\S+\/\S+$/.test(v) },
   NTFY_TOKEN: { prompt: "ntfy: your access token", hidden: true, ok: (v) => /^\S{10,200}$/.test(v) },
 };
 
@@ -207,7 +207,8 @@ const steps = {
   async keys() {
     const m = loadSecrets();
     const s = loadSettings();
-    const want = ["REQUEST_TOKEN", "LOG_HASH_KEY", s.delivery === "mac" ? "DEVICE_TOKEN" : "GATEWAY_PASSPHRASE"];
+    const want = ["REQUEST_TOKEN", "LOG_HASH_KEY", ...(s.delivery === "mac" ? ["DEVICE_TOKEN", "NTFY_URL"] : ["GATEWAY_PASSPHRASE"])];
+    if (args.includes("--new-token")) m.delete("REQUEST_TOKEN"); // rotation: then run `secrets` and give the bot the new one
     const made = [];
     for (const k of want) if (!m.has(k)) { m.set(k, GENERATORS[k]()); made.push(k); }
     saveSecrets(m);
@@ -229,11 +230,14 @@ const steps = {
     out("ask", "ok", { name, saved: "local_only" });
   },
 
-  async "show-passphrase"() {
+  async show() {
+    const SHOWABLE = { GATEWAY_PASSPHRASE: "Type this into the SMS Gateway app: Settings, Encryption, Passphrase", NTFY_URL: "In the ntfy app on your iPhone, tap + and subscribe to this topic (the part after ntfy.sh/)" };
+    const name = args.find((a) => SHOWABLE[a]);
+    if (!name) return out("show", "fail", { reason: "unknown_name", allowed: Object.keys(SHOWABLE).join(",") });
     const m = loadSecrets();
-    if (!m.has("GATEWAY_PASSPHRASE")) return out("show-passphrase", "fail", { reason: "run_keys_first" });
-    const r = dialog({ prompt: "Type this into the SMS Gateway app: Settings, Encryption, Passphrase", show: m.get("GATEWAY_PASSPHRASE") });
-    out("show-passphrase", r.error ? "fail" : "ok", r.error ? { reason: r.error } : { shown: "on_screen_only" });
+    if (!m.has(name)) return out("show", "fail", { name, reason: "run_keys_first" });
+    const r = dialog({ prompt: SHOWABLE[name], show: m.get(name) });
+    out("show", r.error ? "fail" : "ok", r.error ? { name, reason: r.error } : { name, shown: "on_screen_only" });
   },
 
   async config() {
@@ -299,7 +303,7 @@ const steps = {
       s.deviceKey = true;
     } else s.deviceKey = false;
     saveSecrets(m); saveSettings(s);
-    out("gateway-check", DRY ? "dry_run" : "ok", { devices: 1, device_key: s.deviceKey ? "yes" : "no", next: s.deviceKey ? "confirm-fingerprint" : "show-passphrase" });
+    out("gateway-check", DRY ? "dry_run" : "ok", { devices: 1, device_key: s.deviceKey ? "yes" : "no", next: s.deviceKey ? "confirm-fingerprint" : "show_GATEWAY_PASSPHRASE" });
   },
 
   async "confirm-fingerprint"() {
