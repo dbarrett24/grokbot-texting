@@ -7,7 +7,9 @@ bot --(token)--> your Cloudflare Worker --(encrypted)--> SMS Gateway cloud --> y
 you --(email PIN + passkey)--> your private status page (contacts sync, log, approvals)
 ```
 
-Setup takes about 90 minutes and is written step by step in **[DEPLOY.md](DEPLOY.md)**. Android only for now; iPhone pickup is planned.
+Setup takes about 90 minutes and is written step by step in **[DEPLOY.md](DEPLOY.md)**.
+
+**iPhone?** Set `DELIVERY = "mac"` and an always-on Mac with Messages sends the texts from your number, or `DELIVERY = "shortcut"` for a best-effort iPhone-only path. See **[SETUP-iphone.md](SETUP-iphone.md)**, which also lists what those paths can't do.
 
 ## What you get by default
 - **Direct send.** You say "text Sam: ...", the bot reads it back, you say yes, and it calls `POST /send`. There is no tap step (`DIRECT_SEND = "1"`).
@@ -78,8 +80,10 @@ The private page sits behind Cloudflare Access with **email one-time PIN plus a 
 | approve | `GET/POST /approve/<id>` | Access + same Origin + CSRF | Tap approval page. |
 | approve | `GET /log` | Access | Last 500 log rows: no text, no full numbers. |
 | approve | `POST /contacts` | Access | Optional manual contact upload (`scripts/import-contacts.mjs`). |
+| request | `POST /device/next` | `Bearer DEVICE_TOKEN` | `DELIVERY = mac` or `shortcut` only. Claims the oldest queued text (one at a time). The reply carries the number and text: it's the sender. |
+| request | `POST /device/result` `{id, lease, outcome}` | `Bearer DEVICE_TOKEN` | One result per claim: `sent`, `sent_unverified`, `not_started` or `uncertain`. Nothing is ever re-queued. |
 
-Answers never contain a phone number. Refusals are JSON `{"error":"<code>"}`.
+Answers never contain a phone number, except `/device/next` to your own device. Refusals are JSON `{"error":"<code>"}`.
 
 ## How a direct send is checked
 ```mermaid
@@ -100,6 +104,7 @@ flowchart TD
 ```
 
 ## Safety notes
+- **Device token:** with `DELIVERY = mac` or `shortcut`, `DEVICE_TOKEN` can only claim texts that already passed every check; it can't create one. It must differ from `REQUEST_TOKEN`, and each one rotates on its own.
 - **Who can send:** anyone holding `REQUEST_TOKEN` can text anyone on your list, with no tap and (by default) no cap. Guard it like a password; the kill switches are in DEPLOY.md section 13.
 - **Encryption:** text and number are encrypted end to end to your phone (passphrase mode: AES-256-CBC, PBKDF2-SHA1 at 100,000 iterations, the Workers maximum; the 32+ character passphrase is what makes it strong). If the gateway ever publishes a device key, the relay refuses to send until you pin it.
 - **Contacts:** only display name, given name and phone numbers (not fax or pager) are stored. Emails, notes and addresses never are.
@@ -116,7 +121,7 @@ npm run mutation     # breaks one guard at a time and requires a test to fail fo
 Test data is fake: `TEST-ONLY-…` tokens, `example.com` / `example.test` hosts, and numbers in the fictional 555-01xx range. A scan after every Worker test fails the test if any response, console line or log row contains something shaped like a phone number.
 
 ## Roadmap
-- iPhone pickup: planned.
+- iPhone pickup: built (SETUP-iphone.md). The Mac path has not yet been run on a real Mac by the maintainers; treat it as beta until it has.
 
 ## License
 MIT. See [LICENSE](LICENSE).

@@ -54,4 +54,11 @@ export interface Env {
   OWNER_NUMBER?: string; // E.164; the owner's own number, notice target when NOTIFY_MODE=sms
   NTFY_URL?: string; // https://ntfy.example/topic (private topic) when NOTIFY_MODE=ntfy
   NTFY_TOKEN?: string; // ntfy access token; required for ntfy mode
+  // ---- iPhone delivery (SETUP-iphone.md) ----
+  DELIVERY?: string; // var: unset/"android" = SMS Gateway (default). "mac" or "shortcut" = queue each text for the owner's device to claim. Garbage = every route refuses (delivery_invalid)
+  DEVICE_TOKEN?: string; // secret, 32+ chars, required for mac/shortcut: the device's own bearer for /device/next and /device/result. Must differ from REQUEST_TOKEN
+  SHORTCUT_PING?: string; // var, shortcut mode: "email" (default; empty email to PING_TO) or "tap" (ntfy notification that opens the Shortcut)
+  PING_FROM?: string; // var: sender address on your Email Routing domain (shortcut + email)
+  PING_TO?: string; // var: the verified address your iPhone's Apple Mail receives with push (shortcut + email)
+  SHORTCUT_NAME?: string; // var: Shortcut name the tap ping opens; default "Relay Send"
 }
