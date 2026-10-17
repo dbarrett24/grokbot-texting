@@ -140,13 +140,35 @@ function settingsOrFail(step) {
   if (!s.worker || !existsSync(CONFIG)) { out(step, "fail", { reason: "run_config_first" }); return null; }
   return s;
 }
-// The claim marker records the Worker name AND both hostnames. Deploy and secrets need an exact match, and
-// `config` deletes it whenever any of the three changes, so new hosts always get the DNS check again.
+// The claim marker records the Cloudflare account, the Worker name and both hostnames. Deploy and secrets need an
+// exact match with the signed-in account, and `config` deletes it whenever the name or a host changes.
+// The ownership record (owned-<worker>.json) is written only after a successful deploy. It lets a later claim in
+// the SAME account skip the name check and the DNS check for hosts that deploy put there. New hosts are always checked.
 const markerPath = (s) => join(LOCAL, `claimed-${s.worker}.json`);
-export function claimMatches(s, text) {
-  try { const c = JSON.parse(text); return c.worker === s.worker && c.apiHost === s.apiHost && c.appHost === s.appHost; } catch { return false; }
+const ownedPath = (s) => join(LOCAL, `owned-${s.worker}.json`);
+const readJson = (f) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; } };
+export function claimMatches(s, c, accountId) {
+  return !!c && c.worker === s.worker && c.apiHost === s.apiHost && c.appHost === s.appHost && (accountId === undefined || c.accountId === accountId);
 }
-function isClaimed(s) { return existsSync(markerPath(s)) && claimMatches(s, readFileSync(markerPath(s), "utf8")); }
+function isClaimed(s, accountId) { return claimMatches(s, readJson(markerPath(s)), accountId); }
+export function ownedHosts(s, o, accountId) {
+  return o && o.worker === s.worker && o.accountId === accountId && Array.isArray(o.hosts) ? o.hosts : null;
+}
+/** The one Cloudflare account wrangler is signed in to: { id } or { reason }. */
+export function accountFrom(r) {
+  if (r.status !== 0) return { reason: "login_first" };
+  let j = null;
+  try { const t = String(r.stdout); j = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1)); } catch { /* not JSON */ }
+  if (!j || j.loggedIn !== true) return { reason: "login_first" };
+  const ids = (Array.isArray(j.accounts) ? j.accounts : []).map((a) => a && a.id).filter((x) => typeof x === "string" && x);
+  if (ids.length !== 1) return { reason: ids.length ? "several_accounts" : "no_account" };
+  return { id: ids[0] };
+}
+function account(step) {
+  const a = accountFrom(wrangler(["whoami", "--json"], { step }));
+  if (!a.id) out(step, a.reason === "login_first" ? "needs_human" : "fail", { reason: a.reason, hint: a.reason === "several_accounts" ? "sign_in_with_only_the_new_account" : "" });
+  return a.id;
+}
 function clearClaims() {
   if (!existsSync(LOCAL)) return;
   for (const f of readdirSync(LOCAL)) if (f.startsWith("claimed-")) rmSync(join(LOCAL, f), { force: true });
@@ -333,20 +355,20 @@ const steps = {
 
   async claim() {
     const s = settingsOrFail("claim"); if (!s) return;
-    if (isClaimed(s)) return out("claim", "ok", { worker: s.worker, already: "yes" });
     if (DRY) return out("claim", "dry_run", { worker: s.worker, would_check: "worker_name_and_dns" });
-    const who = wrangler(["whoami"], { step: "claim" });
-    if (who.status !== 0 || /not authenticated|not logged in/i.test(`${who.stdout}${who.stderr}`)) return out("claim", "needs_human", { reason: "login_first" });
-    // A Worker this setup claimed before (owned-<name>) may be re-claimed with new hosts; any other existing name is refused.
-    const owned = existsSync(join(LOCAL, `owned-${s.worker}`));
+    const acct = account("claim"); if (!acct) return;
+    if (isClaimed(s, acct)) return out("claim", "ok", { worker: s.worker, already: "yes" });
+    const owned = ownedHosts(s, readJson(ownedPath(s)), acct);
     if (!owned) {
       const r = wrangler(["deployments", "list", "--name", s.worker], { step: "claim" });
       if (r.status === 0) return out("claim", "fail", { reason: "worker_name_in_use", worker: s.worker, hint: "pick_another_name" });
       if (!/not found|does not exist|10007/i.test(`${r.stdout}${r.stderr}`)) return out("claim", "fail", { reason: "could_not_check_name", log: ".relay-local/logs/claim.log" });
     }
-    for (const h of [s.apiHost, s.appHost]) if (await hostHasDns(h)) return out("claim", "fail", { reason: "host_in_use", host: h, hint: "pick_another_host" });
-    writeFileSync(markerPath(s), JSON.stringify({ worker: s.worker, apiHost: s.apiHost, appHost: s.appHost, at: new Date().toISOString() }) + "\n");
-    writeFileSync(join(LOCAL, `owned-${s.worker}`), `${new Date().toISOString()}\n`);
+    for (const h of [s.apiHost, s.appHost]) {
+      if (owned && owned.includes(h)) continue; // our own deploy made this record
+      if (await hostHasDns(h)) return out("claim", "fail", { reason: "host_in_use", host: h, hint: "pick_another_host" });
+    }
+    writeFileSync(markerPath(s), JSON.stringify({ worker: s.worker, apiHost: s.apiHost, appHost: s.appHost, accountId: acct }) + "\n");
     out("claim", "ok", { worker: s.worker });
   },
 
@@ -356,8 +378,13 @@ const steps = {
       const r = wrangler(["deploy", "--dry-run", "--outdir", "dist"], { step: "deploy" });
       return out("deploy", r.status === 0 ? "dry_run" : "fail", { worker: s.worker, built: r.status === 0 ? "yes" : "no", log: ".relay-local/logs/deploy.log" });
     }
-    if (!isClaimed(s)) return out("deploy", "fail", { reason: "run_claim_first" });
+    const acct = account("deploy"); if (!acct) return;
+    if (!isClaimed(s, acct)) return out("deploy", "fail", { reason: "run_claim_first" });
     const r = wrangler(["deploy"], { step: "deploy" });
+    if (r.status === 0) {
+      const hosts = [...new Set([...(ownedHosts(s, readJson(ownedPath(s)), acct) || []), s.apiHost, s.appHost])];
+      writeFileSync(ownedPath(s), JSON.stringify({ worker: s.worker, accountId: acct, hosts }) + "\n");
+    }
     out("deploy", r.status === 0 ? "ok" : "fail", { worker: s.worker, log: ".relay-local/logs/deploy.log" });
   },
 
@@ -367,7 +394,8 @@ const steps = {
     const { payload, missing } = buildPayload(s, m);
     if (missing.length) return out("secrets", "fail", { reason: "missing", names: missing.join(",") });
     if (DRY) return out("secrets", "dry_run", { would_set: Object.keys(payload).length, names: Object.keys(payload).join(",") });
-    if (!isClaimed(s)) return out("secrets", "fail", { reason: "run_claim_first" });
+    const acct = account("secrets"); if (!acct) return;
+    if (!isClaimed(s, acct)) return out("secrets", "fail", { reason: "run_claim_first" });
     const r = wrangler(["secret", "bulk"], { input: JSON.stringify(payload), step: "secrets" });
     if (r.status !== 0) return out("secrets", "fail", { log: ".relay-local/logs/secrets.log" });
     const l = wrangler(["secret", "list", "--format", "json"], { step: "secrets" });
