@@ -8,6 +8,11 @@ import {
   insideHours, matchName, parseRequiredLimit, minuteOfDay, normalizeName, parseHours, parseNotifyEach, parseOptionalLimit, parseSnapshot,
   safeName, switchOnUnlessZero, switchOnlyIfOne, validateBody, parseAccounts, parseCountryCode, peopleToContacts, UPLOAD_SOURCE, type ContactRow, type SnapshotContact,
 } from "./direct";
+import {
+  CLAIM_TIMEOUT_MS, ConfigRefuse, DEVICE_DEFAULT_DAILY_CAP, DEVICE_SWEEP_MS, STALE_AFTER_MS, TAP_PING_TEXT,
+  checkDeviceNotify, deviceTokenProblem, isDevice, parseUnclaimedExpiryMs, parseDelivery, parseOutcome, parseShortcutPing, pingMime, safeDetail, shortcutRunUrl,
+  type Delivery, type JobState, type Outcome,
+} from "./device";
 
 const HOUR = 3_600_000;
 const CANDIDATE_TTL_MS = 15 * 60_000;
@@ -16,7 +21,20 @@ type Via = "name" | "candidate" | "number";
 /** Outcome of the direct-send transaction. */
 type DirectPlan = { kind: "send" } | { kind: "refuse"; reason: string; status: number; newlyPaused: boolean };
 
-type State = "pending" | "approved_sending" | "sent" | "send_failed" | "denied";
+type State = "pending" | "approved_sending" | "queued_device" | "sent" | "send_failed" | "send_uncertain" | "denied";
+/** Who a device job belongs to: a tap approval or a direct send. Owner notices never go through the device. */
+type JobKind = "tap" | "direct";
+interface Job {
+  id: string;
+  kind: JobKind;
+  ref: string | null;
+  who: string | null;
+  sha: string | null;
+  state: JobState;
+  lease: string | null;
+}
+/** Result of the last hop: sent now through the gateway, or queued for the owner's device. */
+type Delivered = { queued: false; gid: string } | { queued: true; job: string };
 
 interface Row {
   id: string;
@@ -93,6 +111,10 @@ export class Relay extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)`);
     // /send outcomes that aren't a send (lookups and refusals), for the hourly rate limit. kind: auth | unauth.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS nonsend(ms INTEGER, kind TEXT)`);
+    // DELIVERY=mac|shortcut: jobs for the owner's device. text is NULL from the moment a job is claimed.
+    // state only moves forward: queued -> claimed -> an outcome, or queued -> expired, or claimed -> claim_timeout.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS device_jobs(id TEXT PRIMARY KEY, created_ms INTEGER, kind TEXT, ref TEXT,
+      recipient TEXT, text TEXT, state TEXT, lease TEXT, claimed_ms INTEGER, done_ms INTEGER, who TEXT, sha TEXT)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS log(seq INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER,
       event TEXT, request_id TEXT, recipient TEXT, sha256 TEXT, detail TEXT)`);
     // Daily purge so retention holds even with no traffic.
@@ -101,25 +123,56 @@ export class Relay extends DurableObject<Env> {
     });
   }
 
+  /**
+   * One alarm, two jobs. Daily: purge and contact sync. In a device mode it also fires every minute to time
+   * out claims and watch the device (deviceSweep). The daily part runs when its due time has passed.
+   */
   async alarm() {
-    this.purge(this.clock());
-    if (this.env.DISABLED === "1") {
-      // Kill switch: retention only. No Google calls, no alert texts.
-      await this.ctx.storage.setAlarm(Date.now() + 86_400_000);
-      return;
+    const wall = Date.now();
+    const device = this.deviceModeOrNull() !== null && this.env.DISABLED !== "1";
+    if (device) {
+      try {
+        await this.deviceSweep();
+      } catch (e) {
+        console.error(`DEVICE_SWEEP_FAILED reason=${errCode(e)}`);
+        this.log("device_sweep_failed", { detail: errCode(e) });
+      }
     }
+    if (wall >= Number(this.meta("daily_due_ms") ?? 0)) {
+      await this.daily();
+      this.setMeta("daily_due_ms", String(wall + 86_400_000));
+    }
+    const nextDaily = Number(this.meta("daily_due_ms"));
+    await this.ctx.storage.setAlarm(device ? Math.min(nextDaily, wall + DEVICE_SWEEP_MS) : nextDaily);
+  }
+
+  private async daily() {
+    this.purge(this.clock());
+    if (this.env.DISABLED === "1") return; // Kill switch: retention only. No Google calls, no alert texts.
     try {
       await this.syncContacts();
     } catch (e) {
       console.error(`CONTACTS_SYNC_CRASHED reason=${errCode(e)}`);
       this.log("contacts_sync_failed", { detail: `account=ALL reason=${errCode(e)}` });
     }
-    await this.ctx.storage.setAlarm(Date.now() + 86_400_000);
   }
 
   /** TIMEZONE (required, no default). fetch() checks it first, so every route refuses while it's missing or invalid. */
   private tz() {
     return parseTimezone(this.env.TIMEZONE);
+  }
+  /** DELIVERY (unset = android). fetch() checks it first, so a garbage value refuses every route. */
+  private delivery(): Delivery {
+    return parseDelivery(this.env.DELIVERY);
+  }
+  /** The device mode, or null for android or a garbage DELIVERY (the alarm must not throw). */
+  private deviceModeOrNull(): "mac" | "shortcut" | null {
+    try {
+      const d = this.delivery();
+      return isDevice(d) ? d : null;
+    } catch {
+      return null;
+    }
   }
   /** Tap limits; a garbage value refuses with 503 config_invalid (fail closed). */
   private tapCfg(): TapConfig {
@@ -144,6 +197,7 @@ export class Relay extends DurableObject<Env> {
     this.sql.exec("DELETE FROM direct_sends WHERE ms < ?", now - 7 * 86_400_000);
     this.sql.exec("DELETE FROM candidates WHERE expires_ms < ?", now - 86_400_000);
     this.sql.exec("DELETE FROM nonsend WHERE ms < ?", now - HOUR);
+    this.sql.exec("DELETE FROM device_jobs WHERE created_ms < ?", now - 7 * 86_400_000);
     const cutoff = new Date(now);
     cutoff.setUTCMonth(cutoff.getUTCMonth() - 12);
     this.sql.exec("DELETE FROM log WHERE ms < ?", cutoff.getTime());
@@ -158,10 +212,19 @@ export class Relay extends DurableObject<Env> {
     const url = new URL(req.url);
     try {
       if (this.env.DISABLED === "1") throw new Refuse("relay_disabled", 503);
+      let delivery: Delivery;
       try {
         this.tz(); // required config: refuse every route until TIMEZONE is a valid IANA zone
+        delivery = this.delivery(); // same for DELIVERY
+        if (isDevice(delivery)) {
+          const bad = deviceTokenProblem(this.env.DEVICE_TOKEN, this.env.REQUEST_TOKEN);
+          if (bad) throw new Refuse(bad, 503);
+          checkDeviceNotify(this.env.NOTIFY_MODE);
+          parseUnclaimedExpiryMs(this.env.UNCLAIMED_EXPIRY_MINUTES);
+          if (delivery === "shortcut") parseShortcutPing(this.env.SHORTCUT_PING);
+        }
       } catch (e) {
-        if (e instanceof Refuse) console.error(`CONFIG_ERROR reason=${e.code}`);
+        if (e instanceof Refuse) console.error(`CONFIG_ERROR reason=${e instanceof ConfigRefuse ? e.reason : e.code}`);
         throw e;
       }
       const path = url.pathname;
@@ -173,6 +236,8 @@ export class Relay extends DurableObject<Env> {
         // Request API host: never serves approve or log routes.
         if (req.method === "POST" && path === "/request") return await this.createRequest(req);
         if (req.method === "POST" && path === "/send") return await this.direct(req);
+        if (isDevice(delivery) && req.method === "POST" && path === "/device/next") return await this.deviceNext(req);
+        if (isDevice(delivery) && req.method === "POST" && path === "/device/result") return await this.deviceResult(req);
         const m = path.match(/^\/request\/([a-f0-9]{32})$/);
         if (req.method === "GET" && m) return await this.status(req, m[1]);
         return json(404, { error: "not_found" });
@@ -192,8 +257,9 @@ export class Relay extends DurableObject<Env> {
       return json(404, { error: "unknown_host" });
     } catch (e) {
       if (e instanceof Refuse) {
-        if (!e.silent) this.log("refused", { detail: e.code });
-        return json(e.status, { error: e.code });
+        const reason = e instanceof ConfigRefuse ? e.reason : null;
+        if (!e.silent) this.log("refused", { detail: reason ? `${e.code} reason=${reason}` : e.code });
+        return json(e.status, reason ? { error: e.code, reason } : { error: e.code });
       }
       const msg = e instanceof Error ? e.message : "error";
       if (msg.startsWith("access_")) {
@@ -275,6 +341,8 @@ export class Relay extends DurableObject<Env> {
     } else {
       const owner = this.env.OWNER_NUMBER || "";
       if (!E164.test(owner)) throw new Error("owner_number_not_configured");
+      // Device modes refuse NOTIFY_MODE=sms (fetch checks it); the alarm path can still get here, so refuse too.
+      if (this.deviceModeOrNull()) throw new Error("owner_notice_needs_ntfy_in_device_mode");
       await this.gatewaySend(owner, msg);
     }
   }
@@ -429,7 +497,7 @@ export class Relay extends DurableObject<Env> {
     const text = resolve ? (b.body === undefined ? "" : validateBody(b.body, maxChars, blockLinks)) : validateBody(b.body, maxChars, blockLinks);
     // Optional limits and guards: parse now so a bad value refuses before anything is stored (fail closed).
     const cfg = {
-      daily: parseOptionalLimit(this.env.DIRECT_DAILY_CAP),
+      daily: this.directDailyCap(),
       lookupMax: parseOptionalLimit(this.env.DIRECT_LOOKUP_MAX_PER_HOUR), // checked here so garbage refuses
       perMinute: parseOptionalLimit(this.env.DIRECT_PER_MINUTE_MAX),
       hours: parseHours(this.env.DIRECT_HOURS),
@@ -552,13 +620,30 @@ export class Relay extends DurableObject<Env> {
       this.log("direct_refused", { request_id: id, sha256: bodySha, detail: `${who} reason=${plan.reason}` });
       throw new Refuse(plan.reason, plan.status);
     }
-    let gid: string;
+    let d: Delivered;
+    let queuedJob: string | null = null;
     try {
-      gid = await this.gatewaySend(target.e164, text);
+      d = await this.deliver(target.e164, text, { kind: "direct", id, who, sha: bodySha }, (job) => {
+        queuedJob = job;
+      });
     } catch (e) {
-      this.log("direct_send_failed", { request_id: id, sha256: bodySha, detail: `${who} error=${errCode(e)}` });
-      return json(502, { id, state: "send_failed", method: "direct" });
+      if (queuedJob !== null) {
+        // The job is already queued and the device will claim it, so this is NOT a failure: answering 502 here
+        // would make the bot retry and double-text. Log the error and answer 202 queued like any other queued text.
+        this.logAfterQueue(id, queuedJob, e);
+        d = { queued: true, job: queuedJob };
+      } else {
+        this.log("direct_send_failed", { request_id: id, sha256: bodySha, detail: `${who} error=${errCode(e)}` });
+        return json(502, { id, state: "send_failed", method: "direct" });
+      }
     }
+    if (d.queued) {
+      // Every guard and counter above already ran. The device reports the outcome to /device/result.
+      let notified: boolean | undefined;
+      if (cfg.notifyEach) notified = await this.notifyDirectEach(id, label, text, now, true);
+      return json(202, { id, state: "queued", method: "direct", to: label, ...(notified === undefined ? {} : { notified }) });
+    }
+    const gid = d.gid;
     this.log("direct_sent", { request_id: id, sha256: bodySha, detail: `${who} gateway_id=${gid}` });
     let notified: boolean | undefined;
     if (cfg.notifyEach) notified = await this.notifyDirectEach(id, label, text, now);
@@ -578,12 +663,14 @@ export class Relay extends DurableObject<Env> {
     }
   }
 
-  private async notifyDirectEach(id: string, label: string, text: string, now: number): Promise<boolean> {
+  private async notifyDirectEach(id: string, label: string, text: string, now: number, queued = false): Promise<boolean> {
     const chars = [...text];
     const preview = chars.length > 80 ? chars.slice(0, 80).join("") + "…" : text;
-    const msg = `SMS relay direct send to ${label} at ${this.fmtTime(now)}: "${preview}" ref ${id.slice(0, 8)}. Log: https://${this.env.APPROVE_HOST}/log`;
+    // A queued text hasn't gone anywhere yet: say so, and name the device that will send it.
+    const what = queued ? `text queued for your ${this.delivery() === "mac" ? "Mac" : "iPhone Shortcut"} to send to` : "direct send to";
+    const msg = `SMS relay ${what} ${label} at ${this.fmtTime(now)}: "${preview}" ref ${id.slice(0, 8)}. Log: https://${this.env.APPROVE_HOST}/log`;
     try {
-      await this.deliverToOwner(msg, "SMS relay direct send");
+      await this.deliverToOwner(msg, queued ? "SMS relay text queued" : "SMS relay direct send");
       this.log("direct_notified", { request_id: id });
       return true;
     } catch (e) {
@@ -789,6 +876,7 @@ export class Relay extends DurableObject<Env> {
 <p><b>DIRECT_SEND:</b> ${switchOnlyIfOne(this.env.DIRECT_SEND) ? "on" : "off"} · <b>runaway guard:</b> ${switchOnUnlessZero(this.env.RUNAWAY_PAUSE) ? "on" : "off"}</p>
 <p><b>State:</b> ${paused ? `PAUSED since ${esc(this.fmtTime(pausedMs))}. Direct requests are refused.` : "running"}</p>
 <p><b>Direct sends in the last hour:</b> ${lastHour}</p>
+${this.devicePageLine()}
 <p><b>DEFAULT_COUNTRY_CODE:</b> ${(() => { try { return esc(parseCountryCode(this.env.DEFAULT_COUNTRY_CODE) ?? "none (strict E.164)"); } catch { return "NOT SET: contact sync is refused until it is"; } })()}</p>
 <p><b>Direct list:</b> ${snapAt ? `${esc(this.meta("snapshot_numbers") ?? "?")} numbers under ${esc(this.meta("snapshot_names") ?? "?")} distinct names, rebuilt ${esc(this.fmtTime(Number(snapAt)))}` : "empty"}</p>
 <ul>${[...parseAccounts(this.env.GOOGLE_ACCOUNTS).valid, UPLOAD_SOURCE].map((a) => { const ok = this.meta(`acct:${a}:ok_ms`); return `<li>${esc(a)}: ${ok ? `${esc(this.meta(`acct:${a}:numbers`) ?? "?")} numbers${this.meta(`acct:${a}:dropped`) ? ` (${esc(this.meta(`acct:${a}:dropped`)!)} fax/pager dropped)` : ""}, last good ${esc(this.fmtTime(Number(ok)))}` : "never loaded"}</li>`; }).join("")}</ul>
@@ -908,12 +996,24 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     this.sql.exec("UPDATE requests SET state='approved_sending', decided_ms=? WHERE id=?", now, id);
     this.sql.exec("INSERT INTO sends(ms,day,request_id) VALUES(?,?,?)", now, day, id);
     this.log("approved", { request_id: id, recipient: r.recipient, sha256: logSha, detail: `method=${who.method} by=${who.email}` });
+    let queuedJob: string | null = null;
     try {
-      const gid = await this.gatewaySend(r.recipient, r.text);
+      // queued_device is written in the same step as the job (before the Shortcut ping is awaited), so a claim
+      // and result that land during the ping still find the request row and record the outcome on it.
+      const d = await this.deliver(r.recipient, r.text, { kind: "tap", id }, (job) => {
+        queuedJob = job;
+        this.sql.exec("UPDATE requests SET state='queued_device', gateway_id=? WHERE id=?", job, id);
+      });
+      if (d.queued) return json(202, { id, state: "queued" });
+      const gid = d.gid;
       this.sql.exec("UPDATE requests SET state='sent', gateway_id=? WHERE id=?", gid, id);
       this.log("sent", { request_id: id, recipient: r.recipient, sha256: logSha, detail: gid });
       return json(200, { id, state: "sent" });
     } catch (e) {
+      if (queuedJob !== null) {
+        this.logAfterQueue(id, queuedJob, e); // the job is queued; the device reports its outcome
+        return json(202, { id, state: "queued" });
+      }
       this.sql.exec("UPDATE requests SET state='send_failed' WHERE id=?", id);
       this.log("send_failed", { request_id: id, recipient: r.recipient, sha256: logSha, detail: errCode(e) });
       return json(502, { id, state: "send_failed" });
@@ -924,6 +1024,291 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     await this.requireOwner(req, "log");
     const rows = this.sql.exec("SELECT ms,event,request_id,recipient,sha256,detail FROM log ORDER BY seq DESC LIMIT 500").toArray();
     return json(200, rows);
+  }
+
+  // ---------- device delivery (DELIVERY = mac | shortcut) ----------
+
+  /** DIRECT_DAILY_CAP: unset means 25 in a device mode (Apple ID spam-flag risk) and no cap on android. "off" = none. */
+  private directDailyCap(): number | null {
+    const raw = this.env.DIRECT_DAILY_CAP;
+    if ((raw === undefined || raw === "") && isDevice(this.delivery())) return DEVICE_DEFAULT_DAILY_CAP;
+    return parseOptionalLimit(raw);
+  }
+
+  /**
+   * The last hop. android: the SMS Gateway, now. mac/shortcut: a queued job the owner's device claims over
+   * POST /device/next. Callers run every guard and counter BEFORE this, so a queued job is already approved.
+   */
+  private async deliver(
+    to: string,
+    text: string,
+    ref: { kind: JobKind; id: string; who?: string; sha?: string },
+    onQueued?: (job: string) => void,
+  ): Promise<Delivered> {
+    const mode = this.delivery();
+    if (!isDevice(mode)) return { queued: false, gid: await this.gatewaySend(to, text) };
+    if (!E164.test(to)) throw new Error("bad_recipient");
+    const job = hex(crypto.getRandomValues(new Uint8Array(16)));
+    this.sql.exec(
+      "INSERT INTO device_jobs(id,created_ms,kind,ref,recipient,text,state,who,sha) VALUES(?,?,?,?,?,?,'queued',?,?)",
+      job, this.clock(), ref.kind, ref.id, to, text, ref.who ?? null, ref.sha ?? null,
+    );
+    onQueued?.(job); // synchronous with the INSERT: nothing else runs before the caller's state is saved
+    this.log("device_queued", { request_id: ref.id, detail: `job_id=${job.slice(0, 8)} kind=${ref.kind} via=${mode}` });
+    await this.ensureDeviceAlarm();
+    if (mode === "shortcut") await this.pingShortcut();
+    return { queued: true, job };
+  }
+
+  /** An error after a job was queued (the alarm arming): logged, never turned into a failure or a retry. */
+  private logAfterQueue(ref: string, job: string, e: unknown) {
+    console.error(`DEVICE_AFTER_QUEUE_ERROR job_id=${job.slice(0, 8)} reason=${errCode(e)}`);
+    this.log("device_after_queue_error", { request_id: ref, detail: `job_id=${job.slice(0, 8)} reason=${errCode(e)}` });
+  }
+
+  /** In a device mode the alarm must fire within DEVICE_SWEEP_MS (claim timeouts, the stale watch). */
+  private async ensureDeviceAlarm() {
+    const want = Date.now() + DEVICE_SWEEP_MS;
+    const at = await this.ctx.storage.getAlarm();
+    if (at === null || at > want) await this.ctx.storage.setAlarm(want);
+  }
+
+  /** Email ping transport (Cloudflare Email Routing send_email binding PING_EMAIL). Tests replace this. */
+  pingEmail: (m: { from: string; to: string; mime: string }) => Promise<void> = async (m) => {
+    const binding = (this.env as unknown as { PING_EMAIL?: { send(msg: unknown): Promise<void> } }).PING_EMAIL;
+    if (!binding) throw new Error("ping_email_not_configured");
+    const { EmailMessage } = await import("cloudflare:email");
+    await binding.send(new EmailMessage(m.from, m.to, m.mime));
+  };
+
+  /** Shortcut path: tell the iPhone a job is waiting. The ping never carries the text or a number. Failure keeps the job queued. */
+  private async pingShortcut() {
+    const via = parseShortcutPing(this.env.SHORTCUT_PING);
+    try {
+      if (via === "email") {
+        const from = this.env.PING_FROM || "";
+        const to = this.env.PING_TO || "";
+        if (!/^[^\s@<>]+@[^\s@<>]+$/.test(from) || !/^[^\s@<>]+@[^\s@<>]+$/.test(to)) throw new Error("ping_email_not_configured");
+        const msgId = `${hex(crypto.getRandomValues(new Uint8Array(12)))}@${from.split("@")[1]}`;
+        await this.pingEmail({ from, to, mime: pingMime(from, to, msgId, new Date(this.clock())) });
+      } else {
+        if (!this.env.NTFY_URL?.startsWith("https://") || !this.env.NTFY_TOKEN) throw new Error("ntfy_not_configured");
+        const r = await this.net(new Request(this.env.NTFY_URL, {
+          method: "POST",
+          body: TAP_PING_TEXT,
+          headers: { Authorization: `Bearer ${this.env.NTFY_TOKEN}`, Title: "SMS relay", Click: shortcutRunUrl(this.env.SHORTCUT_NAME || "Relay Send") },
+        }));
+        if (!r.ok) throw new Error(`ntfy_status_${r.status}`);
+      }
+      this.log("device_pinged", { detail: `via=${via}` });
+    } catch (e) {
+      console.error(`DEVICE_PING_FAILED via=${via} reason=${errCode(e)}`);
+      this.log("device_ping_failed", { detail: `via=${via} reason=${errCode(e)}` });
+    }
+  }
+
+  /** DEVICE_TOKEN only. REQUEST_TOKEN never works here (and DEVICE_TOKEN never works on the bot routes). */
+  private async requireDeviceToken(req: Request) {
+    const bad = deviceTokenProblem(this.env.DEVICE_TOKEN, this.env.REQUEST_TOKEN);
+    if (bad) throw new Refuse(bad, 503);
+    const m = (req.headers.get("Authorization") || "").match(/^Bearer (.+)$/);
+    if (!m || !(await tokenEquals(m[1], this.env.DEVICE_TOKEN!))) {
+      console.log("device_auth_failed"); // no log row: a polling stranger must not be able to flood the log
+      const r = new Refuse("bad_device_token", 401);
+      r.silent = true;
+      throw r;
+    }
+  }
+
+  /**
+   * POST /device/next (request host, DEVICE_TOKEN). Hands out at most one job at a time, oldest first.
+   * The claim is one synchronous transaction inside the single Durable Object: the job leaves "queued" in the
+   * same step that hands it out, so it can be claimed once. Its text is erased from storage in that step too.
+   */
+  private async deviceNext(req: Request): Promise<Response> {
+    await this.requireDeviceToken(req);
+    await this.ensureDeviceAlarm(); // a check-in arms the minute sweep, so a device that then dies is noticed in 10 min
+    await this.deviceSweep(); // time out stuck claims first, so a dead one never blocks the queue
+    const now = this.clock();
+    const out = this.ctx.storage.transactionSync(() => {
+      this.setMeta("device_last_seen_ms", String(now));
+      if (this.meta("device_stale") === "1") {
+        this.setMeta("device_stale", null); // the outage is over; the next one gets its own notice
+        this.log("device_back");
+      }
+      const busy = this.sql.exec("SELECT COUNT(*) AS c FROM device_jobs WHERE state='claimed'").one().c as number;
+      if (busy > 0) return { job: null, reason: "busy" };
+      const j = this.sql.exec("SELECT id, ref, recipient, text FROM device_jobs WHERE state='queued' ORDER BY created_ms, rowid LIMIT 1").toArray()[0] as
+        | { id: string; ref: string | null; recipient: string; text: string }
+        | undefined;
+      if (!j) return { job: null };
+      const lease = hex(crypto.getRandomValues(new Uint8Array(16)));
+      this.sql.exec("UPDATE device_jobs SET state='claimed', lease=?, claimed_ms=?, text=NULL WHERE id=? AND state='queued'", lease, now, j.id);
+      this.log("device_claimed", { request_id: j.ref, detail: `job_id=${j.id.slice(0, 8)}` });
+      return { job: { id: j.id, lease, to: j.recipient, text: j.text, result_by_ms: now + CLAIM_TIMEOUT_MS } };
+    });
+    return json(200, out);
+  }
+
+  /** POST /device/result {id, lease, outcome, detail?}. One result per claim; nothing is ever re-queued. */
+  private async deviceResult(req: Request): Promise<Response> {
+    await this.requireDeviceToken(req);
+    let raw: unknown;
+    try {
+      raw = await req.json();
+    } catch {
+      throw new Refuse("body_not_json");
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Refuse("body_must_be_object");
+    const b = raw as Record<string, unknown>;
+    if (Object.keys(b).some((k) => !["id", "lease", "outcome", "detail"].includes(k))) throw new Refuse("unknown_fields");
+    if (typeof b.id !== "string" || !/^[a-f0-9]{32}$/.test(b.id)) throw new Refuse("job_unknown", 404);
+    if (typeof b.lease !== "string" || !/^[a-f0-9]{32}$/.test(b.lease)) throw new Refuse("bad_lease", 403);
+    const outcome = parseOutcome(b.outcome);
+    const detail = safeDetail(b.detail);
+    await this.deviceSweep(); // a result after the claim timed out is refused below
+    const now = this.clock();
+    const id = b.id;
+    const lease = b.lease;
+    const verdict = this.ctx.storage.transactionSync((): { status: number; error?: string } => {
+      const j = this.sql.exec("SELECT id, kind, ref, who, sha, state, lease FROM device_jobs WHERE id=?", id).toArray()[0] as unknown as Job | undefined;
+      if (!j) return { status: 404, error: "job_unknown" };
+      if (j.lease !== lease) return { status: 403, error: "bad_lease" };
+      if (j.state === "claim_timeout") {
+        this.log("device_result_late", { request_id: j.ref, detail: `job_id=${id.slice(0, 8)} outcome=${outcome}` });
+        return { status: 409, error: "claim_timed_out" };
+      }
+      if (j.state !== "claimed") return { status: 409, error: "result_already_recorded" };
+      this.sql.exec("UPDATE device_jobs SET state=?, done_ms=? WHERE id=? AND state='claimed'", outcome, now, id);
+      this.finishJob(j, outcome, detail);
+      return { status: 200 };
+    });
+    if (verdict.error) throw new Refuse(verdict.error, verdict.status);
+    return json(200, { id, state: outcome });
+  }
+
+  /** Record a job's end on its owner: the tap request row, the direct-send log, or a notice. */
+  private finishJob(j: Job, end: Outcome | "claim_timeout" | "expired", detail: string | null = null) {
+    const sent = end === "sent" || end === "sent_unverified";
+    // claim_timeout: the device took the text and went quiet, so it may have sent. Never "failed", never retried.
+    const uncertain = end === "uncertain" || end === "claim_timeout";
+    const extra = `job_id=${j.id.slice(0, 8)} outcome=${end}${detail ? ` detail=${detail}` : ""}`;
+    if (j.kind === "tap" && j.ref) {
+      const st: State = sent ? "sent" : uncertain ? "send_uncertain" : "send_failed";
+      this.sql.exec("UPDATE requests SET state=? WHERE id=? AND state='queued_device'", st, j.ref);
+      this.log(sent ? "sent" : uncertain ? "send_uncertain" : "send_failed", { request_id: j.ref, detail: extra });
+    } else {
+      const ev = sent ? "direct_sent" : uncertain ? "direct_send_uncertain" : "direct_send_failed";
+      this.log(ev, { request_id: j.ref, sha256: j.sha, detail: `${j.who ?? "method=direct"} ${extra}` });
+    }
+  }
+
+  /**
+   * Time out claims (2 min, fail closed), drop unclaimed jobs older than 30 min, and watch the device.
+   * The state changes are one transaction; the owner notice goes out after it, at most once per outage.
+   */
+  async deviceSweep(): Promise<void> {
+    const mode = this.deviceModeOrNull();
+    if (!mode) return;
+    const now = this.clock();
+    let expiryMs: number;
+    try {
+      expiryMs = parseUnclaimedExpiryMs(this.env.UNCLAIMED_EXPIRY_MINUTES);
+    } catch {
+      expiryMs = parseUnclaimedExpiryMs(undefined); // garbage: fetch refuses every route; the sweep keeps the default
+    }
+    const { stale, expired } = this.ctx.storage.transactionSync(() => this.sweepSync(mode, now, expiryMs));
+    for (const x of expired) await this.notifyExpired(x, expiryMs);
+    if (stale !== null) await this.notifyStale(mode, stale, expiryMs);
+  }
+
+  /**
+   * Returns the jobs that just expired (for their owner notices) and, when the device has JUST gone stale,
+   * the minutes since its last poll.
+   */
+  private sweepSync(mode: "mac" | "shortcut", now: number, expiryMs: number): { stale: number | null; expired: { job: string; ref: string | null; to: string }[] } {
+    const expired: { job: string; ref: string | null; to: string }[] = [];
+    const timedOut = this.sql.exec("SELECT id, kind, ref, who, sha, state, lease FROM device_jobs WHERE state='claimed' AND claimed_ms <= ?", now - CLAIM_TIMEOUT_MS).toArray() as unknown as Job[];
+    for (const j of timedOut) {
+      this.sql.exec("UPDATE device_jobs SET state='claim_timeout', done_ms=? WHERE id=? AND state='claimed'", now, j.id);
+      console.error(`DEVICE_CLAIM_TIMEOUT job_id=${j.id.slice(0, 8)} (not retried)`);
+      this.log("device_claim_timeout", { request_id: j.ref, detail: `job_id=${j.id.slice(0, 8)} timeout_s=${CLAIM_TIMEOUT_MS / 1000}` });
+      this.finishJob(j, "claim_timeout");
+    }
+    const old = this.sql.exec("SELECT id, kind, ref, who, sha, state, lease, recipient FROM device_jobs WHERE state='queued' AND created_ms <= ?", now - expiryMs).toArray() as unknown as (Job & { recipient: string })[];
+    for (const j of old) {
+      this.sql.exec("UPDATE device_jobs SET state='expired', text=NULL, done_ms=? WHERE id=? AND state='queued'", now, j.id);
+      this.log("device_job_expired", { request_id: j.ref, detail: `job_id=${j.id.slice(0, 8)} max_age_min=${expiryMs / 60_000}` });
+      this.finishJob(j, "expired");
+      expired.push({ job: j.id, ref: j.ref, to: j.recipient });
+    }
+    // shortcut: a healthy Shortcut only polls when pinged, so a poll gap means nothing. Stale = the oldest
+    // queued text has waited STALE_AFTER_MS unclaimed. The next poll (device_back) re-arms the notice.
+    if (mode === "shortcut") {
+      const oldest = this.sql.exec("SELECT MIN(created_ms) AS m FROM device_jobs WHERE state='queued'").one().m as number | null;
+      if (oldest === null || now - oldest < STALE_AFTER_MS || this.meta("device_stale") === "1") return { stale: null, expired };
+      this.setMeta("device_stale", "1");
+      const waited = Math.floor((now - oldest) / 60_000);
+      console.error(`DEVICE_STALE minutes_unclaimed=${waited}`);
+      this.log("device_stale", { detail: `minutes_unclaimed=${waited} via=shortcut` });
+      return { stale: waited, expired };
+    }
+    // mac: the helper polls every few seconds, so 10 minutes without a poll is an outage. The watch starts
+    // the first time a device mode runs, so a Mac that never polls is caught too.
+    const seen = this.meta("device_last_seen_ms");
+    let since = seen === null ? null : Number(seen);
+    if (since === null) {
+      const watch = this.meta("device_watch_ms");
+      if (watch === null) {
+        this.setMeta("device_watch_ms", String(now));
+        return { stale: null, expired };
+      }
+      since = Number(watch);
+    }
+    if (now - since < STALE_AFTER_MS || this.meta("device_stale") === "1") return { stale: null, expired };
+    this.setMeta("device_stale", "1");
+    const minutes = Math.floor((now - since) / 60_000);
+    console.error(`DEVICE_STALE minutes_since_poll=${minutes}`);
+    this.log("device_stale", { detail: `minutes_since_poll=${minutes} ever_polled=${seen === null ? 0 : 1}` });
+    return { stale: minutes, expired };
+  }
+
+  /** One owner notice per expired text: who it was for (masked) and that it was NOT sent. Never the text. */
+  private async notifyExpired(x: { job: string; ref: string | null; to: string }, expiryMs: number) {
+    const ref = (x.ref ?? x.job).slice(0, 8);
+    const msg = `SMS relay: a text to ${maskNumber(x.to)} wasn't picked up by your device within ${expiryMs / 60_000} min, so it was dropped and NOT sent. ref ${ref}. Ask your bot to send it again once the device is back.`;
+    try {
+      await this.deliverToOwner(msg, "SMS relay text dropped");
+      this.log("device_expired_notified", { request_id: x.ref, detail: `job_id=${x.job.slice(0, 8)}` });
+    } catch (e) {
+      console.error(`DEVICE_EXPIRED_NOTIFY_FAILED job_id=${x.job.slice(0, 8)} reason=${errCode(e)}`);
+      this.log("device_expired_notify_failed", { request_id: x.ref, detail: `job_id=${x.job.slice(0, 8)} reason=${errCode(e)}` });
+    }
+  }
+
+  /** The one stale notice per outage, through the owner-notice path (ntfy: device modes refuse sms). */
+  private async notifyStale(mode: "mac" | "shortcut", minutes: number, expiryMs: number) {
+    const drop = `unclaimed ones are dropped after ${expiryMs / 60_000} min`;
+    const msg =
+      mode === "mac"
+        ? `SMS relay: your Mac hasn't checked in for ${minutes} min. Texts wait in the queue (${drop}). Check it's on, awake, logged in and online.`
+        : `SMS relay: a text has waited ${minutes} min and your iPhone Shortcut hasn't picked it up. Texts wait in the queue (${drop}). Check the automation still runs (open Shortcuts > Automation) and the iPhone is online.`;
+    try {
+      await this.deliverToOwner(msg, "SMS relay device offline");
+      this.log("device_stale_notified", { detail: "ntfy" });
+    } catch (e) {
+      console.error(`DEVICE_STALE_NOTIFY_FAILED reason=${errCode(e)}`);
+      this.log("device_stale_notify_failed", { detail: errCode(e) });
+    }
+  }
+
+  /** One line for GET /direct: the delivery mode and, in a device mode, the last poll. */
+  private devicePageLine(): string {
+    const mode = this.deviceModeOrNull();
+    if (!mode) return "<p><b>Delivery:</b> android (SMS Gateway)</p>";
+    const seen = this.meta("device_last_seen_ms");
+    const queued = this.sql.exec("SELECT COUNT(*) AS c FROM device_jobs WHERE state='queued'").one().c as number;
+    return `<p><b>Delivery:</b> ${mode} · <b>last poll:</b> ${seen ? esc(this.fmtTime(Number(seen))) : "never"}${this.meta("device_stale") === "1" ? " (STALE)" : ""} · <b>queued:</b> ${queued}</p>`;
   }
 
   // ---------- gateway ----------

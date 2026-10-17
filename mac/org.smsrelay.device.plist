@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- LaunchAgent for the relay's Mac helper. A per-user agent, not a root daemon: Messages and the
+     Automation permission need the logged-in session. install.sh fills in the __PLACEHOLDERS__. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.smsrelay.device</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__HELPER__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>RELAY_URL</key>
+    <string>__RELAY_URL__</string>
+    <key>IMSG_PATH</key>
+    <string>__IMSG__</string>
+    <key>KEYCHAIN_SERVICE</key>
+    <string>sms-relay-device-token</string>
+    <key>POLL_SECONDS</key>
+    <string>5</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+</dict>
+</plist>

@@ -233,6 +233,13 @@ describe("wrangler.toml template", () => {
       expect(toml).toMatch(new RegExp(`^# ${k} = "\\d+"`, "m"));
     expect(toml).not.toMatch(/^(LOG_HASH_KEY|DIRECT_LOOKUP_MAX_PER_HOUR)\s*=/m); // a secret, and an optional var left at its default
   });
+  it("iPhone delivery is documented but off: DELIVERY unset means android; DEVICE_TOKEN is a secret", () => {
+    expect(toml).not.toMatch(/^(DELIVERY|DEVICE_TOKEN|SHORTCUT_PING|PING_FROM|PING_TO|SHORTCUT_NAME|UNCLAIMED_EXPIRY_MINUTES)\s*=/m);
+    expect(toml).not.toMatch(/^\[\[send_email\]\]/m);
+    expect(toml).toMatch(/^# DELIVERY = "mac"/m);
+    expect(toml).toMatch(/^# UNCLAIMED_EXPIRY_MINUTES = "30"/m);
+    expect(toml).toMatch(/^# DEVICE_TOKEN \(/m);
+  });
   it("required settings have placeholders, never a default zone or country code", () => {
     expect(v("TIMEZONE")).toMatch(/^REPLACE/);
     expect(v("DEFAULT_COUNTRY_CODE")).toMatch(/^REPLACE/);
