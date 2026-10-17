@@ -31,6 +31,7 @@ export interface Env {
   DIRECT_PER_MINUTE_MAX?: string; // optional; same rules
   DIRECT_HOURS?: string; // optional "HH:MM-HH:MM" in TIMEZONE; same rules
   DIRECT_LOOKUP_MAX_PER_HOUR?: string; // optional: /send lookups + refusals per rolling hour (sends never count). unset = 30, "off" = no limit, garbage = direct_config_invalid
+  GROUP_MMS?: string; // "1" (exact) = allow group:true on /send multi-send (one group MMS); also needs a valid OWNER_NUMBER. Unset/""/"0" = off; anything else = direct_config_invalid
   DIRECT_NOTIFY_EACH?: string; // optional "1" = text the owner a copy of each direct send; unset/"0"/"off" = no
   GOOGLE_ACCOUNTS?: string; // var, ordered labels such as "primary,work"; each needs secret GOOGLE_RT_<LABEL>. First listed wins name conflicts
   GOOGLE_CLIENT_ID?: string; // secret: OAuth client (contacts.readonly) used for every account's refresh token

@@ -42,6 +42,10 @@ CONTACTS_SNAPSHOT_ONLY = "0"              # Only decides the DIRECT_ALLOWLIST se
 RUNAWAY_PAUSE = "0"                       # "1" = more than RUNAWAY_MAX direct sends in 60 min pauses direct send until you
                                           # resume at https://<APPROVE_HOST>/direct. Unset counts as ON; only exact "0" turns it off.
 RUNAWAY_MAX = "10"
+GROUP_MMS = "0"                           # "1" = /send may send ONE group MMS (group:true with to_names/candidate_ids).
+                                          # Needs a valid OWNER_NUMBER (else group sends refuse: config_invalid) and
+                                          # SMS Gateway v1.74.0+. Live-test first (README "Group MMS"). Garbage = direct_config_invalid.
+                                          # Android only: with DELIVERY = "mac"/"shortcut", group:true is refused (409 group_mms_unsupported_delivery).
 GOOGLE_ACCOUNTS = ""                      # e.g. "primary" or "primary,work"; first listed wins name conflicts; each needs GOOGLE_RT_<LABEL>
 
 # ---- Opt-in switches, OFF when unset. A garbage value refuses sends (config_invalid / direct_config_invalid). ----
@@ -82,7 +86,7 @@ CAP_START_DATE = "REPLACE_WITH_START_DATE_YYYY-MM-DD"   # invalid = the cap stay
 # REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, ALLOWLIST,
 # GATEWAY_PASSPHRASE (passphrase mode: device lists no publicKey; >= 32 chars, e.g. `openssl rand -base64 32`) OR
 # GATEWAY_PINNED_FINGERPRINT + GATEWAY_KEY_VERSION (device-key mode),
-# OWNER_NUMBER (your own number, sms mode) or NTFY_URL + NTFY_TOKEN (ntfy mode),
+# OWNER_NUMBER (your own number; needed for sms-mode notices, and always when GROUP_MMS = "1") and/or NTFY_URL + NTFY_TOKEN (ntfy mode),
 # LOG_HASH_KEY (required for direct send, >= 32 chars): HMAC key for number and body hashes,
 # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_RT_<LABEL> per account (scripts/google-consent.mjs),
 # DIRECT_ALLOWLIST (optional; used only when CONTACTS_SNAPSHOT_ONLY = "0")
