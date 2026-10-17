@@ -1,4 +1,6 @@
-# iPhone setup
+# iPhone setup (BETA)
+
+> **BETA:** the iPhone path hasn't passed a live test yet. Group texts are Android only at launch. It needs a free ntfy account (for the notices), which is accepted for the beta.
 
 Android phones send through the SMS Gateway app ([DEPLOY.md](DEPLOY.md)). An iPhone has no app that can do that, so the Worker stays the same and only the **last hop** changes: each text that passes every check is put in a queue, and a device signed into your Apple ID **claims** it and sends it from your number.
 

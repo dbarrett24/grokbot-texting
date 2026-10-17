@@ -18,7 +18,7 @@ you --(email PIN + passkey)--> your private status page (contacts sync, log)
 - No password, token or key goes into a chat, email, note or ticket. Each one is typed only into a hidden prompt on your computer, or into your bot's secret prompt.
 - **HUMAN STEP** marks a step only you can do: installs, sign-ins, codes, consent screens, passkeys and the first deploy. Your bot can walk you through everything else, but it never signs in for you.
 - Stop at any failed **Check** and fix it before going on.
-- **Setup scripts:** `scripts/setup-mac.sh` (macOS) and `scripts/setup-windows.ps1` (Windows) run the computer steps of this guide one at a time (install Node, get the code, test, make keys, deploy, store secrets, test text). Your bot can run them for you on your computer, with your OK on each command. Keys they make stay in `.relay-local/` in your copy of the code (never committed) and go to Cloudflare without being shown. Run a step with no arguments to see what it needs.
+- **Setup scripts:** `scripts/setup-mac.sh` (macOS) and `scripts/setup-windows.ps1` (Windows) run the computer steps of this guide one at a time (install Node, get the code, test, make keys, deploy, store secrets, test text). Your bot can run them for you on your computer, with your OK on each command. Keys they make stay in `.relay-local/` in your copy of the code (never committed) and go to Cloudflare without being shown. Run a step with no arguments to see what it needs. Group texts (`config --group-mms 1`) are Android only at launch.
 
 Placeholders in this guide:
 - `<yourdomain>`: a domain you own.
@@ -51,9 +51,8 @@ Commands are written for zsh (the macOS default); bash equivalents are given whe
 4. In the app, turn **Cloud Server** ON and **Local Server** OFF. Then tap **Offline** so it changes to **Online**. (Cloud mode works anywhere without opening your phone to the internet.) https://docs.sms-gate.app/getting-started/public-cloud-server/
 5. Leave webhooks, SMS forwarding and the email bridge **off**.
 6. The Cloud Server section now shows a **username** and **password**. Leave them on screen; you'll type them into hidden prompts in section 6. The same login opens dashboard.sms-gate.app, which can read your messages, so treat it like a bank password.
-7. **Encryption passphrase.** On your computer, run `openssl rand -base64 32`. It prints 44 characters.
+7. **Encryption passphrase.** Skip this step if the `devices` call in 1.8 shows a `publicKey` (device-key mode, app v1.77.0 or newer): the relay then encrypts to the pinned device key from step 9, and no passphrase is needed. Otherwise, on your computer, run `openssl rand -base64 32`. It prints 44 characters.
    - **HUMAN STEP:** In the app, open the **Settings** tab, find the **Encryption** section and tap **Passphrase**. Enter that exact value. (The docs say only that the passphrase is set in the device's own settings; the screen names here come from the app's source, v1.77.x.)
-   - With app v1.77.0 or newer the relay encrypts to the device key from step 9 instead, and the passphrase is only a fallback. Set it anyway.
    - Keep the terminal window open; you'll paste the same value in section 6. The relay refuses passphrases shorter than 32 characters.
    - Background: https://docs.sms-gate.app/privacy/encryption/
 8. **Device id.** On your computer, run this. `read -s` hides what you type:
@@ -144,7 +143,7 @@ npx wrangler secret put APPROVER_EMAIL       # email from 2.1
 npx wrangler secret put GATEWAY_USER         # from the app (1.6)
 npx wrangler secret put GATEWAY_PASS         # from the app (1.6)
 npx wrangler secret put GATEWAY_DEVICE_ID    # from 1.8
-npx wrangler secret put GATEWAY_PASSPHRASE   # the same 44 characters you put in the app (1.7)
+npx wrangler secret put GATEWAY_PASSPHRASE   # the same 44 characters you put in the app (1.7); skip in device-key mode
 npx wrangler secret put OWNER_NUMBER         # YOUR OWN number, + and country code, no spaces
 npx wrangler secret put ALLOWLIST            # {"+<your number>":"Your Name"}: your own number, so you can test
 openssl rand -base64 32 | tr -d '\n' | npx wrangler secret put LOG_HASH_KEY   # made and stored without showing it
@@ -155,7 +154,7 @@ npx wrangler secret put GATEWAY_PINNED_FINGERPRINT   # the Key fingerprint from 
 npx wrangler secret put GATEWAY_KEY_VERSION          # the keyVersion number, e.g. 1
 ```
 
-**Check:** `npx wrangler secret list` shows these names (values are never shown): REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, GATEWAY_PASSPHRASE, OWNER_NUMBER, ALLOWLIST, LOG_HASH_KEY, plus GATEWAY_PINNED_FINGERPRINT and GATEWAY_KEY_VERSION if you have a device key.
+**Check:** `npx wrangler secret list` shows these names (values are never shown): REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, GATEWAY_PASSPHRASE (device-key mode: GATEWAY_PINNED_FINGERPRINT and GATEWAY_KEY_VERSION instead), OWNER_NUMBER, ALLOWLIST, LOG_HASH_KEY.
 
 ## 7. First deploy
 ```sh
@@ -325,9 +324,10 @@ Do it right away if a phone, computer or bot that held one is lost or compromise
 **Check:** `curl -si https://<API_HOST>/send` no longer reaches the relay, and https://myaccount.google.com/permissions no longer lists the app.
 
 ## Known limits
-- **Android only.** iPhone pickup is planned.
+- **iPhone is BETA.** See [SETUP-iphone.md](SETUP-iphone.md). Android is the tested path.
+- **Group texts are Android only at launch,** and only after your own group test passes.
 - **`sent` is not delivered.** It means SMS Gateway's cloud accepted the text for your phone (section 10).
-- **Device-key mode:** when the `devices` call shows a `publicKey` (app v1.77.0+), the relay refuses to send until `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` match it (section 1 step 9). A rotated key stops sending until you re-pin. That's deliberate.
+- **Device-key mode:** when the `devices` call shows a `publicKey` (app v1.77.0+), the relay refuses to send until `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` match it (section 1 step 9). A rotated key stops sending until you re-pin. That's deliberate. Store the full fingerprint; when comparing it with the app by eye, check the first two and last two groups (64 bits). In this mode you don't set a passphrase.
 - **The phone is the sender.** If it's off, offline, or Android kills the app, texts wait in the cloud queue. The app checks in at least every 15 minutes.
 - **Who can send:** anyone with the bot token can text anyone on your list with no tap. Guard the token like a password, and use section 13 if it leaks.
 - **Sign-in:** with `ALLOW_EMAIL_OTP = "1"` the passkey requirement rests on your Access policy alone (section 3).
