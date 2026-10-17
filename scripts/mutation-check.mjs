@@ -174,7 +174,11 @@ const M = [
   ["device_checkin_arms_alarm", "src/relay.ts", "    await this.ensureDeviceAlarm(); // a check-in arms the minute sweep", "    // removed"],
   ["device_tap_state_before_ping", "src/relay.ts", '    onQueued?.(job); // synchronous with the INSERT: nothing else runs before the caller\'s state is saved\n', ""],
   ["device_tap_state_after_ping", "src/relay.ts", '    if (mode === "shortcut") await this.pingShortcut();\n    return { queued: true, job };', '    if (mode === "shortcut") await this.pingShortcut();\n    onQueued?.(job);\n    return { queued: true, job };'],
-  ["device_tap_queued_survives_throw", "src/relay.ts", '      if (queuedJob !== null) return json(202, { id, state: "queued" });', ""],
+  ["device_tap_queued_survives_throw", "src/relay.ts", '        this.logAfterQueue(id, queuedJob, e); // the job is queued; the device reports its outcome\n        return json(202, { id, state: "queued" });', '        this.logAfterQueue(id, queuedJob, e); // the job is queued; the device reports its outcome'],
+  // F7: the direct path too. Once queued, an error answers 202 queued (a 502 would make the bot retry and double-text).
+  ["device_direct_queued_survives_throw", "src/relay.ts", "      if (queuedJob !== null) {\n        // The job is already queued", "      if (false) {\n        // The job is already queued"],
+  ["device_direct_on_queued_passed", "src/relay.ts", '{ kind: "direct", id, who, sha: bodySha }, (job) => {\n        queuedJob = job;\n      });', '{ kind: "direct", id, who, sha: bodySha }, () => {});'],
+  ["device_after_queue_error_logged", "src/relay.ts", '    this.log("device_after_queue_error", {', "    void ({"],
   ["device_queued_notice_wording", "src/relay.ts", "const what = queued ? `text queued", "const what = false ? `text queued"],
   ["mac_text_equals_form", "mac/relay-device.mjs", '`--text=${job.text}`', '"--text", job.text'],
   ["mac_to_equals_form", "mac/relay-device.mjs", '`--to=${job.to}`', '"--to", job.to'],

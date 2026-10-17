@@ -182,6 +182,7 @@ describe("every existing guard runs before a job is queued", () => {
     expect((await sql("SELECT state FROM requests WHERE id=?", id))[0].state).toBe("queued_device");
     expect((await sql("SELECT state FROM device_jobs WHERE ref=?", id)).map((x) => x.state)).toEqual(["queued"]);
     expect(await logOf("send_failed")).toHaveLength(0);
+    expect((await logOf("device_after_queue_error"))[0].detail).toMatch(/^job_id=[a-f0-9]{8} reason=storage_hiccup$/);
   });
 });
 

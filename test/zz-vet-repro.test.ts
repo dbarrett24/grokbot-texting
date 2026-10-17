@@ -112,4 +112,23 @@ describe("review repros", () => {
     const at = await runIn(h.relay, async (i) => i.ctx.storage.getAlarm());
     expect({ minutesToAlarm: Math.round((at - Date.now()) / 60_000) }).toEqual({ minutesToAlarm: 1 });
   });
+
+  it("direct: an error after the job is queued answers 202 queued (not 502), so the bot never retries; one device claim", async () => {
+    await h.setEnv(ntfyMode);
+    await runIn(h.relay, async (i) => { i.ensureDeviceAlarm = async () => { throw new Error("storage_hiccup"); }; });
+    const r = await direct({ to: FRIEND, body: "hi" });
+    const body = (await r.json()) as any;
+    const jobs = await sql("SELECT state FROM device_jobs");
+    await runIn(h.relay, async (i) => { delete i.ensureDeviceAlarm; });
+    const j = await claim();
+    expect({ status: r.status, state: body.state, method: body.method, jobs, claimable: !!j, failedLog: (await logOf("direct_send_failed")).length })
+      .toEqual({ status: 202, state: "queued", method: "direct", jobs: [{ state: "queued" }], claimable: true, failedLog: 0 });
+    expect(body.id).toBe((await logOf("device_queued"))[0].request_id);
+    expect((await logOf("device_after_queue_error")).map((x) => x.detail)).toEqual([`job_id=${j.id.slice(0, 8)} reason=storage_hiccup`]);
+    // Exactly one claim: the job is handed out once, and nothing else is queued behind it.
+    await result({ id: j.id, lease: j.lease, outcome: "sent" });
+    expect(await claim()).toBeNull();
+    expect(await count("SELECT COUNT(*) AS c FROM device_jobs")).toBe(1);
+    expect(await logOf("direct_sent")).toHaveLength(1);
+  });
 });

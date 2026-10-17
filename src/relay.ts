@@ -621,11 +621,21 @@ export class Relay extends DurableObject<Env> {
       throw new Refuse(plan.reason, plan.status);
     }
     let d: Delivered;
+    let queuedJob: string | null = null;
     try {
-      d = await this.deliver(target.e164, text, { kind: "direct", id, who, sha: bodySha });
+      d = await this.deliver(target.e164, text, { kind: "direct", id, who, sha: bodySha }, (job) => {
+        queuedJob = job;
+      });
     } catch (e) {
-      this.log("direct_send_failed", { request_id: id, sha256: bodySha, detail: `${who} error=${errCode(e)}` });
-      return json(502, { id, state: "send_failed", method: "direct" });
+      if (queuedJob !== null) {
+        // The job is already queued and the device will claim it, so this is NOT a failure: answering 502 here
+        // would make the bot retry and double-text. Log the error and answer 202 queued like any other queued text.
+        this.logAfterQueue(id, queuedJob, e);
+        d = { queued: true, job: queuedJob };
+      } else {
+        this.log("direct_send_failed", { request_id: id, sha256: bodySha, detail: `${who} error=${errCode(e)}` });
+        return json(502, { id, state: "send_failed", method: "direct" });
+      }
     }
     if (d.queued) {
       // Every guard and counter above already ran. The device reports the outcome to /device/result.
@@ -1000,7 +1010,10 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
       this.log("sent", { request_id: id, recipient: r.recipient, sha256: logSha, detail: gid });
       return json(200, { id, state: "sent" });
     } catch (e) {
-      if (queuedJob !== null) return json(202, { id, state: "queued" }); // the job is queued; the device reports its outcome
+      if (queuedJob !== null) {
+        this.logAfterQueue(id, queuedJob, e); // the job is queued; the device reports its outcome
+        return json(202, { id, state: "queued" });
+      }
       this.sql.exec("UPDATE requests SET state='send_failed' WHERE id=?", id);
       this.log("send_failed", { request_id: id, recipient: r.recipient, sha256: logSha, detail: errCode(e) });
       return json(502, { id, state: "send_failed" });
@@ -1045,6 +1058,12 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     await this.ensureDeviceAlarm();
     if (mode === "shortcut") await this.pingShortcut();
     return { queued: true, job };
+  }
+
+  /** An error after a job was queued (the alarm arming): logged, never turned into a failure or a retry. */
+  private logAfterQueue(ref: string, job: string, e: unknown) {
+    console.error(`DEVICE_AFTER_QUEUE_ERROR job_id=${job.slice(0, 8)} reason=${errCode(e)}`);
+    this.log("device_after_queue_error", { request_id: ref, detail: `job_id=${job.slice(0, 8)} reason=${errCode(e)}` });
   }
 
   /** In a device mode the alarm must fire within DEVICE_SWEEP_MS (claim timeouts, the stale watch). */
