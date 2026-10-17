@@ -106,6 +106,7 @@ describe("signed-in Cloudflare account (wrangler whoami --json)", () => {
     expect(accountFrom({ status: 1, stdout: ok })).toEqual({ reason: "login_first" });
     expect(accountFrom({ status: 0, stdout: JSON.stringify({ loggedIn: false, accounts: [{ id: "acct-a" }] }) })).toEqual({ reason: "login_first" });
     expect(accountFrom({ status: 0, stdout: "not json" })).toEqual({ reason: "login_first" });
+    expect(accountFrom({ status: 0, stdout: JSON.stringify({ loggedIn: "true", accounts: [{ id: "acct-a" }] }) })).toEqual({ reason: "login_first" });
   });
   it("refuses to pick when there are several accounts or none", () => {
     expect(accountFrom({ status: 0, stdout: JSON.stringify({ loggedIn: true, accounts: [{ id: "a" }, { id: "b" }] }) })).toEqual({ reason: "several_accounts" });
