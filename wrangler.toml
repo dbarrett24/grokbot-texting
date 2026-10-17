@@ -1,0 +1,73 @@
+# PLACEHOLDERS ONLY. Fill these in on your own computer (see DEPLOY.md).
+# No secrets belong in this file; they go in with `npx wrangler secret put NAME`.
+name = "sms-relay"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = false   # served only on your two custom hostnames
+
+# routes = [
+#   { pattern = "api.example.com", custom_domain = true },    # REQUEST_HOST
+#   { pattern = "app.example.com", custom_domain = true },    # APPROVE_HOST
+# ]
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "Relay"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Relay"]
+
+[vars]
+GATEWAY_BASE_URL = "https://api.sms-gate.app/3rdparty/v1"
+TIMEZONE = "REPLACE_WITH_IANA_TIMEZONE"   # REQUIRED, no default, e.g. "Europe/London" or "America/New_York".
+                                          # Missing or invalid: every route refuses (timezone_not_configured / timezone_invalid).
+DEFAULT_COUNTRY_CODE = "REPLACE_WITH_COUNTRY_CODE"   # REQUIRED for contact sync: "+44", "+1"... is put in front of numbers saved
+                                                     # without a "+"; "none" = only numbers already in +E.164 form are kept.
+                                                     # Unset or invalid: sync refuses (default_country_code_invalid). Never assumed.
+REQUEST_HOST = "api.example.com"          # the bot's address; NOT behind Access
+APPROVE_HOST = "app.example.com"          # your private page; the whole host is behind Access
+ACCESS_TEAM_DOMAIN = "https://REPLACE_WITH_TEAM.cloudflareaccess.com"
+NOTIFY_MODE = "sms"                       # "sms" (notices to OWNER_NUMBER through your phone) or "ntfy" (token-authenticated)
+REQUIRED_AMR = "otp"
+ALLOW_EMAIL_OTP = "1"                     # Normal setting. Cloudflare's Access token doesn't say which second factor you used, so with "1"
+                                          # the Worker accepts an Access login for APPROVER_EMAIL without checking for a passkey itself.
+                                          # The passkey requirement then rests on the Access policy ALONE (DEPLOY.md section 3).
+                                          # Signature/aud/iss/exp/approver-email checks always stay on. "0" = require REQUIRED_AMR.
+DISABLED = "0"                            # "1" = kill switch: everything refused
+# ---- Direct send (POST /send): the bot sends with no tap, to people on your list only. ----
+DIRECT_SEND = "1"                         # only exact "1" turns it on; "0" = tap-to-approve only
+CONTACTS_SNAPSHOT_ONLY = "0"              # Only decides the DIRECT_ALLOWLIST secret: "0" = its numbers are also direct.
+                                          # Google sync, the manual upload and the tap ALLOWLIST are ALWAYS on the direct list.
+RUNAWAY_PAUSE = "0"                       # "1" = more than RUNAWAY_MAX direct sends in 60 min pauses direct send until you
+                                          # resume at https://<APPROVE_HOST>/direct. Unset counts as ON; only exact "0" turns it off.
+RUNAWAY_MAX = "10"
+GOOGLE_ACCOUNTS = ""                      # e.g. "primary" or "primary,work"; first listed wins name conflicts; each needs GOOGLE_RT_<LABEL>
+
+# ---- Opt-in switches, OFF when unset. A garbage value refuses sends (config_invalid / direct_config_invalid). ----
+# BLOCK_LINKS = "1"                       # refuse links in message text (tap and direct). Contact names are always link-checked.
+# DIRECT_DAILY_CAP = "25"                 # direct sends per day (TIMEZONE days). Unset = no cap.
+# DIRECT_PER_MINUTE_MAX = "5"
+# DIRECT_HOURS = "08:00-21:00"            # TIMEZONE
+# DIRECT_NOTIFY_EACH = "1"                # text yourself a copy of each direct send
+# DIRECT_LOOKUP_MAX_PER_HOUR = "30"       # lookups + refusals on /send per rolling hour (never sends). Unset = 30, "off" = no limit
+# GATEWAY_PBKDF2_ITERATIONS = "100000"    # passphrase mode; default 100000 = Workers max; allowed 75000..100000
+
+# ---- Tap-to-approve limits (used when the bot files POST /request). Unset = the default shown. ----
+CAP_START_DATE = "REPLACE_WITH_START_DATE_YYYY-MM-DD"   # invalid = the cap stays at SEND_CAP_INITIAL
+# PENDING_CAP_PER_DAY = "20"              # 1..100000
+# SEND_CAP_INITIAL = "5"                  # 1..100000, per day for CAP_RAISE_AFTER_DAYS days from CAP_START_DATE
+# SEND_CAP_AFTER = "10"                   # 1..100000
+# CAP_RAISE_AFTER_DAYS = "14"             # 0..3650
+# REQUEST_TTL_SECONDS = "900"             # 60..86400
+# MIN_SECONDS_BETWEEN_SENDS = "30"        # 0..86400
+# MAX_TEXT_CHARS = "640"                  # 1..10000 (both flows)
+
+# Secrets (set with `npx wrangler secret put NAME`, never written here):
+# REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, ALLOWLIST,
+# GATEWAY_PASSPHRASE (passphrase mode: device lists no publicKey; >= 32 chars, e.g. `openssl rand -base64 32`) OR
+# GATEWAY_PINNED_FINGERPRINT + GATEWAY_KEY_VERSION (device-key mode),
+# OWNER_NUMBER (your own number, sms mode) or NTFY_URL + NTFY_TOKEN (ntfy mode),
+# LOG_HASH_KEY (required for direct send, >= 32 chars): HMAC key for number and body hashes,
+# GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_RT_<LABEL> per account (scripts/google-consent.mjs),
+# DIRECT_ALLOWLIST (optional; used only when CONTACTS_SNAPSHOT_ONLY = "0")
