@@ -53,6 +53,21 @@ GOOGLE_ACCOUNTS = ""                      # e.g. "primary" or "primary,work"; fi
 # DIRECT_LOOKUP_MAX_PER_HOUR = "30"       # lookups + refusals on /send per rolling hour (never sends). Unset = 30, "off" = no limit
 # GATEWAY_PBKDF2_ITERATIONS = "100000"    # passphrase mode; default 100000 = Workers max; allowed 75000..100000
 
+# ---- iPhone delivery (SETUP-iphone.md). Unset = android: texts go through the SMS Gateway app. ----
+# DELIVERY = "mac"                        # "mac" = an always-on Mac with Messages claims each text (mac/install.sh);
+#                                         # "shortcut" = an iPhone Shortcut claims it (best-effort). Anything else refuses every route.
+#                                         # mac/shortcut need the DEVICE_TOKEN secret and NOTIFY_MODE = "ntfy" (sms would go through the
+#                                         # device itself: config_invalid), and DIRECT_DAILY_CAP defaults to 25 ("off" removes it).
+# UNCLAIMED_EXPIRY_MINUTES = "30"         # mac/shortcut: a text no device claims in this many minutes is dropped, NOT sent, and you
+#                                         # get a notice for each one. 1..1440; garbage = config_invalid.
+# SHORTCUT_PING = "email"                 # shortcut only: "email" (empty email to PING_TO) or "tap" (ntfy notification, one tap per text)
+# PING_FROM = "relay@example.com"         # shortcut + email: a sender on your Email Routing domain
+# PING_TO = "you@example.com"             # shortcut + email: the verified address your iPhone's Apple Mail gets with push
+# SHORTCUT_NAME = "Relay Send"            # shortcut + tap: the Shortcut the notification opens
+# [[send_email]]                          # shortcut + email: Cloudflare Email Routing binding for the ping
+# name = "PING_EMAIL"
+# destination_address = "you@example.com"
+
 # ---- Tap-to-approve limits (used when the bot files POST /request). Unset = the default shown. ----
 CAP_START_DATE = "REPLACE_WITH_START_DATE_YYYY-MM-DD"   # invalid = the cap stays at SEND_CAP_INITIAL
 # PENDING_CAP_PER_DAY = "20"              # 1..100000
@@ -71,3 +86,4 @@ CAP_START_DATE = "REPLACE_WITH_START_DATE_YYYY-MM-DD"   # invalid = the cap stay
 # LOG_HASH_KEY (required for direct send, >= 32 chars): HMAC key for number and body hashes,
 # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_RT_<LABEL> per account (scripts/google-consent.mjs),
 # DIRECT_ALLOWLIST (optional; used only when CONTACTS_SNAPSHOT_ONLY = "0")
+# DEVICE_TOKEN (DELIVERY = mac or shortcut only; 32+ chars, different from REQUEST_TOKEN, e.g. `openssl rand -hex 32`)
