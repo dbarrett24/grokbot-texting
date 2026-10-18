@@ -305,7 +305,7 @@ Rollback doesn't undo secrets or stored data.
 |---|---|
 | Bot token | `openssl rand -hex 32`, then `npx wrangler secret put REQUEST_TOKEN`, then give the new one to the bot's secret prompt |
 | Gateway password | Regenerate it in the app's Cloud Server settings, then `npx wrangler secret put GATEWAY_PASS` |
-| Passphrase | New `openssl rand -base64 32`. Set it in the app **and** with `npx wrangler secret put GATEWAY_PASSPHRASE` right after. Texts fail until both match |
+| Passphrase (no device key only) | New `openssl rand -base64 32`. Set it in the app **and** with `npx wrangler secret put GATEWAY_PASSPHRASE` right after. Texts fail until both match |
 | Log key | `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler secret put LOG_HASH_KEY` (stored contacts are re-hashed on the next send) |
 | Device key | In the app, Settings, Device…, Device Key, **Rotate device key**. Then read the new Key fingerprint and `keyVersion` (section 1 steps 8–9) and `secret put` both `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION`. Sends refuse until both match |
 | Google access | Remove the app at https://myaccount.google.com/permissions, then rerun section 9 step 5 |
