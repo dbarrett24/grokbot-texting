@@ -49,9 +49,13 @@ describe("wrangler config", () => {
     expect(t).toMatch(/^NOTIFY_MODE = "ntfy"/m);
     expect(t.match(/^NOTIFY_MODE =/gm)).toHaveLength(1);
   });
-  it("turns group texts on only when asked", () => {
-    expect(renderConfig(TEMPLATE, BASE)).not.toMatch(/^GROUP_MMS = "1"/m);
-    expect(renderConfig(TEMPLATE, { ...BASE, groupMms: "1" })).toMatch(/^GROUP_MMS = "1"/m);
+  it("turns group texts on only when asked, Android only, with exactly one GROUP_MMS line", () => {
+    const line = (t: string) => t.match(/^GROUP_MMS = "[^"]*"/gm);
+    expect(line(renderConfig(TEMPLATE, BASE))).toEqual(['GROUP_MMS = "0"']);
+    expect(line(renderConfig(TEMPLATE, { ...BASE, groupMms: "1" }))).toEqual(['GROUP_MMS = "1"']);
+    expect(line(renderConfig(TEMPLATE, { ...BASE, groupMms: "1", delivery: "mac" }))).toEqual(['GROUP_MMS = "0"']);
+    expect(line(renderConfig(TEMPLATE, { ...BASE, groupMms: undefined }))).toEqual(['GROUP_MMS = "0"']);
+    expect(line(renderConfig(TEMPLATE.replace(/^GROUP_MMS = .*$/m, ""), BASE))).toEqual(['GROUP_MMS = "0"']);
   });
   it("the untouched template still has placeholders (the check works)", () => {
     expect(leftoverPlaceholders(TEMPLATE).length).toBeGreaterThan(0);
