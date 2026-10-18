@@ -205,7 +205,8 @@ export function renderConfig(template, s) {
   set("TIMEZONE", s.timezone); set("DEFAULT_COUNTRY_CODE", s.country); set("REQUEST_HOST", s.apiHost); set("APPROVE_HOST", s.appHost);
   set("ACCESS_TEAM_DOMAIN", `https://${s.team}.cloudflareaccess.com`); set("CAP_START_DATE", s.startDate); set("GOOGLE_ACCOUNTS", s.google);
   if (s.delivery === "mac") { set("DELIVERY", "mac"); set("NOTIFY_MODE", "ntfy"); }
-  if (s.groupMms === "1") set("GROUP_MMS", "1");
+  // Always written: "1" only for Android after the owner asks (the relay refuses group texts on Mac/Shortcut delivery).
+  set("GROUP_MMS", s.groupMms === "1" && s.delivery === "android" ? "1" : "0");
   return t;
 }
 export function leftoverPlaceholders(t) {
