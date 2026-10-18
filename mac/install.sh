@@ -33,15 +33,24 @@ VERSION="$("$IMSG" --version)"
 "$NODE" --input-type=module -e "import { versionOk } from '$HERE/relay-device.mjs'; process.exit(versionOk(process.argv[1]) ? 0 : 1)" "$VERSION" \
   || die "imsg $VERSION is too old; 0.14.0+ is required (brew upgrade imsg)"
 
-printf 'Relay URL (your REQUEST_HOST, like https://api.example.com): '
-read -r RELAY_URL
+if [ -n "${RELAY_URL:-}" ]; then
+  say "Relay URL: $RELAY_URL"
+else
+  printf 'Relay URL (your REQUEST_HOST, like https://api.example.com): '
+  read -r RELAY_URL
+fi
 "$NODE" --input-type=module -e "import { relayOrigin } from '$HERE/relay-device.mjs'; relayOrigin(process.argv[1])" "$RELAY_URL" \
   || die "that isn't an https:// host"
 
-say ""
-say "Paste the DEVICE_TOKEN you set with 'npx wrangler secret put DEVICE_TOKEN'."
-say "It goes into your login Keychain only (macOS asks for it below; nothing is echoed or written to a file)."
-security add-generic-password -U -a "$USER" -s "$SERVICE" -l "SMS relay device token" -w
+# DEVICE_TOKEN_PRESET=1: scripts/setup-mac.sh already put the token into the login Keychain.
+if [ "${DEVICE_TOKEN_PRESET:-0}" = "1" ] && security find-generic-password -a "$USER" -s "$SERVICE" >/dev/null 2>&1; then
+  say "Device token: already in your login Keychain."
+else
+  say ""
+  say "Paste the DEVICE_TOKEN you set with 'npx wrangler secret put DEVICE_TOKEN'."
+  say "It goes into your login Keychain only (macOS asks for it below; nothing is echoed or written to a file)."
+  security add-generic-password -U -a "$USER" -s "$SERVICE" -l "SMS relay device token" -w
+fi
 
 mkdir -p "$DEST" "$(dirname "$PLIST")" "$(dirname "$LOG")"
 cp "$HERE/relay-device.mjs" "$DEST/relay-device.mjs"
