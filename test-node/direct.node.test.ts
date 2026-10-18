@@ -225,6 +225,7 @@ describe("wrangler.toml template", () => {
     expect(v("DISABLED")).toBe("0");
     expect(v("RUNAWAY_MAX")).toBe("10");
     expect(v("GOOGLE_ACCOUNTS")).toBe("");
+    expect(v("GROUP_MMS")).toBe("0"); // group MMS ships off: live-test first
     // opt-in switches and tap limits are documented but commented out (unset = off / built-in default)
     expect(toml).not.toMatch(/^(BLOCK_LINKS|DIRECT_(DAILY_CAP|PER_MINUTE_MAX|HOURS|NOTIFY_EACH))\s*=/m);
     expect(toml).toMatch(/^# BLOCK_LINKS = "1"/m);

@@ -192,6 +192,53 @@ export function safeName(name: string): string {
   return !name.trim() || looksLikePhone(name) || /\d{4,}/.test(name) || hasLink(name) ? "(unnamed contact)" : name.trim();
 }
 
+// ---------- multi-send (to_names / candidate_ids) ----------
+
+export const MULTI_MIN = 2;
+export const MULTI_MAX = 3;
+export type MultiField = "to_names" | "candidate_ids";
+
+/**
+ * A submitted name echoed back in a refusal or a resolve answer. It came from the caller, so it is shown
+ * only when it holds no digit at all and nothing link-like; otherwise "(withheld)". Never a number.
+ */
+export function echoName(s: string): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  return !t || /\d/.test(t) || hasLink(t) ? "(withheld)" : t.slice(0, 60);
+}
+
+/** A refusal that names the failing entry by index (and, for to_names, the digit-free submitted name). */
+export function entryRefuse(code: string, status: number, index: number, name?: string, reason?: string): Refuse {
+  const r = new Refuse(code, status);
+  r.extra = { failed: [{ index, ...(name === undefined ? {} : { name: echoName(name) }), ...(reason ? { reason } : {}) }] };
+  return r;
+}
+
+/**
+ * Shape check for a multi-send list: an array of 2..3 strings, no repeats. to_names repeats are judged
+ * after normalizeName ("Jordan" and " jordan " are the same entry); candidate_ids must match exactly.
+ */
+export function parseMultiList(raw: unknown, field: MultiField): string[] {
+  if (!Array.isArray(raw)) throw new Refuse(`${field}_must_be_array`);
+  if (raw.length < MULTI_MIN || raw.length > MULTI_MAX) throw new Refuse("multi_send_needs_2_to_3");
+  const seen = new Set<string>();
+  raw.forEach((x, i) => {
+    if (typeof x !== "string") throw entryRefuse("multi_send_entry_not_string", 400, i);
+    const k = field === "to_names" ? normalizeName(x) : x;
+    if (field === "to_names" && (!k || x.length > 200)) throw entryRefuse("to_name_invalid", 400, i, x);
+    if (seen.has(k)) throw entryRefuse("multi_send_duplicate", 400, i, field === "to_names" ? x : undefined);
+    seen.add(k);
+  });
+  return raw as string[];
+}
+
+/** GROUP_MMS: unset, "" or "0" = off; exact "1" = on; anything else = config error (fail closed). */
+export function parseGroupMms(raw: string | undefined): boolean {
+  if (raw === undefined || raw === "" || raw === "0") return false;
+  if (raw === "1") return true;
+  throw new Refuse("direct_config_invalid", 503);
+}
+
 // ---------- body ----------
 
 /** Direct body: non-empty, length cap. Links allowed unless blockLinks (BLOCK_LINKS = "1"), same as the tap flow. */
