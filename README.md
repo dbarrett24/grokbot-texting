@@ -13,10 +13,10 @@ Setup takes about 90 minutes and is written step by step in **[DEPLOY.md](DEPLOY
 
 ## What you get by default
 - **Direct send.** You say "text Sam: ...", the bot reads it back, you say yes, and it calls `POST /send`. There is no tap step (`DIRECT_SEND = "1"`).
-- **Only people on your list.** The bot can text people in your Google Contacts (synced read-only, daily), numbers you upload, and numbers you list in the `ALLOWLIST` secret. Anything else is refused. One recipient per text; group sends are refused.
+- **Only people on your list.** The bot can text people in your Google Contacts (synced read-only, daily), numbers you upload, and numbers you list in the `ALLOWLIST` secret. Anything else is refused. One text can go to up to 3 people as **separate 1:1 copies** (`to_names` / `candidate_ids`). A real group thread (one group MMS) is off unless you turn on `GROUP_MMS`.
 - **No daily cap, and links are allowed.** Both are switches you can turn on (`DIRECT_DAILY_CAP`, `BLOCK_LINKS`).
 - **A private page** at `https://<APPROVE_HOST>/direct` behind Cloudflare Access: status, per-account contact counts (no numbers), a **Sync contacts now** button, and the log.
-- **Tap-to-approve** is still built in. Set `DIRECT_SEND = "0"` and the bot can only file requests (`POST /request`) that you approve on your phone.
+- **Tap-to-approve** is still built in. Set `DIRECT_SEND = "0"` and the bot can only file requests (`POST /request`, by number or by contact name) that you approve on your phone.
 - **Nothing readable in the log.** Numbers are HMACs or masked to the last 4 digits, and the message text is never logged.
 
 ## Settings
@@ -39,6 +39,7 @@ All settings are `[vars]` in `wrangler.toml`; secrets go in with `npx wrangler s
 | `RUNAWAY_PAUSE` / `RUNAWAY_MAX` | `"0"` / `"10"` | `"1"`: more than MAX direct sends in 60 minutes pauses direct send and texts you; resume on `/direct`. |
 | `CONTACTS_SNAPSHOT_ONLY` | `"0"` | `"0"` adds the optional `DIRECT_ALLOWLIST` secret to the direct list. |
 | `DISABLED` | `"0"` | `"1"` = kill switch: every route refused; the daily alarm only purges old rows. |
+| `GROUP_MMS` | `"0"` | `"1"` lets `/send` send one group MMS (`"group": true`). Needs a valid `OWNER_NUMBER`. Android (SMS Gateway) only: with `DELIVERY = "mac"` or `"shortcut"` a group send gets 409 `group_mms_unsupported_delivery`. See "Group MMS" below and live-test first. |
 | `NOTIFY_MODE` | `"sms"` | Notices (sync failures, tap requests, pauses) go to `OWNER_NUMBER` through your phone, or `"ntfy"` with a token. |
 
 **Opt-in switches** (off when unset):
@@ -73,7 +74,7 @@ All settings are `[vars]` in `wrangler.toml`; secrets go in with `npx wrangler s
 
 `CAP_START_DATE` (`YYYY-MM-DD`): an invalid value keeps the tap cap at `SEND_CAP_INITIAL`.
 
-**Secrets:** `REQUEST_TOKEN` (the bot's token), `ACCESS_AUD`, `APPROVER_EMAIL`, `GATEWAY_USER`, `GATEWAY_PASS`, `GATEWAY_DEVICE_ID`, `GATEWAY_PASSPHRASE` (32+ characters), `OWNER_NUMBER` (your own number, `+` and country code), `ALLOWLIST` (`{"+<number>":"Name"}`), `LOG_HASH_KEY` (32+ characters; direct send refuses without it), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, one `GOOGLE_RT_<LABEL>` per Google account. Optional: `DIRECT_ALLOWLIST`, `NTFY_URL` + `NTFY_TOKEN`, `GATEWAY_PINNED_FINGERPRINT` + `GATEWAY_KEY_VERSION` (device-key mode).
+**Secrets:** `REQUEST_TOKEN` (the bot's token), `ACCESS_AUD`, `APPROVER_EMAIL`, `GATEWAY_USER`, `GATEWAY_PASS`, `GATEWAY_DEVICE_ID`, `GATEWAY_PASSPHRASE` (32+ characters), `OWNER_NUMBER` (your own number, `+` and country code; notices in sms mode, and required whenever `GROUP_MMS = "1"`), `ALLOWLIST` (`{"+<number>":"Name"}`), `LOG_HASH_KEY` (32+ characters; direct send refuses without it), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, one `GOOGLE_RT_<LABEL>` per Google account. `GATEWAY_PINNED_FINGERPRINT` + `GATEWAY_KEY_VERSION`: required when your phone publishes a device key, which SMS Gateway v1.77.0 and newer does (DEPLOY.md section 1, step 9). Optional: `DIRECT_ALLOWLIST`, `NTFY_URL` + `NTFY_TOKEN`.
 
 ## Sign-in and the passkey (read this)
 The private page sits behind Cloudflare Access with **email one-time PIN plus a passkey** (Access's independent MFA). The Worker verifies the Access token again itself: RS256 signature against your team's keys, audience, issuer, expiry, and that the email is `APPROVER_EMAIL`. Those checks are always on.
@@ -83,8 +84,8 @@ The private page sits behind Cloudflare Access with **email one-time PIN plus a 
 ## Endpoints
 | Host | Route | Auth | Does |
 |---|---|---|---|
-| request | `POST /send` | `Bearer REQUEST_TOKEN` | Direct send. Body: exactly one of `to` (E.164), `to_name`, `candidate_id`, plus `body`. `{"to_name":"Sam","resolve":true}` only looks the name up and returns `candidate_id`s (never sends). |
-| request | `POST /request` `{to, text}` | `Bearer REQUEST_TOKEN` | Tap flow: stores a pending request and notifies you. Never sends by itself. |
+| request | `POST /send` | `Bearer REQUEST_TOKEN` | Direct send. Body: exactly one of `to` (E.164), `to_name`, `candidate_id`, `to_names` (2–3), `candidate_ids` (2–3), plus `body`. `{"to_name":"Sam","resolve":true}` (or `to_names`) only looks names up and returns `candidate_id`s (never sends). `"group": true` (multi-send only, behind `GROUP_MMS`) sends one group MMS. |
+| request | `POST /request` | `Bearer REQUEST_TOKEN` | Tap flow: `{to, text}`, `{to_name, text}` or `{candidate_id, text}`. Stores a pending request and notifies you. Never sends by itself. |
 | request | `GET /request/<id>` | `Bearer REQUEST_TOKEN` | State only. |
 | approve | `GET /direct`, `POST /direct/sync`, `POST /direct/resume` | Access + same Origin + CSRF | Status page, Sync contacts now, resume after a runaway pause. |
 | approve | `GET/POST /approve/<id>` | Access + same Origin + CSRF | Tap approval page. |
@@ -93,7 +94,32 @@ The private page sits behind Cloudflare Access with **email one-time PIN plus a 
 | request | `POST /device/next` | `Bearer DEVICE_TOKEN` | `DELIVERY = mac` or `shortcut` only. Claims the oldest queued text (one at a time). The reply carries the number and text: it's the sender. |
 | request | `POST /device/result` `{id, lease, outcome}` | `Bearer DEVICE_TOKEN` | One result per claim: `sent`, `sent_unverified`, `not_started` or `uncertain`. Nothing is ever re-queued. |
 
-Answers never contain a phone number, except `/device/next` to your own device. Refusals are JSON `{"error":"<code>"}`.
+Answers never contain a phone number, except `/device/next` to your own device. Refusals are JSON `{"error":"<code>"}` (multi-send refusals add `failed: [{index, name?, reason?}]`).
+
+**What `"state":"sent"` means.** SMS Gateway's cloud API accepted the encrypted message for your phone and returned a message id. The cloud then queues it, your phone picks it up and hands it to Android to send. The relay doesn't wait for that, so `sent` is not proof of delivery: a phone that is off or offline sends it when it reconnects, and a carrier can still drop it. Delivery shows in your phone's SMS Gateway app. Any other answer means it did not go.
+With `DELIVERY = "mac"` or `"shortcut"` there is no gateway: an accepted text answers 202 `"state":"queued"`, and your device reports the outcome later (`direct_sent`, `direct_send_failed` or `direct_send_uncertain` in the log; see SETUP-iphone.md).
+
+## Multi-send (2–3 people, separate copies)
+`{"to_names": ["Sam Lee", "Jo Park"], "body": "…"}` or `{"candidate_ids": [id, id], "body": "…"}`. All or nothing:
+- 2 to 3 entries, no repeats (`multi_send_needs_2_to_3`, `multi_send_duplicate`; names are compared after normalization). Two entries that land on the same number are refused too (`multi_send_duplicate_recipient`).
+- Every name must match exactly one person on your list. If any name has no match or several, nothing is sent: 409 `multi_send_unresolved` with `failed: [{index, name, reason: "no_match"|"ambiguous"}]`. Use `resolve: true` first to get candidate ids per name; using one id retires that name's other candidates.
+- Each person gets their **own 1:1 text** (`textMessage`), in list order, with its own log rows (`batch_ref=… copy=i/n`). If a copy fails, the rest are **stopped** and nothing is retried: 502 `{"state":"partial"|"send_failed","sent":[names],"not_sent":[names]}`.
+- **iPhone delivery (`DELIVERY = "mac"` or `"shortcut"`):** works the same way. Each copy becomes its own queued job, in list order, and the device claims them one at a time, oldest first. The answer is 202 `{"state":"queued","to":[names]}`, and each copy's outcome is logged under its own ref. With `SHORTCUT_PING = "tap"` that is one notification tap per copy.
+- Caps count each person and are checked before anything goes out: `DIRECT_DAILY_CAP`, `DIRECT_PER_MINUTE_MAX` and the runaway guard see a batch of 3 as 3. A batch that would go over is refused whole. The lookup/refusal limit counts each name.
+
+## Group MMS (`"group": true`, behind `GROUP_MMS`, default off)
+One shared thread instead of separate copies.
+- `GROUP_MMS`: unset, `""` or `"0"` = off (`group: true` gets 403 `group_mms_off`). Exact `"1"` = on. Anything else refuses every `/send` with 503 `direct_config_invalid`.
+- **Android (SMS Gateway) only.** With `DELIVERY = "mac"` or `"shortcut"`, every `group: true` request is refused with 409 `group_mms_unsupported_delivery`, even with `GROUP_MMS = "1"`. It is checked before the contact list is read, so nothing is sent and no candidate ids, send caps or name lookups are used (like every `/send` refusal, it counts once toward `DIRECT_LOOKUP_MAX_PER_HOUR`). The Mac and Shortcut paths send 1:1 texts only; send separate copies instead.
+- **Your own number is never put in the group.** With `GROUP_MMS = "1"`, `OWNER_NUMBER` must be set and in `+E.164` form; otherwise every group request is refused with 503 `config_invalid` (the check never silently turns off). A group that includes your number is refused with 400 `group_includes_owner`.
+- Same 2–3 people, same all-or-nothing and duplicate rules as multi-send. Sends **one** gateway request: `mmsMessage` with the text only, every number in `phoneNumbers`, all encrypted. SMS Gateway builds one MMS with every number in To, which phones show as a group thread.
+- Needs **SMS Gateway v1.74.0 or later** (MMS sending was added in v1.74.0) and mobile data on the phone. MMS has no delivery report, so `sent` is the final state. A gateway failure is 502 `send_failed`, with no retry and no fallback to copies.
+- **Live-test before turning it on:** one text-only group to two numbers you control. Check that each phone shows one thread listing the others, and that a reply reaches everyone. If not, leave it off and use separate copies.
+
+## Tap requests by name
+With tap-to-approve (`DIRECT_SEND = "0"`), the bot can file `{"to_name": "Sam Lee", "text": "…"}` or `{"candidate_id": "…", "text": "…"}` instead of a number. The name is looked up in the same list `/send` uses (contacts, then `DIRECT_ALLOWLIST` when allowed, then `ALLOWLIST`). Exactly one match files the request (202, with `"to": "<name>"`); no match answers `{"state":"no_match"}` and several matches answer `{"state":"ambiguous","candidates":[…]}`, and neither files anything. Candidate ids from `/send` lookups work too, and are single use. At approve time the number must still be on that list. Filing by name needs `LOG_HASH_KEY` (503 `config_invalid` without it). Filing by number (`{to, text}`) is unchanged and still needs `ALLOWLIST`, at filing and at approval. One recipient per tap request.
+
+**Tap-only setups:** with `DIRECT_SEND = "0"`, `/request` by name can still reach anyone on the full send list (every synced contact, not just `ALLOWLIST`), and each one still needs your tap to approve.
 
 ## How a direct send is checked
 ```mermaid
@@ -104,7 +130,7 @@ flowchart TD
     C -- no --> X2[401 / 403 / 503]
     C -- ok --> D{body: not empty, under MAX_TEXT_CHARS, and no link if BLOCK_LINKS = 1}
     D -- no --> X3[400]
-    D -- ok --> E{recipient on your list? one number?}
+    D -- ok --> E{every recipient on your list? 1 to 3, no repeats?}
     E -- no --> X4[403 recipient_not_on_allowlist, logged as HMAC]
     E -- several names match / resolve --> F[candidate ids, nothing sent]
     E -- yes --> G{opt-in limits: daily cap, per minute, hours, runaway pause}
@@ -116,7 +142,7 @@ flowchart TD
 ## Safety notes
 - **Device token:** with `DELIVERY = mac` or `shortcut`, `DEVICE_TOKEN` can only claim texts that already passed every check; it can't create one. It must differ from `REQUEST_TOKEN`, and each one rotates on its own.
 - **Who can send:** anyone holding `REQUEST_TOKEN` can text anyone on your list, with no tap and (by default) no cap. Guard it like a password; the kill switches are in DEPLOY.md section 13.
-- **Encryption:** text and number are encrypted end to end to your phone (passphrase mode: AES-256-CBC, PBKDF2-SHA1 at 100,000 iterations, the Workers maximum; the 32+ character passphrase is what makes it strong). If the gateway ever publishes a device key, the relay refuses to send until you pin it.
+- **Encryption:** text and number are encrypted end to end to your phone. SMS Gateway v1.77.0 and newer publishes a device key: the relay then encrypts to that key (RSA-OAEP + AES-256-GCM) and refuses to send until you pin its fingerprint and version, and again whenever the key changes. Without a device key it uses passphrase mode (AES-256-CBC, PBKDF2-SHA1 at 100,000 iterations, the Workers maximum; the 32+ character passphrase is what makes it strong).
 - **Contacts:** only display name, given name and phone numbers (not fax or pager) are stored. Emails, notes and addresses never are.
 - **Retention:** tap request text is deleted after 7 days; log rows (no text) after 12 months.
 - **CPU:** a passphrase-mode send costs about 58 ms of CPU inside the Durable Object. If you see error 1102 or "exceeded CPU", move to Workers Paid.
@@ -126,7 +152,7 @@ flowchart TD
 npm ci --legacy-peer-deps
 npm test             # Worker tests in workerd (gateway, Access and Google mocked; real network blocked) + Node tests
 npm run typecheck
-npm run mutation     # breaks one guard at a time and requires a test to fail for every one
+npm run mutation     # checks the unmutated suite passes first, then breaks one guard at a time and requires a test to fail for every one
 ```
 Test data is fake: `TEST-ONLY-…` tokens, `example.com` / `example.test` hosts, and numbers in the fictional 555-01xx range. A scan after every Worker test fails the test if any response, console line or log row contains something shaped like a phone number.
 

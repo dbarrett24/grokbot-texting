@@ -3,10 +3,11 @@ import type { Env } from "./env";
 import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, importHmacKey } from "./e2e";
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
-import { E164, Refuse, hasLink, localDate, maskNumber, parseAllowlist, parseCount, parseSwitch, parseTapConfig, parseTimezone, sendCap, validateRequestBody, type TapConfig } from "./rules";
+import { E164, Refuse, hasLink, localDate, maskNumber, parseAllowlist, parseCount, parseSwitch, parseTapConfig, parseTimezone, sendCap, validateRequestBody, validateTapText, type TapConfig } from "./rules";
 import {
   insideHours, matchName, parseRequiredLimit, minuteOfDay, normalizeName, parseHours, parseNotifyEach, parseOptionalLimit, parseSnapshot,
   safeName, switchOnUnlessZero, switchOnlyIfOne, validateBody, parseAccounts, parseCountryCode, peopleToContacts, UPLOAD_SOURCE, type ContactRow, type SnapshotContact,
+  echoName, entryRefuse, parseGroupMms, parseMultiList, type MultiField,
 } from "./direct";
 import {
   CLAIM_TIMEOUT_MS, ConfigRefuse, DEVICE_DEFAULT_DAILY_CAP, DEVICE_SWEEP_MS, STALE_AFTER_MS, TAP_PING_TEXT,
@@ -17,7 +18,11 @@ import {
 const HOUR = 3_600_000;
 const CANDIDATE_TTL_MS = 15 * 60_000;
 const MAX_LIVE_CANDIDATES = 200;
-type Via = "name" | "candidate" | "number";
+type Via = "name" | "candidate" | "number" | "names" | "candidates";
+/** single = the original one-recipient send; copies = multi-send as separate 1:1 texts; group = one group MMS. */
+type SendMode = "single" | "copies" | "group";
+type Target = { e164: string; e164_sha: string; name: string };
+type DirectCfg = { daily: number | null; perMinute: number | null; hours: { start: number; end: number } | null; notifyEach: boolean; runaway: boolean; runawayMax: number; groupMms: boolean };
 /** Outcome of the direct-send transaction. */
 type DirectPlan = { kind: "send" } | { kind: "refuse"; reason: string; status: number; newlyPaused: boolean };
 
@@ -48,6 +53,8 @@ interface Row {
   state: State;
   decided_ms: number | null;
   gateway_id: string | null;
+  via?: string | null; // "contacts" = filed by to_name / candidate_id; NULL = filed by number (ALLOWLIST)
+  to_label?: string | null; // contact name for the approve page (never a number)
 }
 
 const json = (status: number, body: unknown) =>
@@ -98,6 +105,14 @@ export class Relay extends DurableObject<Env> {
       id TEXT PRIMARY KEY, created_ms INTEGER, expires_ms INTEGER, created_day TEXT,
       recipient TEXT, text TEXT, sha256 TEXT, csrf TEXT, state TEXT,
       decided_ms INTEGER, gateway_id TEXT)`);
+    // Added for tap requests filed by contact name. ALTER throws when the column already exists.
+    for (const col of ["via TEXT", "to_label TEXT"]) {
+      try {
+        this.sql.exec(`ALTER TABLE requests ADD COLUMN ${col}`);
+      } catch {
+        // already there
+      }
+    }
     this.sql.exec(`CREATE TABLE IF NOT EXISTS sends(ms INTEGER, day TEXT, request_id TEXT)`);
     // DIRECT_SEND state. contacts = the uploaded snapshot (name + E.164 + label only). direct_sends holds
     // only the HMAC (LOG_HASH_KEY) of the number. candidates map an opaque id to that HMAC, single use, 15 minutes.
@@ -259,7 +274,7 @@ export class Relay extends DurableObject<Env> {
       if (e instanceof Refuse) {
         const reason = e instanceof ConfigRefuse ? e.reason : null;
         if (!e.silent) this.log("refused", { detail: reason ? `${e.code} reason=${reason}` : e.code });
-        return json(e.status, reason ? { error: e.code, reason } : { error: e.code });
+        return json(e.status, { error: e.code, ...(reason ? { reason } : {}), ...(e.extra ?? {}) });
       }
       const msg = e instanceof Error ? e.message : "error";
       if (msg.startsWith("access_")) {
@@ -291,6 +306,9 @@ export class Relay extends DurableObject<Env> {
     } catch {
       throw new Refuse("body_not_json");
     }
+    // Filed by contact name or candidate id instead of a number: looked up in the /send list.
+    if (body && typeof body === "object" && !Array.isArray(body) && ("to_name" in body || "candidate_id" in body))
+      return this.createNamedRequest(body as Record<string, unknown>, cfg, blockLinks);
     const { to, text } = validateRequestBody(body, allow, cfg.maxChars, blockLinks);
     const now = this.clock();
     const day = localDate(now, this.tz());
@@ -444,7 +462,7 @@ export class Relay extends DurableObject<Env> {
    * their own bucket, so a flood of bad tokens can't use up the bot's lookups. Over the limit: 429 lookup_rate,
    * answered WITHOUT a log row (that's the point: no log flooding).
    */
-  private nonSendGate(st: { authed: boolean; gated: boolean }) {
+  private nonSendGate(st: { authed: boolean; gated: boolean }, units = 1) {
     st.gated = true;
     const raw = this.env.DIRECT_LOOKUP_MAX_PER_HOUR;
     let max: number | null = 30;
@@ -457,13 +475,13 @@ export class Relay extends DurableObject<Env> {
     const kind = st.authed ? "auth" : "unauth";
     if (max !== null) {
       const n = this.sql.exec("SELECT COUNT(*) AS c FROM nonsend WHERE kind=? AND ms > ?", kind, now - HOUR).one().c as number;
-      if (n >= max) {
+      if (n + units > max) {
         const r = new Refuse("lookup_rate", 429);
         r.silent = true;
         throw r;
       }
     }
-    this.sql.exec("INSERT INTO nonsend(ms,kind) VALUES(?,?)", now, kind);
+    for (let i = 0; i < units; i++) this.sql.exec("INSERT INTO nonsend(ms,kind) VALUES(?,?)", now, kind);
   }
 
   private async directInner(req: Request, st: { authed: boolean; gated: boolean }): Promise<Response> {
@@ -484,14 +502,20 @@ export class Relay extends DurableObject<Env> {
     }
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Refuse("body_must_be_object");
     const b = raw as Record<string, unknown>;
-    if (Object.keys(b).some((k) => !["to", "to_name", "candidate_id", "body", "resolve"].includes(k))) throw new Refuse("unknown_fields");
-    const keys = ["to", "to_name", "candidate_id"].filter((k) => k in b);
+    if (Object.keys(b).some((k) => !["to", "to_name", "candidate_id", "to_names", "candidate_ids", "body", "resolve", "group"].includes(k))) throw new Refuse("unknown_fields");
+    // Exactly one recipient form of all five (the code name predates the two multi-send forms).
+    const keys = ["to", "to_name", "candidate_id", "to_names", "candidate_ids"].filter((k) => k in b);
     if (keys.length !== 1) throw new Refuse("exactly_one_of_to_to_name_candidate_id");
+    const multi = keys[0] === "to_names" || keys[0] === "candidate_ids";
+    // group: true = ONE group MMS instead of separate copies. Multi-send forms only, behind GROUP_MMS.
+    if ("group" in b && b.group !== true) throw new Refuse("group_must_be_true");
+    if ("group" in b && !multi) throw new Refuse("group_needs_to_names_or_candidate_ids");
+    const group = b.group === true;
     // resolve: true = look the name up and return candidate ids only; never sends. The bot reads the name
     // back to the owner, then sends by candidate_id. body is optional here (checked if given).
     if ("resolve" in b && b.resolve !== true) throw new Refuse("resolve_must_be_true");
     const resolve = b.resolve === true;
-    if (resolve && !("to_name" in b)) throw new Refuse("resolve_needs_to_name");
+    if (resolve && !("to_name" in b) && !("to_names" in b)) throw new Refuse("resolve_needs_to_name");
     const maxChars = parseCount(this.env.MAX_TEXT_CHARS, 640, 1, 10000);
     const blockLinks = this.blockLinks("direct_config_invalid");
     const text = resolve ? (b.body === undefined ? "" : validateBody(b.body, maxChars, blockLinks)) : validateBody(b.body, maxChars, blockLinks);
@@ -504,9 +528,21 @@ export class Relay extends DurableObject<Env> {
       notifyEach: parseNotifyEach(this.env.DIRECT_NOTIFY_EACH),
       runaway: switchOnUnlessZero(this.env.RUNAWAY_PAUSE),
       runawayMax: this.env.RUNAWAY_MAX === undefined ? 10 : parseRequiredLimit(this.env.RUNAWAY_MAX),
+      groupMms: parseGroupMms(this.env.GROUP_MMS),
     };
+    // Group MMS needs the SMS Gateway (one mmsMessage request). The Mac and Shortcut paths send one 1:1 text per
+    // job, so a group request is refused here, before the contact list is read or anything is counted.
+    if (group && isDevice(this.delivery())) throw new Refuse("group_mms_unsupported_delivery", 409);
+    if (group && !cfg.groupMms) throw new Refuse("group_mms_off", 403);
+    // Group sends must be able to keep the owner's own number out of the thread. With OWNER_NUMBER unset
+    // or not E.164 that check can't run, so every group request is refused (it never silently turns off).
+    if (group && !E164.test(this.env.OWNER_NUMBER ?? "")) {
+      console.error("CONFIG_ERROR reason=group_mms_needs_owner_number");
+      throw new Refuse("config_invalid", 503);
+    }
     const now = this.clock();
     const list = await this.directList(key);
+    if (multi) return this.directMulti(b, keys[0] as MultiField, list, text, resolve, group, cfg, now, key, st);
     let target: { e164: string; e164_sha: string; name: string };
     let via: Via;
     let candidate: string | null = null;
@@ -566,27 +602,103 @@ export class Relay extends DurableObject<Env> {
       target = hit;
       candidate = id;
     }
-    return this.directSend(target, text, via, candidate, cfg, now, key, st);
+    return this.directSend([target], text, via, candidate ? [candidate] : [], "single", cfg, now, key, st);
   }
 
-  private async directSend(
-    target: { e164: string; e164_sha: string; name: string },
-    text: string,
-    via: Via,
-    candidate: string | null,
-    cfg: { daily: number | null; perMinute: number | null; hours: { start: number; end: number } | null; notifyEach: boolean; runaway: boolean; runawayMax: number },
-    now: number,
-    key: CryptoKey,
-    st: { authed: boolean; gated: boolean },
+  /**
+   * POST /send with to_names or candidate_ids (2..3 entries). All or nothing: every entry must resolve to
+   * exactly one number on the direct list, no two entries may be the same person or number, and a group
+   * may not include the owner's own number. Any failure sends nothing and names the entry by index.
+   */
+  private async directMulti(
+    b: Record<string, unknown>, field: MultiField, list: (ContactRow & { e164_sha: string })[], text: string,
+    resolve: boolean, group: boolean, cfg: DirectCfg, now: number, key: CryptoKey, st: { authed: boolean; gated: boolean },
   ): Promise<Response> {
+    const entries = parseMultiList(b[field], field);
+    const targets: Target[] = [];
+    const used: string[] = [];
+    if (field === "to_names") {
+      const results = entries.map((name, index) => ({ index, name, hits: matchName(list, name) }));
+      if (resolve) {
+        this.nonSendGate(st, entries.length); // each name is one lookup
+        this.sql.exec("DELETE FROM candidates WHERE expires_ms <= ?", now);
+        const live = this.sql.exec("SELECT COUNT(*) AS c FROM candidates WHERE used=0").one().c as number;
+        if (live + results.reduce((a, r) => a + r.hits.length, 0) > MAX_LIVE_CANDIDATES) throw new Refuse("too_many_candidates", 429);
+        const out = results.map((r) => {
+          const grp = hex(crypto.getRandomValues(new Uint8Array(16))); // one group per name: using one retires its siblings
+          const candidates = r.hits.map((h) => {
+            const id = hex(crypto.getRandomValues(new Uint8Array(16)));
+            this.sql.exec("INSERT INTO candidates(id,grp,to_sha,expires_ms,used) VALUES(?,?,?,?,0)", id, grp, h.e164_sha, now + CANDIDATE_TTL_MS);
+            return { candidate_id: id, label: `${safeName(h.name)} (${h.label})` };
+          });
+          const state = r.hits.length === 0 ? "no_match" : r.hits.length > 1 ? "ambiguous" : "one";
+          return { index: r.index, name: echoName(r.name), state, candidates };
+        });
+        const tally = (s: string) => out.filter((o) => o.state === s).length;
+        this.log("direct_lookup", { detail: `method=direct via=names result=resolve names=${out.length} one=${tally("one")} ambiguous=${tally("ambiguous")} no_match=${tally("no_match")}${group ? " group=1" : ""}` });
+        return json(200, { state: "resolved", results: out, expires_in_s: CANDIDATE_TTL_MS / 1000 });
+      }
+      const failed = results.filter((r) => r.hits.length !== 1).map((r) => ({ index: r.index, name: echoName(r.name), reason: r.hits.length ? "ambiguous" : "no_match" }));
+      if (failed.length) {
+        this.nonSendGate(st, entries.length); // each name counts toward the lookup limit
+        this.log("direct_refused", { detail: `method=direct via=names reason=multi_send_unresolved failed_index=${failed.map((f) => f.index).join("/")}` });
+        const r = new Refuse("multi_send_unresolved", 409);
+        r.extra = { failed };
+        throw r;
+      }
+      targets.push(...results.map((r) => r.hits[0]));
+    } else {
+      const groups = new Set<string>();
+      for (const [i, id] of entries.entries()) {
+        if (!/^[a-f0-9]{32}$/.test(id)) throw entryRefuse("candidate_unknown", 404, i);
+        const c = this.sql.exec("SELECT to_sha, expires_ms, used, grp FROM candidates WHERE id=?", id).toArray()[0] as { to_sha: string; expires_ms: number; used: number; grp: string } | undefined;
+        if (!c) throw entryRefuse("candidate_unknown", 404, i);
+        if (c.used) throw entryRefuse("candidate_used", 409, i);
+        if (now >= c.expires_ms) throw entryRefuse("candidate_expired", 410, i);
+        // Two ids from one lookup are two numbers for the same name: refused like a repeat.
+        if (groups.has(c.grp)) throw entryRefuse("multi_send_duplicate", 400, i);
+        groups.add(c.grp);
+        const hit = list.find((r) => r.e164_sha === c.to_sha);
+        if (!hit) throw entryRefuse("candidate_unknown", 404, i);
+        targets.push(hit);
+        used.push(id);
+      }
+    }
+    // Two entries that land on the same number (two names for one person) are a repeat too.
+    const shas = new Set<string>();
+    for (const [i, t] of targets.entries()) {
+      if (shas.has(t.e164_sha)) throw entryRefuse("multi_send_duplicate_recipient", 400, i, field === "to_names" ? entries[i] : undefined);
+      shas.add(t.e164_sha);
+    }
+    if (group) {
+      // Never put the owner's own number into a group thread.
+      const owner = this.env.OWNER_NUMBER ?? ""; // checked as E.164 in directInner before any group request gets here
+      const i = targets.findIndex((t) => t.e164 === owner);
+      if (i >= 0) throw entryRefuse("group_includes_owner", 400, i, field === "to_names" ? entries[i] : undefined);
+    }
+    return this.directSend(targets, text, field === "to_names" ? "names" : "candidates", used, group ? "group" : "copies", cfg, now, key, st);
+  }
+
+  /**
+   * Every guard and counter for 1..3 recipients in ONE synchronous transaction, before any network call.
+   * Caps count each recipient (a group MMS to 3 counts 3), and a batch that would go over a cap sends nothing.
+   */
+  private async directSend(
+    targets: Target[], text: string, via: Via, candidates: string[], mode: SendMode, cfg: DirectCfg,
+    now: number, key: CryptoKey, st: { authed: boolean; gated: boolean },
+  ): Promise<Response> {
+    const n = targets.length;
     const day = localDate(now, this.tz());
     const bodySha = `hmac:${await this.bodyHash(key, text)}`;
     const id = hex(crypto.getRandomValues(new Uint8Array(16)));
-    const label = safeName(target.name);
-    const who = `method=direct via=${via} to_hmac=${target.e164_sha} label=${label}`;
-    // Every guard and every counter update in ONE synchronous transaction, before any network call.
+    // copies: each copy gets its own id and log rows; single and group use the one id.
+    const ids = targets.map((_, i) => (mode === "copies" && i > 0 ? hex(crypto.getRandomValues(new Uint8Array(16))) : id));
+    const labels = targets.map((t) => safeName(t.name));
+    const whoOf = (i: number) => `method=direct via=${via} to_hmac=${targets[i].e164_sha} label=${labels[i]}${mode === "copies" ? ` batch_ref=${id.slice(0, 8)} copy=${i + 1}/${n}` : ""}`;
+    const all = targets.map((t, i) => `to_hmac=${t.e164_sha} label=${labels[i]}`).join(" ");
+    const who = mode === "single" ? whoOf(0) : `method=${mode === "group" ? "group_mms" : "direct"} via=${via} recipients=${n} ${all}`;
     const plan = this.ctx.storage.transactionSync((): DirectPlan => {
-      if (candidate) {
+      for (const candidate of candidates) {
         // Single use for the whole lookup: using one candidate retires its siblings too.
         const grp = this.sql.exec("SELECT grp FROM candidates WHERE id=? AND used=0", candidate).toArray()[0]?.grp as string | undefined;
         if (!grp) throw new Refuse("candidate_used", 409);
@@ -596,20 +708,21 @@ export class Relay extends DurableObject<Env> {
         if (this.meta("direct_paused") === "1") return { kind: "refuse", reason: "direct_paused", status: 503, newlyPaused: false };
         const since = Math.max(now - HOUR, Number(this.meta("direct_resumed_ms") ?? 0));
         const recent = this.sql.exec("SELECT COUNT(*) AS c FROM direct_sends WHERE ms > ?", since).one().c as number;
-        if (recent >= cfg.runawayMax) {
+        if (recent + n > cfg.runawayMax) {
           this.setMeta("direct_paused", "1");
           this.setMeta("direct_paused_ms", String(now));
-          this.log("direct_paused", { detail: `method=direct reason=runaway sends_last_hour=${recent} max=${cfg.runawayMax}` });
+          this.log("direct_paused", { detail: `method=direct reason=runaway sends_last_hour=${recent} batch=${n} max=${cfg.runawayMax}` });
           return { kind: "refuse", reason: "direct_paused", status: 503, newlyPaused: true };
         }
       }
       if (cfg.hours && !insideHours(minuteOfDay(now, this.tz()), cfg.hours)) return { kind: "refuse", reason: "direct_outside_hours", status: 429, newlyPaused: false };
-      if (cfg.daily !== null && (this.sql.exec("SELECT COUNT(*) AS c FROM direct_sends WHERE day=?", day).one().c as number) >= cfg.daily)
+      if (cfg.daily !== null && (this.sql.exec("SELECT COUNT(*) AS c FROM direct_sends WHERE day=?", day).one().c as number) + n > cfg.daily)
         return { kind: "refuse", reason: "direct_daily_cap_reached", status: 429, newlyPaused: false };
-      if (cfg.perMinute !== null && (this.sql.exec("SELECT COUNT(*) AS c FROM direct_sends WHERE ms > ?", now - 60_000).one().c as number) >= cfg.perMinute)
+      if (cfg.perMinute !== null && (this.sql.exec("SELECT COUNT(*) AS c FROM direct_sends WHERE ms > ?", now - 60_000).one().c as number) + n > cfg.perMinute)
         return { kind: "refuse", reason: "direct_per_minute_reached", status: 429, newlyPaused: false };
-      this.sql.exec("INSERT INTO direct_sends(ms,day,to_sha) VALUES(?,?,?)", now, day, target.e164_sha);
-      this.log("direct_approved", { request_id: id, sha256: bodySha, detail: `${who} by=request_token` });
+      for (const t of targets) this.sql.exec("INSERT INTO direct_sends(ms,day,to_sha) VALUES(?,?,?)", now, day, t.e164_sha);
+      if (mode === "copies") targets.forEach((_, i) => this.log("direct_approved", { request_id: ids[i], sha256: bodySha, detail: `${whoOf(i)} by=request_token` }));
+      else this.log("direct_approved", { request_id: id, sha256: bodySha, detail: `${who} by=request_token` });
       return { kind: "send" };
     });
     this.purge(now);
@@ -620,34 +733,65 @@ export class Relay extends DurableObject<Env> {
       this.log("direct_refused", { request_id: id, sha256: bodySha, detail: `${who} reason=${plan.reason}` });
       throw new Refuse(plan.reason, plan.status);
     }
-    let d: Delivered;
-    let queuedJob: string | null = null;
-    try {
-      d = await this.deliver(target.e164, text, { kind: "direct", id, who, sha: bodySha }, (job) => {
-        queuedJob = job;
-      });
-    } catch (e) {
-      if (queuedJob !== null) {
-        // The job is already queued and the device will claim it, so this is NOT a failure: answering 502 here
-        // would make the bot retry and double-text. Log the error and answer 202 queued like any other queued text.
-        this.logAfterQueue(id, queuedJob, e);
-        d = { queued: true, job: queuedJob };
-      } else {
+    if (mode === "group") {
+      // ONE gateway request carrying every recipient: the phone sends one MMS with all of them in To.
+      // directInner refuses group requests in a device mode before anything is counted; this is the backstop.
+      let gid: string;
+      try {
+        if (isDevice(this.delivery())) throw new Error("group_mms_unsupported_delivery");
+        gid = await this.gatewaySendGroup(targets.map((t) => t.e164), text);
+      } catch (e) {
         this.log("direct_send_failed", { request_id: id, sha256: bodySha, detail: `${who} error=${errCode(e)}` });
-        return json(502, { id, state: "send_failed", method: "direct" });
+        return json(502, { id, state: "send_failed", method: "group_mms" });
+      }
+      this.log("direct_sent", { request_id: id, sha256: bodySha, detail: `${who} gateway_id=${gid}` });
+      let notified: boolean | undefined;
+      if (cfg.notifyEach) notified = await this.notifyDirectEach(id, `group text to ${labels.join(" + ")}`, text, now);
+      // MMS has no delivery report, so "sent" is the final state.
+      return json(200, { id, state: "sent", method: "group_mms", to: labels, ...(notified === undefined ? {} : { notified }) });
+    }
+    // single and copies: each recipient goes through deliver(), so the SMS Gateway sends it now and a device
+    // mode queues one job per copy, in order (the device claims the oldest first).
+    const sent: string[] = [];
+    const queued: string[] = [];
+    let notified: boolean | undefined;
+    for (const [i, t] of targets.entries()) {
+      let d: Delivered;
+      let queuedJob: string | null = null;
+      try {
+        d = await this.deliver(t.e164, text, { kind: "direct", id: ids[i], who: whoOf(i), sha: bodySha }, (job) => {
+          queuedJob = job;
+        });
+      } catch (e) {
+        if (queuedJob !== null) {
+          // The job is already queued and the device will claim it, so this is NOT a failure: answering 502 here
+          // would make the bot retry and double-text. Log the error and treat it like any other queued text.
+          this.logAfterQueue(ids[i], queuedJob, e);
+          d = { queued: true, job: queuedJob };
+        } else {
+          this.log("direct_send_failed", { request_id: ids[i], sha256: bodySha, detail: `${whoOf(i)} error=${errCode(e)}` });
+          if (mode === "single") return json(502, { id, state: "send_failed", method: "direct" });
+          // Stop here: the remaining copies are not sent and nothing is retried.
+          for (let j = i + 1; j < n; j++) this.log("direct_not_sent", { request_id: ids[j], sha256: bodySha, detail: `${whoOf(j)} reason=stopped_after_failure` });
+          const done = sent.length + queued.length > 0;
+          return json(502, { id, state: done ? "partial" : "send_failed", method: "direct", sent, ...(queued.length ? { queued } : {}), not_sent: labels.slice(i) });
+        }
+      }
+      if (d.queued) queued.push(labels[i]);
+      else {
+        this.log("direct_sent", { request_id: ids[i], sha256: bodySha, detail: `${whoOf(i)} gateway_id=${d.gid}` });
+        sent.push(labels[i]);
+      }
+      if (cfg.notifyEach) {
+        const ok = await this.notifyDirectEach(ids[i], labels[i], text, now, d.queued);
+        notified = (notified ?? true) && ok;
       }
     }
-    if (d.queued) {
-      // Every guard and counter above already ran. The device reports the outcome to /device/result.
-      let notified: boolean | undefined;
-      if (cfg.notifyEach) notified = await this.notifyDirectEach(id, label, text, now, true);
-      return json(202, { id, state: "queued", method: "direct", to: label, ...(notified === undefined ? {} : { notified }) });
-    }
-    const gid = d.gid;
-    this.log("direct_sent", { request_id: id, sha256: bodySha, detail: `${who} gateway_id=${gid}` });
-    let notified: boolean | undefined;
-    if (cfg.notifyEach) notified = await this.notifyDirectEach(id, label, text, now);
-    return json(200, { id, state: "sent", method: "direct", to: label, ...(notified === undefined ? {} : { notified }) });
+    const to = mode === "single" ? labels[0] : labels;
+    const extra = notified === undefined ? {} : { notified };
+    // A device mode queues every copy: 202 queued. The device reports each outcome to /device/result.
+    if (queued.length) return json(202, { id, state: "queued", method: "direct", to, ...extra });
+    return json(200, { id, state: "sent", method: "direct", to, ...extra });
   }
 
   private async notifyPaused(now: number) {
@@ -951,7 +1095,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Approve text</title>
 <body style="font:16px system-ui;max-width:32em;margin:1em auto;padding:0 1em">
 <h2>Send this text?</h2>
-<p><b>To:</b> ${esc(allow.get(r.recipient) || "not on allowlist")} (${esc(maskNumber(r.recipient))})</p>
+<p><b>To:</b> ${esc((r.via === "contacts" ? r.to_label : allow.get(r.recipient)) || "not on allowlist")} (${esc(maskNumber(r.recipient))})</p>
 <pre style="white-space:pre-wrap;border:1px solid #888;padding:.75em">${esc(r.text)}</pre>
 <p><small>ref ${r.id.slice(0, 8)} · sha256 ${r.sha256.slice(0, 12)} · ${open ? `expires in ${mins} min` : `state: ${expired && r.state === "pending" ? "expired" : r.state}`}</small></p>
 ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
@@ -984,7 +1128,11 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     const cfg = this.tapCfg(); // a garbage tap setting refuses the approval (deny always works)
     // Re-check policy at send time against the CURRENT secrets.
     const allow = parseAllowlist(this.env.ALLOWLIST);
-    if (!allow.has(r.recipient)) throw new Refuse("recipient_not_on_allowlist", 403);
+    if (r.via === "contacts") {
+      await this.requireStillOnList(r.recipient); // filed by name: still on the /send list?
+    } else {
+      if (!allow.has(r.recipient)) throw new Refuse("recipient_not_on_allowlist", 403);
+    }
     if ((await sha256Hex(r.text)) !== r.sha256) throw new Refuse("stored_text_hash_mismatch", 500);
     const day = localDate(now, this.tz());
     const sentToday = this.sql.exec("SELECT COUNT(*) AS c FROM sends WHERE day=?", day).one().c as number;
@@ -1311,6 +1459,90 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     return `<p><b>Delivery:</b> ${mode} · <b>last poll:</b> ${seen ? esc(this.fmtTime(Number(seen))) : "never"}${this.meta("device_stale") === "1" ? " (STALE)" : ""} · <b>queued:</b> ${queued}</p>`;
   }
 
+  /**
+   * POST /request by contact name ({to_name, text}) or candidate id ({candidate_id, text}) instead of a number.
+   * The name is looked up in the same list /send uses (contacts, then DIRECT_ALLOWLIST when allowed, then
+   * ALLOWLIST). Exactly one match files the request; no match or several matches file nothing and answer like
+   * /send does (candidate ids for the ambiguous case). Needs LOG_HASH_KEY, because the list is keyed by its HMAC.
+   */
+  private async createNamedRequest(b: Record<string, unknown>, cfg: TapConfig, blockLinks: boolean): Promise<Response> {
+    if (Object.keys(b).some((k) => !["to", "to_name", "candidate_id", "text"].includes(k))) throw new Refuse("unknown_fields");
+    if (["to", "to_name", "candidate_id"].filter((k) => k in b).length !== 1) throw new Refuse("exactly_one_of_to_to_name_candidate_id");
+    const text = validateTapText(b.text, cfg.maxChars, blockLinks);
+    const hashKey = await this.hashKey();
+    if (!hashKey) {
+      console.error("CONFIG_ERROR reason=log_hash_key_missing_or_short");
+      throw new Refuse("config_invalid", 503);
+    }
+    const now = this.clock();
+    const people = await this.directList(hashKey);
+    const gate = { authed: true, gated: false };
+    let pick: (ContactRow & { e164_sha: string }) | undefined;
+    let usedCandidate: string | null = null;
+    if ("to_name" in b) {
+      const q = b.to_name;
+      if (Array.isArray(q)) throw new Refuse("group_send_not_allowed");
+      if (typeof q !== "string" || q.length > 200) throw new Refuse("to_name_invalid");
+      const found = matchName(people, q);
+      if (found.length === 0) {
+        this.nonSendGate(gate);
+        this.log("request_lookup", { detail: "method=tap via=name result=no_match" });
+        return json(200, { state: "no_match", candidates: [] });
+      }
+      if (found.length > 1) {
+        // Nothing is filed: the bot reads the labels back and files again with the chosen candidate_id.
+        this.nonSendGate(gate);
+        this.sql.exec("DELETE FROM candidates WHERE expires_ms<=?", now);
+        const liveNow = this.sql.exec("SELECT COUNT(*) AS c FROM candidates WHERE used = 0").one().c as number;
+        if (liveNow + found.length > MAX_LIVE_CANDIDATES) throw new Refuse("too_many_candidates", 429);
+        const lookup = hex(crypto.getRandomValues(new Uint8Array(16)));
+        const candidates = found.map((row) => {
+          const cid = hex(crypto.getRandomValues(new Uint8Array(16)));
+          this.sql.exec("INSERT INTO candidates(id, grp, to_sha, expires_ms, used) VALUES (?, ?, ?, ?, 0)", cid, lookup, row.e164_sha, now + CANDIDATE_TTL_MS);
+          return { candidate_id: cid, label: `${safeName(row.name)} (${row.label})` };
+        });
+        this.log("request_lookup", { detail: `method=tap via=name result=ambiguous candidates=${found.length}` });
+        return json(200, { state: "ambiguous", candidates, expires_in_s: CANDIDATE_TTL_MS / 1000 });
+      }
+      pick = found[0];
+    } else {
+      const cid = b.candidate_id;
+      if (typeof cid !== "string" || !/^[a-f0-9]{32}$/.test(cid)) throw new Refuse("candidate_unknown", 404);
+      const row = this.sql.exec("SELECT grp, to_sha, expires_ms, used FROM candidates WHERE id = ?", cid).toArray()[0] as { grp: string; to_sha: string; expires_ms: number; used: number } | undefined;
+      if (!row) throw new Refuse("candidate_unknown", 404);
+      if (row.used === 1) throw new Refuse("candidate_used", 409);
+      if (row.expires_ms <= now) throw new Refuse("candidate_expired", 410);
+      pick = people.find((p) => p.e164_sha === row.to_sha);
+      if (!pick) throw new Refuse("candidate_unknown", 404); // the number left the list since the lookup
+      usedCandidate = cid;
+    }
+    const day = localDate(now, this.tz());
+    const filed = this.sql.exec("SELECT COUNT(*) AS c FROM requests WHERE created_day = ?", day).one().c as number;
+    if (filed >= cfg.pendingPerDay) throw new Refuse("request_cap_reached", 429);
+    // Single use for the whole lookup, like /send: filing with one candidate retires its siblings.
+    if (usedCandidate) this.sql.exec("UPDATE candidates SET used = 1 WHERE grp = (SELECT grp FROM candidates WHERE id = ?)", usedCandidate);
+    const label = safeName(pick.name);
+    const id = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const csrf = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const sha = await sha256Hex(text);
+    const expires = now + cfg.ttlSeconds * 1000;
+    this.sql.exec(
+      "INSERT INTO requests(id,created_ms,expires_ms,created_day,recipient,text,sha256,csrf,state,via,to_label) VALUES(?,?,?,?,?,?,?,?,'pending','contacts',?)",
+      id, now, expires, day, pick.e164, text, sha, csrf, label,
+    );
+    this.purge(now);
+    this.log("request_created", { request_id: id, recipient: pick.e164, sha256: await this.logBodyHash(text), detail: `via=${usedCandidate ? "candidate" : "name"}` });
+    const notified = await this.notify(id, pick.e164, label, cfg.ttlSeconds);
+    return json(202, { id, state: "pending", expires_ms: expires, sha256: sha, notified, to: label });
+  }
+
+  /** Approve-time check for a request filed by name: the number must still be on the /send list. */
+  private async requireStillOnList(e164: string) {
+    const hashKey = await this.hashKey();
+    if (!hashKey) throw new Refuse("config_invalid", 503);
+    if (!(await this.directList(hashKey)).some((p) => p.e164 === e164)) throw new Refuse("recipient_not_on_allowlist", 403);
+  }
+
   // ---------- gateway ----------
   private async gw(method: string, path: string, body?: unknown): Promise<any> {
     const e = this.env;
@@ -1336,7 +1568,17 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
    * Returns the gateway message id.
    */
   async gatewaySend(to: string, text: string): Promise<string> {
-    if (!E164.test(to)) throw new Error("bad_recipient");
+    return this.gatewayPost([to], text, "sms");
+  }
+
+  /** Group MMS: ONE request, mmsMessage, every recipient in phoneNumbers (the phone puts them all in To). */
+  async gatewaySendGroup(to: string[], text: string): Promise<string> {
+    if (to.length < 2) throw new Error("group_needs_two_recipients");
+    return this.gatewayPost(to, text, "mms");
+  }
+
+  private async gatewayPost(to: string[], text: string, kind: "sms" | "mms"): Promise<string> {
+    if (!to.length || (kind === "sms" && to.length !== 1) || to.some((t) => !E164.test(t))) throw new Error("bad_recipient");
     const want = this.env.GATEWAY_DEVICE_ID;
     if (!want) throw new Error("gateway_device_id_not_configured");
     // Config load: a configured-but-short passphrase refuses EVERY send (either mode), before any network call.
@@ -1369,14 +1611,13 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     } else {
       return this.security("no_device_key_and_no_passphrase");
     }
-    const body = {
-      deviceId: want,
-      isEncrypted: true,
-      textMessage: { text: await encryptField(text) },
-      phoneNumbers: [await encryptField(to)],
-    };
+    const content = { text: await encryptField(text) };
+    const phoneNumbers: string[] = [];
+    for (const t of to) phoneNumbers.push(await encryptField(t));
+    // sms: textMessage, one recipient (keeps delivery reports). mms: mmsMessage, text only, no attachments.
+    const body = kind === "mms" ? { deviceId: want, isEncrypted: true, mmsMessage: content, phoneNumbers } : { deviceId: want, isEncrypted: true, textMessage: content, phoneNumbers };
     const resp = await this.gw("POST", "/messages", body);
-    this.log("gateway_mode", { detail: mode });
+    this.log("gateway_mode", { detail: kind === "mms" ? `${mode} mms` : mode });
     return resp && typeof resp.id === "string" ? resp.id : "unknown";
   }
 
