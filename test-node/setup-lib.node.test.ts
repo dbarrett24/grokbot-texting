@@ -64,11 +64,19 @@ describe("wrangler config", () => {
 
 describe("secrets payload", () => {
   const common = { REQUEST_TOKEN: "TEST-ONLY-r", LOG_HASH_KEY: "TEST-ONLY-l", ACCESS_AUD: "TEST-ONLY-a", APPROVER_EMAIL: "o@example.test", OWNER_NUMBER: "+15555550100", OWNER_NAME: "Test Owner" };
-  it("android with a device key pins it and sends no passphrase", () => {
+  it("android in device-key mode (opt-in) pins it, sends no passphrase, and tells the relay the mode", () => {
     const m = new Map(Object.entries({ ...common, GATEWAY_USER: "u", GATEWAY_PASS: "p", GATEWAY_DEVICE_ID: "d", GATEWAY_PINNED_FINGERPRINT: "AAAA", GATEWAY_KEY_VERSION: "1", GATEWAY_PASSPHRASE: "x".repeat(40) }));
-    const { payload, missing } = buildPayload({ ...BASE, deviceKey: true }, m);
+    const { payload, missing } = buildPayload({ ...BASE, deviceKey: true, gatewayMode: "device_key" }, m);
     expect(missing).toEqual([]);
     expect(payload.GATEWAY_PASSPHRASE).toBeUndefined();
+    expect(payload.GATEWAY_MODE).toBe("device_key");
+    // no choice made: an existing pin stays device_key (vet N1); without one the default is passphrase
+    expect(buildPayload({ ...BASE, deviceKey: true }, m).payload.GATEWAY_MODE).toBe("device_key");
+    m.delete("GATEWAY_PINNED_FINGERPRINT"); m.delete("GATEWAY_KEY_VERSION");
+    const d = buildPayload({ ...BASE, deviceKey: true }, m).payload;
+    expect(d.GATEWAY_MODE).toBe("passphrase");
+    expect(d.GATEWAY_PASSPHRASE).toBe("x".repeat(40));
+    expect(d.GATEWAY_PINNED_FINGERPRINT).toBeUndefined();
     expect(JSON.parse(payload.ALLOWLIST)).toEqual({ "+15555550100": "Test Owner" });
     expect(payload.OWNER_NAME).toBeUndefined();
   });

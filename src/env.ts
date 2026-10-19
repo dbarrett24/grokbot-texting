@@ -48,7 +48,9 @@ export interface Env {
   GATEWAY_DEVICE_ID: string;
   GATEWAY_PINNED_FINGERPRINT?: string; // required when the device publishes a publicKey (RSA mode); optional in passphrase mode
   GATEWAY_KEY_VERSION?: string; // same as above
-  GATEWAY_PASSPHRASE?: string; // passphrase mode; used ONLY when the listed device has no publicKey
+  GATEWAY_PASSPHRASE?: string; // passphrase mode: when the listed device has no publicKey, or GATEWAY_MODE = "passphrase"
+  // "passphrase" | "device_key" | unset (auto: device key when listed). Set by setup; anything else refuses every send.
+  GATEWAY_MODE?: string;
   GATEWAY_PBKDF2_ITERATIONS?: string; // var; default 100000 (Workers max); allowed 75000..100000
   // GATEWAY_PASSPHRASE must be >= 32 chars when set, or every send is refused (gateway_passphrase_too_short)
   ALLOWLIST: string; // JSON object {"+<E.164>": "label"}

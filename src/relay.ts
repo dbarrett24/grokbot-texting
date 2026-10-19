@@ -1561,10 +1561,13 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
   /**
    * Single-recipient, E2E-encrypted send to the configured device. Mode selection (fail closed):
    * - listed device id must equal GATEWAY_DEVICE_ID, else refuse (security event)
-   * - device has publicKey: pin (fingerprint + key version) MUST be configured and match → RSA mode;
-   *   publicKey with no pin, or a mismatch → refuse (security event). Never falls back to passphrase.
-   * - device has no publicKey and GATEWAY_PASSPHRASE is set → legacy passphrase mode
-   * - neither → refuse
+   * - GATEWAY_MODE = "passphrase" (explicit owner choice) → passphrase mode even if the device lists a publicKey
+   *   (the app picks the decryptor by prefix); GATEWAY_PASSPHRASE MUST be set, else refuse
+   * - device has publicKey (GATEWAY_MODE unset or "device_key"): pin (fingerprint + key version) MUST be configured
+   *   and match → RSA mode; publicKey with no pin, or a mismatch → refuse (security event). Never falls back.
+   * - GATEWAY_MODE = "device_key" and the device has no publicKey → refuse
+   * - device has no publicKey and GATEWAY_PASSPHRASE is set → passphrase mode
+   * - neither → refuse. Any other GATEWAY_MODE value refuses every send (config_error).
    * Returns the gateway message id.
    */
   async gatewaySend(to: string, text: string): Promise<string> {
@@ -1582,7 +1585,9 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     const want = this.env.GATEWAY_DEVICE_ID;
     if (!want) throw new Error("gateway_device_id_not_configured");
     // Config load: a configured-but-short passphrase refuses EVERY send (either mode), before any network call.
+    const gm = this.env.GATEWAY_MODE ?? "";
     try {
+      if (gm !== "" && gm !== "passphrase" && gm !== "device_key") throw new Error("gateway_mode_invalid");
       checkPassphrase(this.env.GATEWAY_PASSPHRASE);
       if (this.env.GATEWAY_PASSPHRASE) parseIterations(this.env.GATEWAY_PBKDF2_ITERATIONS);
     } catch (e) {
@@ -1596,13 +1601,22 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     if (!dev) return this.security("device_id_not_listed");
     let encryptField: (s: string) => Promise<string>;
     let mode: string;
-    if (typeof dev.publicKey === "string" && dev.publicKey) {
+    if (gm === "passphrase") {
+      // Explicit only: a passphrase merely being present never overrides a device key (no silent downgrade).
+      if (!this.env.GATEWAY_PASSPHRASE) return this.security("gateway_mode_passphrase_but_no_passphrase");
+      const iters = parseIterations(this.env.GATEWAY_PBKDF2_ITERATIONS);
+      const pass = this.env.GATEWAY_PASSPHRASE;
+      encryptField = (s) => encryptFieldPassphrase(pass, iters, s);
+      mode = "passphrase";
+    } else if (typeof dev.publicKey === "string" && dev.publicKey) {
       const pin = this.env.GATEWAY_PINNED_FINGERPRINT;
       const ver = this.env.GATEWAY_KEY_VERSION;
       if (!pin || !ver || !/^\d+$/.test(ver)) return this.security("device_key_present_but_no_pin");
       if ((await fingerprint(dev.publicKey)) !== pin || dev.keyVersion !== Number(ver)) return this.security("device_key_pin_mismatch");
       encryptField = (s) => encryptFieldRsa(dev.publicKey, dev.keyVersion, s);
       mode = "rsa";
+    } else if (gm === "device_key") {
+      return this.security("gateway_mode_device_key_but_no_device_key");
     } else if (this.env.GATEWAY_PASSPHRASE) {
       const iters = parseIterations(this.env.GATEWAY_PBKDF2_ITERATIONS);
       const pass = this.env.GATEWAY_PASSPHRASE;
