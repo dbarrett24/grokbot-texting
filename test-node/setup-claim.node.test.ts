@@ -36,6 +36,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "relay-claim-"));
   mkdirSync(join(dir, "scripts")); mkdirSync(join(dir, "bin"));
   copyFileSync(join(ROOT, "scripts", "setup-lib.mjs"), join(dir, "scripts", "setup-lib.mjs"));
+  copyFileSync(join(ROOT, "scripts", "is-main.mjs"), join(dir, "scripts", "is-main.mjs")); // its entry-point check
   copyFileSync(join(ROOT, "wrangler.toml"), join(dir, "wrangler.toml"));
   writeFileSync(join(dir, "bin", "npx"), FAKE_NPX); chmodSync(join(dir, "bin", "npx"), 0o755);
   writeFileSync(join(dir, "fake-dns.cjs"), FAKE_DNS);

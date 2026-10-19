@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, appendFi
 import { resolve as resolveDns4, resolve6, resolveCname } from "node:dns/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mainKind } from "./is-main.mjs";
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const LOCAL = join(REPO, ".relay-local");
@@ -488,8 +489,9 @@ const steps = {
   },
 };
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
-if (isMain) {
+// Run directly (also through symlinked paths such as the macOS TMPDIR): run the step. Imported (tests): nothing.
+// A start that names this file but doesn't resolve to it prints a fail status line and exits 70, never a silent 0.
+if (mainKind(import.meta.url, (msg) => { out("entry", "fail", { reason: "entry_check_mismatch" }); console.error(msg); }) === "main") {
   const name = args.find((a) => !a.startsWith("--"));
   if (!steps[name]) { out("usage", "fail", { steps: Object.keys(steps).join(",") }); process.exit(3); }
   steps[name]().then(() => process.exit(exitCode), (e) => { log("error", String(e?.stack || e)); out(name, "fail", { reason: "unexpected_error", log: ".relay-local/logs/error.log" }); process.exit(1); });

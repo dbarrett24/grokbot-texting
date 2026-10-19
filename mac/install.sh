@@ -54,6 +54,7 @@ fi
 
 mkdir -p "$DEST" "$(dirname "$PLIST")" "$(dirname "$LOG")"
 cp "$HERE/relay-device.mjs" "$DEST/relay-device.mjs"
+cp "$HERE/../scripts/is-main.mjs" "$DEST/is-main.mjs" # the entry-point check relay-device.mjs imports
 esc() { printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
 sed -e "s|__NODE__|$(esc "$NODE")|" -e "s|__HELPER__|$(esc "$DEST/relay-device.mjs")|" \
     -e "s|__RELAY_URL__|$(esc "$RELAY_URL")|" -e "s|__IMSG__|$(esc "$IMSG")|" -e "s|__LOG__|$(esc "$LOG")|g" \
