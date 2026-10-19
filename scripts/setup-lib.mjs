@@ -199,7 +199,9 @@ export const DEFAULT_GATEWAY_MODE = "passphrase";
 export function gatewayMode(s, m) {
   if (s.delivery === "mac") return "none";
   if (s.gatewayMode === "device_key" || s.gatewayMode === "passphrase") return s.gatewayMode;
-  if (s.deviceKey === undefined) return m.has("GATEWAY_PINNED_FINGERPRINT") ? "device_key" : "unknown";
+  // A working pinned setup (e.g. from before this mode existed) is never flipped by the new default.
+  if (m.has("GATEWAY_PINNED_FINGERPRINT")) return "device_key";
+  if (s.deviceKey === undefined) return "unknown";
   return DEFAULT_GATEWAY_MODE;
 }
 const PIN_NAMES = ["GATEWAY_PINNED_FINGERPRINT", "GATEWAY_KEY_VERSION"];
@@ -256,6 +258,7 @@ export const GATEWAY_FIX = {
   device_key_pin_mismatch: "phone_key_changed:run_gateway-check_then_confirm-fingerprint",
   no_device_key_and_no_passphrase: "phone_has_no_device_key:update_SMS_Gateway_to_v1.77+_then_run_gateway-check",
   device_id_not_listed: "phone_id_changed:run_gateway-check",
+  gateway_mode_passphrase_but_no_passphrase: "run_keys_then_show_GATEWAY_PASSPHRASE_into_the_app_or_ask_it_from_the_app_then_secrets",
 };
 /**
  * What the relay will do with this phone, given what setup stored. Mirrors gatewayPost's checks without
@@ -265,6 +268,8 @@ export function gatewayDiagnosis(s, m, devs) {
   if (gatewayMode(s, m) === "none") return null;
   const d = Array.isArray(devs) ? devs.find((x) => x && String(x.id) === m.get("GATEWAY_DEVICE_ID")) : null;
   if (!d) return "device_id_not_listed";
+  // Passphrase mode: the relay sends the passphrase format whatever the phone lists (GATEWAY_MODE=passphrase).
+  if (gatewayMode(s, m) === "passphrase") return m.has("GATEWAY_PASSPHRASE") ? null : "gateway_mode_passphrase_but_no_passphrase";
   if (typeof d.publicKey === "string" && d.publicKey) {
     const pin = m.get("GATEWAY_PINNED_FINGERPRINT"), ver = m.get("GATEWAY_KEY_VERSION");
     if (gatewayMode(s, m) !== "device_key" || !pin || !ver) return "device_key_present_but_no_pin";
@@ -307,6 +312,16 @@ async function relay(path, { token, body, method = "POST" }) {
   return { http: r.status, j };
 }
 
+// ---------- passphrase made here: the owner still has to put it into the app ----------
+const SHOW_REMINDER = "show_GATEWAY_PASSPHRASE_then_enter_it_in_the_app";
+function showReminder(s, m) {
+  return s.passphraseNotShown && gatewayMode(s, m) === "passphrase" && m.has("GATEWAY_PASSPHRASE") ? { owner_next: SHOW_REMINDER } : {};
+}
+function clearShowReminder() {
+  const s = loadSettings();
+  if (s.passphraseNotShown) { delete s.passphraseNotShown; saveSettings(s); }
+}
+
 // ---------- device-key pin on an already deployed Worker ----------
 /** Deletes a GATEWAY_PASSPHRASE secret left on the Worker, only if it's there. Returns yes | no | failed. */
 function removeStalePassphrase(step, listed) {
@@ -347,9 +362,11 @@ async function pushPin(s, m) {
   const r = wrangler(["secret", "bulk"], { input: JSON.stringify(payload), step });
   if (r.status !== 0) return out(step, "fail", { log: `.relay-local/logs/${step}.log` });
   const names = listedSecrets(step) || [];
+  const absent = Object.keys(payload).filter((k) => !names.includes(k));
+  // Verify first: the stale passphrase goes only once the Worker lists the new pin, version and mode.
+  if (absent.length) return out(step, "fail", { worker: s.worker, put: Object.keys(payload).join(","), absent: absent.join(","), removed_passphrase: "no_pin_not_listed" });
   const removed = removeStalePassphrase(step, names);
-  const absent = PIN_NAMES.filter((k) => !names.includes(k));
-  out(step, absent.length || removed === "failed" ? "fail" : "ok", { worker: s.worker, put: Object.keys(payload).join(","), absent: absent.join(","), removed_passphrase: removed });
+  out(step, removed === "failed" ? "fail" : "ok", { worker: s.worker, put: Object.keys(payload).join(","), removed_passphrase: removed });
 }
 
 // ---------- steps ----------
@@ -369,7 +386,8 @@ const steps = {
     const made = [];
     for (const k of want) if (!m.has(k)) { m.set(k, GENERATORS[k]()); made.push(k); }
     saveSecrets(m);
-    out("keys", "ok", { made: made.join(",") || "none", kept: want.filter((k) => !made.includes(k)).join(",") || "none", gateway_mode: mode, ...(mode === "unknown" ? { next: "gateway-check" } : {}), file: ".relay-local/secrets.env" });
+    if (made.includes("GATEWAY_PASSPHRASE")) { s.passphraseNotShown = true; saveSettings(s); } // the app doesn't have it yet
+    out("keys", "ok", { made: made.join(",") || "none", kept: want.filter((k) => !made.includes(k)).join(",") || "none", gateway_mode: mode, ...(mode === "unknown" ? { next: "gateway-check" } : made.includes("GATEWAY_PASSPHRASE") ? { next: SHOW_REMINDER } : {}), file: ".relay-local/secrets.env" });
   },
 
   async ask() {
@@ -384,6 +402,7 @@ const steps = {
     const m = loadSecrets();
     m.set(name, v);
     saveSecrets(m);
+    if (name === "GATEWAY_PASSPHRASE") clearShowReminder(); // typed from the app, so the app has it
     out("ask", "ok", { name, saved: "local_only" });
   },
 
@@ -395,6 +414,7 @@ const steps = {
     if (name === "GATEWAY_PASSPHRASE" && gatewayMode(loadSettings(), m) !== "passphrase") return out("show", "fail", { name, reason: `gateway_mode_${gatewayMode(loadSettings(), m)}`, hint: "no_passphrase_in_device_key_mode" });
     if (!m.has(name)) return out("show", "fail", { name, reason: "run_keys_first" });
     const r = dialog({ prompt: SHOWABLE[name], show: m.get(name) });
+    if (!r.error && name === "GATEWAY_PASSPHRASE") clearShowReminder();
     out("show", r.error ? "fail" : "ok", r.error ? { name, reason: r.error } : { name, shown: "on_screen_only" });
   },
 
@@ -501,7 +521,7 @@ const steps = {
     m.set("GATEWAY_PINNED_FINGERPRINT", fp);
     m.set("GATEWAY_KEY_VERSION", m.get("PENDING_KEY_VERSION") ?? m.get("GATEWAY_KEY_VERSION"));
     m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION");
-    m.delete("GATEWAY_PASSPHRASE"); // device-key mode never uses one
+    // The local passphrase is kept (never sent in device-key mode) so switching back doesn't need re-entry in the app.
     const s = loadSettings();
     s.deviceKey = true;
     saveSecrets(m); saveSettings(s);
@@ -558,7 +578,7 @@ const steps = {
       const listed = owned && owned.worker === s.worker ? listedSecrets("secrets") : null;
       const stale = staleFor(mode);
       const wouldRemove = listed ? stale.filter((k) => listed.includes(k)).join(",") || "none" : stale.length ? stale.map((k) => `${k}_if_set`).join(",") : "";
-      return out("secrets", "dry_run", { gateway_mode: mode, would_set: Object.keys(payload).length, names: Object.keys(payload).join(","), would_remove: wouldRemove });
+      return out("secrets", "dry_run", { gateway_mode: mode, would_set: Object.keys(payload).length, names: Object.keys(payload).join(","), would_remove: wouldRemove, ...showReminder(s, m) });
     }
     const acct = account("secrets"); if (!acct) return;
     if (!isClaimed(s, acct)) return out("secrets", "fail", { reason: "run_claim_first" });
@@ -568,7 +588,7 @@ const steps = {
     // The other mode's secrets stay on the Worker until removed (bulk never deletes); delete only what's listed.
     const removed = removeListed("secrets", names, staleFor(mode));
     const absent = Object.keys(payload).filter((k) => !names.includes(k));
-    out("secrets", absent.length || removed === "failed" ? "fail" : "ok", { gateway_mode: mode, set: Object.keys(payload).length, absent: absent.join(","), removed: removed || "none" });
+    out("secrets", absent.length || removed === "failed" ? "fail" : "ok", { gateway_mode: mode, set: Object.keys(payload).length, absent: absent.join(","), removed: removed || "none", ...showReminder(s, m) });
   },
 
   async google() {
@@ -654,7 +674,7 @@ const steps = {
     const m = loadSecrets();
     const s = loadSettings();
     const { missing } = s.worker ? buildPayload(s, m) : { missing: ["config"] };
-    out("status", "ok", { worker: s.worker || "none", delivery: s.delivery || "none", gateway_mode: gatewayMode(s, m), have: [...m.keys()].join(","), missing: missing.join(",") || "none", claimed: s.worker && isClaimed(s) ? "yes" : "no" });
+    out("status", "ok", { worker: s.worker || "none", delivery: s.delivery || "none", gateway_mode: gatewayMode(s, m), have: [...m.keys()].join(","), missing: missing.join(",") || "none", claimed: s.worker && isClaimed(s) ? "yes" : "no", ...showReminder(s, m) });
   },
 };
 

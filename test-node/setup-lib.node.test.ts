@@ -70,7 +70,9 @@ describe("secrets payload", () => {
     expect(missing).toEqual([]);
     expect(payload.GATEWAY_PASSPHRASE).toBeUndefined();
     expect(payload.GATEWAY_MODE).toBe("device_key");
-    // the default (no choice) on the same phone is passphrase mode while the app's device-key decrypt bug stands
+    // no choice made: an existing pin stays device_key (vet N1); without one the default is passphrase
+    expect(buildPayload({ ...BASE, deviceKey: true }, m).payload.GATEWAY_MODE).toBe("device_key");
+    m.delete("GATEWAY_PINNED_FINGERPRINT"); m.delete("GATEWAY_KEY_VERSION");
     const d = buildPayload({ ...BASE, deviceKey: true }, m).payload;
     expect(d.GATEWAY_MODE).toBe("passphrase");
     expect(d.GATEWAY_PASSPHRASE).toBe("x".repeat(40));
