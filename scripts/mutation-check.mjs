@@ -251,14 +251,10 @@ const M = [
   ["entry_install_copies_helper", "mac/install.sh", 'cp "$HERE/../scripts/is-main.mjs" "$DEST/is-main.mjs"', "true"],
   // device-key setup mode (setup-device-key-mode): one derived mode, Worker pin push, fix hints; OAEP parameters
   ["devkey_keys_no_passphrase", "scripts/setup-lib.mjs", 'mode === "passphrase" ? ["GATEWAY_PASSPHRASE"] : []', 'mode !== "none" ? ["GATEWAY_PASSPHRASE"] : []'],
-  ["devkey_mode_from_device", "scripts/setup-lib.mjs", 'if (s.deviceKey === true) return "device_key";', ""],
   ["devkey_unknown_refuses", "scripts/setup-lib.mjs", 'if (mode === "unknown") return out("secrets", "fail", { reason: "gateway_mode_unknown", next: "gateway-check" });', ""],
   ["devkey_pending_not_live", "scripts/setup-lib.mjs", 'm.set("PENDING_FINGERPRINT", fp); m.set("PENDING_KEY_VERSION", ver);', 'm.set("PENDING_FINGERPRINT", fp); m.set("PENDING_KEY_VERSION", ver); m.set("GATEWAY_KEY_VERSION", ver);'],
   ["devkey_worker_push", "scripts/setup-lib.mjs", "await pushPin(s, m);", ""],
   ["devkey_worker_account_match", "scripts/setup-lib.mjs", 'if (owned.accountId !== acct) return out(step, "fail", { reason: "different_cloudflare_account"', 'if (false) return out(step, "fail", { reason: "different_cloudflare_account"'],
-  ["devkey_stale_passphrase_removed", "scripts/setup-lib.mjs", 'if (!listed.includes("GATEWAY_PASSPHRASE")) return "no";', 'return "no";'],
-  ["devkey_delete_only_if_set", "scripts/setup-lib.mjs", 'if (!listed.includes("GATEWAY_PASSPHRASE")) return "no";', 'if (false) return "no";'],
-  ["devkey_secrets_removes_stale", "scripts/setup-lib.mjs", 'mode === "device_key" ? removeStalePassphrase("secrets", names) : "no"', '"no"'],
   ["devkey_confirm_drops_local_passphrase", "scripts/setup-lib.mjs", 'm.delete("GATEWAY_PASSPHRASE"); // device-key mode never uses one', ""],
   ["devkey_diag_no_pin", "scripts/setup-lib.mjs", 'if (gatewayMode(s, m) !== "device_key" || !pin || !ver) return "device_key_present_but_no_pin";', ""],
   ["devkey_fix_hint_printed", "scripts/setup-lib.mjs", "{ reason: code, fix: GATEWAY_FIX[code] }", "{ reason: code }"],
@@ -267,6 +263,18 @@ const M = [
   ["devkey_show_refused", "scripts/setup-lib.mjs", 'if (name === "GATEWAY_PASSPHRASE" && gatewayMode(loadSettings(), m) !== "passphrase")', "if (false)"],
   ["e2e_mgf1_is_sha1", "src/e2e.ts", 'const h = await digest("SHA-1", buf);', 'const h = await digest("SHA-256", buf);'],
   ["e2e_oaep_label_hash_sha256", "src/e2e.ts", 'const lHash = await digest("SHA-256", new Uint8Array(0));', 'const lHash = await digest("SHA-1", new Uint8Array(0));'],
+  // explicit gateway mode (GATEWAY_MODE / config --gateway-mode): passphrase default while the app bug stands
+  ["relay_mode_passphrase_override", "src/relay.ts", 'if (gm === "passphrase") {', "if (false) {"],
+  ["relay_mode_explicit_only", "src/relay.ts", 'if (gm === "passphrase") {', 'if (gm === "passphrase" || !!this.env.GATEWAY_PASSPHRASE) {'],
+  ["relay_mode_device_key_no_fallback", "src/relay.ts", '} else if (gm === "device_key") {', "} else if (false) {"],
+  ["relay_mode_invalid_refuses", "src/relay.ts", 'if (gm !== "" && gm !== "passphrase" && gm !== "device_key") throw new Error("gateway_mode_invalid");', ""],
+  ["setup_default_passphrase", "scripts/setup-lib.mjs", 'export const DEFAULT_GATEWAY_MODE = "passphrase";', 'export const DEFAULT_GATEWAY_MODE = "device_key";'],
+  ["setup_mode_override_read", "scripts/setup-lib.mjs", 'if (s.gatewayMode === "device_key" || s.gatewayMode === "passphrase") return s.gatewayMode;', ""],
+  ["setup_mode_in_payload", "scripts/setup-lib.mjs", 'else if (k === "GATEWAY_MODE") p.GATEWAY_MODE = gatewayMode(s, m);', 'else if (k === "GATEWAY_MODE") {}'],
+  ["setup_delete_only_listed", "scripts/setup-lib.mjs", "for (const k of names.filter((n) => listed.includes(n))) {", "for (const k of names) {"],
+  ["setup_stale_passphrase_mode", "scripts/setup-lib.mjs", 'mode === "passphrase" ? PIN_NAMES : []', "[]"],
+  ["setup_stale_device_key_mode", "scripts/setup-lib.mjs", 'return mode === "device_key" ? ["GATEWAY_PASSPHRASE"] :', 'return mode === "device_key" ? [] :'],
+  ["setup_dry_names_listed_only", "scripts/setup-lib.mjs", "stale.filter((k) => listed.includes(k))", "stale"],
 ];
 
 const only = process.argv[2];

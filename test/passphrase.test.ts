@@ -126,6 +126,49 @@ describe("gateway mode selection", () => {
     expect(await securityEvents()).toContain("device_id_not_listed");
   });
 
+  it("GATEWAY_MODE=passphrase: a device WITH a publicKey still gets the passphrase format (the app picks the decryptor by prefix)", async () => {
+    h.device.value = { id: "test-device", publicKey: h.spkiB64, keyVersion: 1 };
+    await h.setEnv({ GATEWAY_MODE: "passphrase", GATEWAY_PASSPHRASE: PASS, GATEWAY_PINNED_FINGERPRINT: "", GATEWAY_KEY_VERSION: "" });
+    expect(await (await sendOne("override hello")).json()).toMatchObject({ state: "sent" });
+    const last = h.messagesPosted().at(-1);
+    expect(last.textMessage.text).toMatch(/^\$aes-256-cbc\/pbkdf2-sha1\$i=100000\$/);
+    expect(last.phoneNumbers[0]).toMatch(/^\$aes-256-cbc\/pbkdf2-sha1\$/);
+    expect(await h.decryptPassphrase(last.textMessage.text, PASS)).toBe("override hello");
+    expect(await securityEvents()).toEqual([]);
+  });
+
+  it("GATEWAY_MODE=passphrase without a passphrase → refused, never RSA", async () => {
+    h.device.value = { id: "test-device", publicKey: h.spkiB64, keyVersion: 1 };
+    await h.setEnv({ GATEWAY_MODE: "passphrase", GATEWAY_PASSPHRASE: "" });
+    expect((await sendOne()).status).toBe(502);
+    expect(h.messagesPosted()).toHaveLength(0);
+    expect(await securityEvents()).toContain("gateway_mode_passphrase_but_no_passphrase");
+  });
+
+  it("a passphrase merely being present never overrides a device key (no GATEWAY_MODE → pin still required)", async () => {
+    await h.setEnv({ GATEWAY_MODE: "", GATEWAY_PASSPHRASE: PASS, GATEWAY_PINNED_FINGERPRINT: "", GATEWAY_KEY_VERSION: "" });
+    expect((await sendOne()).status).toBe(502);
+    expect(await securityEvents()).toContain("device_key_present_but_no_pin");
+  });
+
+  it("GATEWAY_MODE=device_key: pinned RSA; no publicKey → refused, no passphrase fallback", async () => {
+    await h.setEnv({ GATEWAY_MODE: "device_key", GATEWAY_PASSPHRASE: PASS });
+    expect(await (await sendOne("dk")).json()).toMatchObject({ state: "sent" });
+    expect(h.messagesPosted().at(-1).textMessage.text.startsWith("$rsa-oaep-aes-256-gcm$")).toBe(true);
+    h.device.value = { id: "test-device", publicKey: null, keyVersion: null };
+    h.setNow(T0 + 60_000);
+    expect((await sendOne("second")).status).toBe(502);
+    expect(await securityEvents()).toContain("gateway_mode_device_key_but_no_device_key");
+  });
+
+  it("any other GATEWAY_MODE refuses every send before the network (config_error)", async () => {
+    await h.setEnv({ GATEWAY_MODE: "rsa", GATEWAY_PASSPHRASE: PASS });
+    expect((await sendOne()).status).toBe(502);
+    expect(h.messagesPosted()).toHaveLength(0);
+    const log = (await (await h.relay.fetch("https://approve.example.test/log", { headers: { "Cf-Access-Jwt-Assertion": await h.jwt() } })).json()) as any[];
+    expect(log.filter((x) => x.event === "config_error").map((x) => x.detail)).toContain("gateway_mode_invalid");
+  });
+
   it("no publicKey and no passphrase → fail closed", async () => {
     h.device.value = { id: "test-device", publicKey: null, keyVersion: null };
     expect((await sendOne()).status).toBe(502);

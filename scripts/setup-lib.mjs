@@ -181,19 +181,26 @@ function clearClaims() {
 }
 
 /**
+ * The default while SMS Gateway v1.77.0-v1.77.4 can't decrypt device-key texts: its RSAEncryptionProvider asks the
+ * Android Keystore for MGF1-SHA-256, against its own published format (MGF1-SHA-1) and a key not authorized for it
+ * ("key store operation failed"). The app picks the decryptor by prefix, so the passphrase format still works on a
+ * phone that has a device key. Device key is opt-in: `config --gateway-mode device-key`.
+ */
+export const DEFAULT_GATEWAY_MODE = "passphrase";
+/**
  * How texts are encrypted to the phone. This is the ONE place that decides it; keys, show, secrets, status,
- * confirm-fingerprint and smoke all read it. gateway-check records what the phone reports (settings.deviceKey).
+ * gateway-check, confirm-fingerprint and smoke all read it.
  *   "none"       Mac delivery: no SMS Gateway at all
- *   "device_key" the phone publishes a device key (app v1.77.0+): pin it, never a passphrase. The easy path.
- *   "passphrase" the phone has no device key: the fallback
- *   "unknown"    gateway-check hasn't run yet: nothing gateway-related is made or sent until it does
- * An older setup that pinned by hand (a stored pin, no recorded mode) counts as device_key.
+ *   "device_key" chosen with `config --gateway-mode device-key` (needs a phone that publishes a device key)
+ *   "passphrase" chosen with `config --gateway-mode passphrase`, or the default once gateway-check has run
+ *   "unknown"    no choice and gateway-check hasn't run: nothing gateway-related is made or sent yet
+ * An older setup that pinned by hand (a stored pin, nothing recorded) stays device_key until changed with config.
  */
 export function gatewayMode(s, m) {
   if (s.delivery === "mac") return "none";
-  if (s.deviceKey === true) return "device_key";
-  if (s.deviceKey === false) return "passphrase";
-  return m.has("GATEWAY_PINNED_FINGERPRINT") ? "device_key" : "unknown";
+  if (s.gatewayMode === "device_key" || s.gatewayMode === "passphrase") return s.gatewayMode;
+  if (s.deviceKey === undefined) return m.has("GATEWAY_PINNED_FINGERPRINT") ? "device_key" : "unknown";
+  return DEFAULT_GATEWAY_MODE;
 }
 const PIN_NAMES = ["GATEWAY_PINNED_FINGERPRINT", "GATEWAY_KEY_VERSION"];
 export function requiredSecrets(s, m) {
@@ -201,8 +208,8 @@ export function requiredSecrets(s, m) {
   const mode = gatewayMode(s, m);
   if (mode === "none") return [...base, "DEVICE_TOKEN", "NTFY_URL", "NTFY_TOKEN"];
   const gw = ["GATEWAY_USER", "GATEWAY_PASS", "GATEWAY_DEVICE_ID"];
-  const enc = mode === "device_key" ? PIN_NAMES : mode === "passphrase" ? ["GATEWAY_PASSPHRASE"] : ["GATEWAY_MODE"];
-  return [...base, ...gw, ...enc];
+  const enc = mode === "device_key" ? PIN_NAMES : mode === "passphrase" ? ["GATEWAY_PASSPHRASE"] : ["GATEWAY_MODE_UNKNOWN"];
+  return [...base, ...gw, ...enc, ...(mode === "unknown" ? [] : ["GATEWAY_MODE"])];
 }
 export function buildPayload(s, m) {
   const p = {};
@@ -211,7 +218,8 @@ export function buildPayload(s, m) {
     if (k === "ALLOWLIST") {
       if (m.has("OWNER_NUMBER") && m.has("OWNER_NAME")) p.ALLOWLIST = JSON.stringify({ [m.get("OWNER_NUMBER")]: m.get("OWNER_NAME") });
       else missing.push(m.has("OWNER_NUMBER") ? "OWNER_NAME" : "OWNER_NUMBER");
-    } else if (k === "GATEWAY_MODE") missing.push("gateway_mode_run_gateway-check"); // never sent; the mode isn't known yet
+    } else if (k === "GATEWAY_MODE_UNKNOWN") missing.push("gateway_mode_run_gateway-check"); // the mode isn't known yet
+    else if (k === "GATEWAY_MODE") p.GATEWAY_MODE = gatewayMode(s, m); // the relay reads it (src/relay.ts gatewayPost)
     else if (m.has(k)) p[k] = m.get(k);
     else missing.push(k);
   }
@@ -302,9 +310,21 @@ async function relay(path, { token, body, method = "POST" }) {
 // ---------- device-key pin on an already deployed Worker ----------
 /** Deletes a GATEWAY_PASSPHRASE secret left on the Worker, only if it's there. Returns yes | no | failed. */
 function removeStalePassphrase(step, listed) {
-  if (!listed.includes("GATEWAY_PASSPHRASE")) return "no";
-  const r = wrangler(["secret", "delete", "GATEWAY_PASSPHRASE"], { input: "", step });
-  return r.status === 0 ? "yes" : "failed";
+  const r = removeListed(step, listed, ["GATEWAY_PASSPHRASE"]);
+  return r === "failed" ? r : r ? "yes" : "no";
+}
+/** The other mode's secrets: passphrase mode drops a stale pin, device-key mode a stale passphrase. */
+export function staleFor(mode) {
+  return mode === "device_key" ? ["GATEWAY_PASSPHRASE"] : mode === "passphrase" ? PIN_NAMES : [];
+}
+/** Deletes each of `names` that the Worker lists, and only those. Returns the deleted names (comma list) or "failed". */
+function removeListed(step, listed, names) {
+  const gone = [];
+  for (const k of names.filter((n) => listed.includes(n))) {
+    if (wrangler(["secret", "delete", k], { input: "", step }).status !== 0) return "failed";
+    gone.push(k);
+  }
+  return gone.join(",");
 }
 function listedSecrets(step) {
   const l = wrangler(["secret", "list", "--format", "json"], { step });
@@ -319,17 +339,17 @@ async function pushPin(s, m) {
   const step = "worker-pin";
   const owned = s.worker ? readJson(ownedPath(s)) : null;
   if (!owned || owned.worker !== s.worker) return out(step, "skip", { reason: "not_deployed_yet", saved: "local_only", next: "secrets_after_deploy" });
-  if (DRY) return out(step, "dry_run", { worker: s.worker, would_put: PIN_NAMES.join(","), would_remove: "GATEWAY_PASSPHRASE_if_set" });
+  if (DRY) return out(step, "dry_run", { worker: s.worker, would_put: [...PIN_NAMES, "GATEWAY_MODE"].join(","), would_remove: "GATEWAY_PASSPHRASE_if_set" });
   if (!existsSync(CONFIG)) return out(step, "fail", { reason: "run_config_first" });
   const acct = account(step); if (!acct) return;
   if (owned.accountId !== acct) return out(step, "fail", { reason: "different_cloudflare_account", hint: "sign_in_with_the_account_that_deployed" });
-  const payload = Object.fromEntries(PIN_NAMES.map((k) => [k, m.get(k)]));
+  const payload = { ...Object.fromEntries(PIN_NAMES.map((k) => [k, m.get(k)])), GATEWAY_MODE: "device_key" };
   const r = wrangler(["secret", "bulk"], { input: JSON.stringify(payload), step });
   if (r.status !== 0) return out(step, "fail", { log: `.relay-local/logs/${step}.log` });
   const names = listedSecrets(step) || [];
   const removed = removeStalePassphrase(step, names);
   const absent = PIN_NAMES.filter((k) => !names.includes(k));
-  out(step, absent.length || removed === "failed" ? "fail" : "ok", { worker: s.worker, put: PIN_NAMES.join(","), absent: absent.join(","), removed_passphrase: removed });
+  out(step, absent.length || removed === "failed" ? "fail" : "ok", { worker: s.worker, put: Object.keys(payload).join(","), absent: absent.join(","), removed_passphrase: removed });
 }
 
 // ---------- steps ----------
@@ -395,7 +415,9 @@ const steps = {
       timezone: flag("timezone", s.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone),
       startDate: s.startDate || new Date().toLocaleDateString("en-CA"),
       groupMms: flag("group-mms", s.groupMms || "0"),
+      gatewayMode: ((g) => (g === "device-key" ? "device_key" : g))(flag("gateway-mode", s.gatewayMode)),
     };
+    if (next.gatewayMode === undefined) delete next.gatewayMode;
     const bad = [];
     if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(next.worker)) bad.push("worker");
     for (const h of ["apiHost", "appHost"]) if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(next[h] || "")) bad.push(h);
@@ -407,6 +429,7 @@ const steps = {
     try { new Intl.DateTimeFormat("en", { timeZone: next.timezone }); } catch { bad.push("timezone"); }
     if (!["0", "1"].includes(next.groupMms)) bad.push("group-mms");
     if (next.groupMms === "1" && next.delivery !== "android") bad.push("group_texts_android_only");
+    if (next.gatewayMode !== undefined && !["passphrase", "device_key"].includes(next.gatewayMode)) bad.push("gateway-mode");
     if (bad.length) return out("config", "fail", { bad: bad.join(",") });
     const t = renderConfig(readFileSync(join(REPO, "wrangler.toml"), "utf8"), next);
     const left = leftoverPlaceholders(t);
@@ -415,7 +438,9 @@ const steps = {
     saveSettings(next);
     mkdirSync(LOCAL, { recursive: true });
     writeFileSync(CONFIG, t);
-    out("config", "ok", { worker: next.worker, api: next.apiHost, app: next.appHost, timezone: next.timezone, delivery: next.delivery, group_mms: next.groupMms });
+    const mode = gatewayMode(next, loadSecrets());
+    out("config", "ok", { worker: next.worker, api: next.apiHost, app: next.appHost, timezone: next.timezone, delivery: next.delivery, group_mms: next.groupMms, gateway_mode: mode,
+      ...(mode !== gatewayMode(s, loadSecrets()) && mode !== "unknown" && mode !== "none" ? { next: mode === "device_key" ? "gateway-check_then_confirm-fingerprint" : "keys_then_secrets" } : {}) });
   },
 
   async "gateway-check"() {
@@ -431,11 +456,18 @@ const steps = {
     const d = devs[0];
     m.set("GATEWAY_DEVICE_ID", String(d.id));
     const s = loadSettings();
+    const hasKey = typeof d.publicKey === "string" && !!d.publicKey;
+    s.deviceKey = hasKey; // what the phone reports; the mode itself comes from gatewayMode()
+    const mode = gatewayMode(s, m);
     let next;
-    if (typeof d.publicKey === "string" && d.publicKey) {
-      // Device-key mode, the recommended path. The fingerprint is computed here; nobody types or pastes it.
+    if (mode === "device_key") {
+      if (!hasKey) {
+        if (!DRY) { saveSecrets(m); saveSettings(s); }
+        out("gateway-check", "fail", { devices: 1, device_key: "no", reason: "device_key_mode_but_phone_has_no_device_key", hint: "update_app_to_v1.77+_or_config_--gateway-mode_passphrase" });
+        return;
+      }
+      // Device-key mode (opt-in). The fingerprint is computed here; nobody types or pastes it.
       const fp = fingerprintOf(d.publicKey), ver = String(d.keyVersion);
-      s.deviceKey = true;
       if (m.get("GATEWAY_PINNED_FINGERPRINT") === fp && m.get("GATEWAY_KEY_VERSION") === ver) {
         m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION");
         next = "none_already_pinned";
@@ -445,17 +477,18 @@ const steps = {
         next = "confirm-fingerprint";
       }
     } else {
-      s.deviceKey = false;
       m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION");
-      next = m.has("GATEWAY_PASSPHRASE") ? "none_passphrase_stored" : "update_app_to_v1.77+_or_keys_then_show_GATEWAY_PASSPHRASE";
+      // Passphrase mode (the default): the app decrypts this format by prefix even when it has a device key.
+      next = m.has("GATEWAY_PASSPHRASE") ? "none_passphrase_stored" : "keys_then_show_GATEWAY_PASSPHRASE(or_ask_GATEWAY_PASSPHRASE_if_the_app_has_one)";
     }
     if (!DRY) { saveSecrets(m); saveSettings(s); } // a dry run changes nothing on disk
-    out("gateway-check", DRY ? "dry_run" : "ok", { devices: 1, device_key: s.deviceKey ? "yes" : "no", next });
-    out("gateway_mode", DRY ? "dry_run" : "ok", { reason: s.deviceKey ? "device_key" : "passphrase", ...(s.deviceKey ? {} : { hint: "device_key_is_easier:SMS_Gateway_v1.77+" }) });
+    out("gateway-check", DRY ? "dry_run" : "ok", { devices: 1, device_key: hasKey ? "yes" : "no", next });
+    out("gateway_mode", DRY ? "dry_run" : "ok", { reason: mode, ...(mode === "passphrase" && hasKey && !s.gatewayMode ? { hint: "default_while_app_v1.77.0-1.77.4_device_key_decrypt_bug;opt_in:config_--gateway-mode_device-key" } : {}) });
   },
 
   async "confirm-fingerprint"() {
     const m = loadSecrets();
+    if (gatewayMode(loadSettings(), m) !== "device_key") return out("confirm-fingerprint", "skip", { reason: `gateway_mode_${gatewayMode(loadSettings(), m)}`, hint: "opt_in:config_--gateway-mode_device-key" });
     if (!m.has("PENDING_FINGERPRINT")) return out("confirm-fingerprint", "skip", { reason: m.has("GATEWAY_PINNED_FINGERPRINT") ? "already_pinned" : "no_device_key" });
     const fp = m.get("PENDING_FINGERPRINT");
     const g = fp.split(":");
@@ -519,16 +552,23 @@ const steps = {
     if (mode === "device_key" && m.has("PENDING_FINGERPRINT")) return out("secrets", "fail", { reason: "fingerprint_not_confirmed", next: "confirm-fingerprint" });
     const { payload, missing } = buildPayload(s, m);
     if (missing.length) return out("secrets", "fail", { reason: "missing", names: missing.join(","), ...(missing.includes("GATEWAY_PINNED_FINGERPRINT") ? { next: "gateway-check_then_confirm-fingerprint" } : {}) });
-    if (DRY) return out("secrets", "dry_run", { gateway_mode: mode, would_set: Object.keys(payload).length, names: Object.keys(payload).join(","), ...(mode === "device_key" ? { would_remove: "GATEWAY_PASSPHRASE_if_set" } : {}) });
+    if (DRY) {
+      // Deployed from here: a read-only `secret list` says exactly which other-mode secrets would be deleted.
+      const owned = readJson(ownedPath(s));
+      const listed = owned && owned.worker === s.worker ? listedSecrets("secrets") : null;
+      const stale = staleFor(mode);
+      const wouldRemove = listed ? stale.filter((k) => listed.includes(k)).join(",") || "none" : stale.length ? stale.map((k) => `${k}_if_set`).join(",") : "";
+      return out("secrets", "dry_run", { gateway_mode: mode, would_set: Object.keys(payload).length, names: Object.keys(payload).join(","), would_remove: wouldRemove });
+    }
     const acct = account("secrets"); if (!acct) return;
     if (!isClaimed(s, acct)) return out("secrets", "fail", { reason: "run_claim_first" });
     const r = wrangler(["secret", "bulk"], { input: JSON.stringify(payload), step: "secrets" });
     if (r.status !== 0) return out("secrets", "fail", { log: ".relay-local/logs/secrets.log" });
     const names = listedSecrets("secrets") || [];
-    // Device-key mode: a passphrase from an earlier run stays on the Worker until removed (bulk never deletes).
-    const removed = mode === "device_key" ? removeStalePassphrase("secrets", names) : "no";
+    // The other mode's secrets stay on the Worker until removed (bulk never deletes); delete only what's listed.
+    const removed = removeListed("secrets", names, staleFor(mode));
     const absent = Object.keys(payload).filter((k) => !names.includes(k));
-    out("secrets", absent.length || removed === "failed" ? "fail" : "ok", { gateway_mode: mode, set: Object.keys(payload).length, absent: absent.join(","), removed_passphrase: removed });
+    out("secrets", absent.length || removed === "failed" ? "fail" : "ok", { gateway_mode: mode, set: Object.keys(payload).length, absent: absent.join(","), removed: removed || "none" });
   },
 
   async google() {

@@ -69,7 +69,8 @@ beforeEach(() => {
     writeFileSync(join(dir, "bin", n), body); chmodSync(join(dir, "bin", n), 0o755);
   }
   writeFileSync(join(dir, "fake-gw.cjs"), FAKE_GW);
-  expect(run(["config", "--worker", "relay-t", "--domain", "owner.test", "--team", "t", "--country", "+1"]).out).toContain("result=ok");
+  // Most of this file exercises device-key mode, which is opt-in while the app bug stands (see "default mode").
+  expect(run(["config", "--worker", "relay-t", "--domain", "owner.test", "--team", "t", "--country", "+1", "--gateway-mode", "device-key"]).out).toContain("gateway_mode=device_key");
   for (const [k, v] of [["GATEWAY_USER", "TEST-ONLY-user"], ["GATEWAY_PASS", "TEST-ONLY-pass-123"], ["APPROVER_EMAIL", "a@owner.test"], ["OWNER_NUMBER", "+15555550100"], ["OWNER_NAME", "Test"], ["ACCESS_AUD", "a".repeat(64)]])
     expect(run(["ask", k, "--dry-run"], { RELAY_DRYRUN_ANSWER: v }).out).toContain("result=ok");
 });
@@ -77,12 +78,14 @@ beforeEach(() => {
 describe("one derived gateway mode", () => {
   it("is device_key / passphrase / unknown / none, and only the mode's own secrets are required", () => {
     const m = new Map<string, string>();
-    expect(gatewayMode({ deviceKey: true }, m)).toBe("device_key");
+    expect(gatewayMode({ deviceKey: true }, m)).toBe("passphrase"); // the default, even with a phone key
     expect(gatewayMode({ deviceKey: false }, m)).toBe("passphrase");
+    expect(gatewayMode({ deviceKey: true, gatewayMode: "device_key" }, m)).toBe("device_key");
+    expect(gatewayMode({ deviceKey: false, gatewayMode: "passphrase" }, m)).toBe("passphrase");
     expect(gatewayMode({}, m)).toBe("unknown");
     expect(gatewayMode({}, new Map([["GATEWAY_PINNED_FINGERPRINT", "X"]]))).toBe("device_key"); // older hand-pinned setup
     expect(gatewayMode({ delivery: "mac", deviceKey: true }, m)).toBe("none");
-    expect(requiredSecrets({ deviceKey: true }, m)).not.toContain("GATEWAY_PASSPHRASE");
+    expect(requiredSecrets({ gatewayMode: "device_key" }, m)).not.toContain("GATEWAY_PASSPHRASE");
     expect(requiredSecrets({ deviceKey: false }, m)).not.toContain("GATEWAY_PINNED_FINGERPRINT");
     expect(requiredSecrets({}, m)).not.toContain("GATEWAY_PASSPHRASE");
     expect(requiredSecrets({}, m)).not.toContain("GATEWAY_PINNED_FINGERPRINT");
@@ -99,7 +102,7 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     expect(k.out).toContain("made=REQUEST_TOKEN,LOG_HASH_KEY ");
     expect(k.out).not.toContain("GATEWAY_PASSPHRASE");
     const s = run(["secrets", "--dry-run"]);
-    expect(s.out).toContain("names=REQUEST_TOKEN,LOG_HASH_KEY,ACCESS_AUD,APPROVER_EMAIL,OWNER_NUMBER,ALLOWLIST,GATEWAY_USER,GATEWAY_PASS,GATEWAY_DEVICE_ID,GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION ");
+    expect(s.out).toContain("names=REQUEST_TOKEN,LOG_HASH_KEY,ACCESS_AUD,APPROVER_EMAIL,OWNER_NUMBER,ALLOWLIST,GATEWAY_USER,GATEWAY_PASS,GATEWAY_DEVICE_ID,GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION,GATEWAY_MODE ");
     expect(s.out).not.toMatch(/names=[^ ]*GATEWAY_PASSPHRASE/);
     const e = env();
     expect(e.GATEWAY_PINNED_FINGERPRINT).toBe(fingerprintOf(KEY_A));
@@ -108,7 +111,8 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     expect(e).not.toHaveProperty("PENDING_FINGERPRINT");
   });
 
-  it("no publicKey: passphrase fallback, keys makes one, secrets carries it", () => {
+  it("no publicKey: passphrase mode, keys makes one, secrets carries it", () => {
+    run(["config", "--gateway-mode", "passphrase"]);
     const g = run(["gateway-check"], { FAKE_DEVICES: dev() });
     expect(g.out).toContain("reason=passphrase");
     expect(settings().deviceKey).toBe(false);
@@ -117,6 +121,7 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
   });
 
   it("never replaces a passphrase the app already has", () => {
+    run(["config", "--gateway-mode", "passphrase"]);
     run(["gateway-check"], { FAKE_DEVICES: dev() });
     const typed = "TEST-ONLY-existing-app-passphrase-0123456789";
     expect(run(["ask", "GATEWAY_PASSPHRASE", "--dry-run"], { RELAY_DRYRUN_ANSWER: typed }).out).toContain("result=ok");
@@ -128,7 +133,9 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     expect(run(["ask", "GATEWAY_PASSPHRASE", "--dry-run"], { RELAY_DRYRUN_ANSWER: "short" }).out).toContain("result=fail");
   });
 
-  it("before gateway-check: keys makes no passphrase and secrets refuses", () => {
+  it("before gateway-check (no choice made): keys makes no passphrase and secrets refuses", () => {
+    const st = JSON.parse(readFileSync(local("settings.json"), "utf8")); delete st.gatewayMode;
+    writeFileSync(local("settings.json"), JSON.stringify(st));
     expect(run(["keys"]).out).toContain("gateway_mode=unknown next=gateway-check");
     expect(env()).not.toHaveProperty("GATEWAY_PASSPHRASE");
     expect(run(["secrets", "--dry-run"]).out).toContain("reason=gateway_mode_unknown");
@@ -160,7 +167,7 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 2) });
     deployed();
     const c = run(["confirm-fingerprint", "--dry-run"], yes);
-    expect(c.out).toContain("step=worker-pin result=dry_run worker=relay-t would_put=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION would_remove=GATEWAY_PASSPHRASE_if_set");
+    expect(c.out).toContain("step=worker-pin result=dry_run worker=relay-t would_put=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION,GATEWAY_MODE would_remove=GATEWAY_PASSPHRASE_if_set");
     expect(c.out).not.toContain(fingerprintOf(KEY_A));
     expect(calls()).toEqual([]);
   });
@@ -174,11 +181,11 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     const g = fingerprintOf(KEY_A).split(":");
     expect(z).toContain(`${g[0]}  ${g[1]}   ...   ${g[14]}  ${g[15]}`); // big: first two and last two groups
     expect(z).toContain(fingerprintOf(KEY_A)); // full value, secondary
-    expect(c.out).toContain("RELAY_STATUS step=worker-pin result=ok worker=relay-t put=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION removed_passphrase=yes");
+    expect(c.out).toContain("RELAY_STATUS step=worker-pin result=ok worker=relay-t put=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION,GATEWAY_MODE removed_passphrase=yes");
     expect(c.out).not.toContain(fingerprintOf(KEY_A));
     expect(calls()).toEqual(["whoami --json", "secret bulk", "secret list --format json", "secret delete GATEWAY_PASSPHRASE"]);
-    expect(JSON.parse(readFileSync(join(dir, "fake.stdin"), "utf8"))).toEqual({ GATEWAY_PINNED_FINGERPRINT: fingerprintOf(KEY_A), GATEWAY_KEY_VERSION: "2" });
-    expect(worker()).toEqual(["GATEWAY_KEY_VERSION", "GATEWAY_PINNED_FINGERPRINT", "REQUEST_TOKEN"]);
+    expect(JSON.parse(readFileSync(join(dir, "fake.stdin"), "utf8"))).toEqual({ GATEWAY_PINNED_FINGERPRINT: fingerprintOf(KEY_A), GATEWAY_KEY_VERSION: "2", GATEWAY_MODE: "device_key" });
+    expect(worker()).toEqual(["GATEWAY_KEY_VERSION", "GATEWAY_MODE", "GATEWAY_PINNED_FINGERPRINT", "REQUEST_TOKEN"]);
   });
 
   it("deployed Worker without a passphrase: nothing is deleted", () => {
@@ -217,7 +224,7 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     const c = run(["confirm-fingerprint"]);
     expect(c.out).toContain("replaced=previous_pin");
     expect(c.out).toContain("step=worker-pin result=ok");
-    expect(JSON.parse(readFileSync(join(dir, "fake.stdin"), "utf8"))).toEqual({ GATEWAY_PINNED_FINGERPRINT: fingerprintOf(KEY_B), GATEWAY_KEY_VERSION: "2" });
+    expect(JSON.parse(readFileSync(join(dir, "fake.stdin"), "utf8"))).toEqual({ GATEWAY_PINNED_FINGERPRINT: fingerprintOf(KEY_B), GATEWAY_KEY_VERSION: "2", GATEWAY_MODE: "device_key" });
   });
 
   it("secrets in device-key mode removes a stale passphrase it finds on the Worker", () => {
@@ -227,16 +234,18 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     run(["keys"]); claimedNow();
     const s = run(["secrets"]);
     expect(s.out).toContain("gateway_mode=device_key");
-    expect(s.out).toContain("removed_passphrase=yes");
+    expect(s.out).toContain("removed=GATEWAY_PASSPHRASE");
     expect(worker()).not.toContain("GATEWAY_PASSPHRASE");
     expect(worker()).toContain("GATEWAY_PINNED_FINGERPRINT");
   });
 
   it("smoke names the fix for device_key_present_but_no_pin and its reverse", () => {
-    run(["gateway-check"], { FAKE_DEVICES: dev() }); // setup ran while the phone had no key: passphrase mode
+    run(["config", "--gateway-mode", "passphrase"]);
+    run(["gateway-check"], { FAKE_DEVICES: dev() }); // setup ran in passphrase mode
     run(["keys"]);
     const a = run(["smoke", "--dry-run"], { RELAY_DRYRUN_DEVICES: dev(KEY_A, 1) }); // the app now has a device key
     expect(a.out).toContain(`step=smoke-gateway result=fail reason=device_key_present_but_no_pin fix=${GATEWAY_FIX.device_key_present_but_no_pin}`);
+    run(["config", "--gateway-mode", "device-key"]);
     run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 1) });
     expect(env()).toHaveProperty("GATEWAY_PASSPHRASE"); // still there until the owner confirms the key
     run(["confirm-fingerprint", "--dry-run"], yes);
@@ -252,12 +261,12 @@ describe("gatewayDiagnosis mirrors the relay's gatewayPost checks", () => {
   const pinned = new Map([["GATEWAY_DEVICE_ID", "d"], ["GATEWAY_PINNED_FINGERPRINT", fingerprintOf(KEY_A)], ["GATEWAY_KEY_VERSION", "1"]]);
   it.each([
     ["no pin", { deviceKey: false }, new Map([["GATEWAY_DEVICE_ID", "d"], ["GATEWAY_PASSPHRASE", "x"]]), [{ id: "d", publicKey: KEY_A, keyVersion: 1 }], "device_key_present_but_no_pin"],
-    ["pinned ok", { deviceKey: true }, pinned, [{ id: "d", publicKey: KEY_A, keyVersion: 1 }], null],
-    ["other key", { deviceKey: true }, pinned, [{ id: "d", publicKey: KEY_B, keyVersion: 1 }], "device_key_pin_mismatch"],
-    ["other version", { deviceKey: true }, pinned, [{ id: "d", publicKey: KEY_A, keyVersion: 2 }], "device_key_pin_mismatch"],
-    ["no key, no passphrase", { deviceKey: true }, pinned, [{ id: "d" }], "no_device_key_and_no_passphrase"],
+    ["pinned ok", { deviceKey: true, gatewayMode: "device_key" }, pinned, [{ id: "d", publicKey: KEY_A, keyVersion: 1 }], null],
+    ["other key", { deviceKey: true, gatewayMode: "device_key" }, pinned, [{ id: "d", publicKey: KEY_B, keyVersion: 1 }], "device_key_pin_mismatch"],
+    ["other version", { deviceKey: true, gatewayMode: "device_key" }, pinned, [{ id: "d", publicKey: KEY_A, keyVersion: 2 }], "device_key_pin_mismatch"],
+    ["no key, no passphrase", { deviceKey: true, gatewayMode: "device_key" }, pinned, [{ id: "d" }], "no_device_key_and_no_passphrase"],
     ["no key, passphrase", { deviceKey: false }, new Map([["GATEWAY_DEVICE_ID", "d"], ["GATEWAY_PASSPHRASE", "x"]]), [{ id: "d" }], null],
-    ["unlisted", { deviceKey: true }, pinned, [{ id: "other" }], "device_id_not_listed"],
+    ["unlisted", { deviceKey: true, gatewayMode: "device_key" }, pinned, [{ id: "other" }], "device_id_not_listed"],
   ])("%s", (_n, s, m, devs, want) => {
     expect(gatewayDiagnosis(s, m, devs)).toBe(want);
     if (want) expect(GATEWAY_FIX[want as string]).toMatch(/^\S+$/); // one line, one token
@@ -288,5 +297,91 @@ describe.skipIf(process.platform === "win32")("Windows parity", () => {
     expect(ps).toContain("'Yes, it matches'");
     expect(JSON.parse(readFileSync(join(dir, "fake.stdin"), "utf8")).GATEWAY_KEY_VERSION).toBe("4");
     expect(c.out).not.toContain(fingerprintOf(KEY_A));
+  });
+});
+
+const clearMode = () => {
+  const st = JSON.parse(readFileSync(local("settings.json"), "utf8")); delete st.gatewayMode;
+  writeFileSync(local("settings.json"), JSON.stringify(st));
+};
+/** Device-key setup finished and pushed to a deployed, claimed Worker. */
+function deployedInDeviceKeyMode(env: Record<string, string> = {}) {
+  run(["gateway-check"], { ...env, FAKE_DEVICES: dev(KEY_A, 1) });
+  run(["confirm-fingerprint", "--dry-run"], { ...env, ...yes });
+  run(["keys"], env); deployed(); claimedNow();
+  expect(run(["secrets"], env).out).toContain("result=ok gateway_mode=device_key");
+  expect(worker()).toContain("GATEWAY_PINNED_FINGERPRINT");
+  clearCalls();
+}
+
+describe.skipIf(process.platform === "win32")("default mode: passphrase while the app's device-key decrypt bug stands", () => {
+  it("a phone WITH a device key still gets passphrase mode unless the owner opts in", () => {
+    clearMode();
+    const g = run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 1) });
+    expect(g.out).toContain("device_key=yes");
+    expect(g.out).toContain("step=gateway_mode result=ok reason=passphrase hint=default_while_app_v1.77.0-1.77.4_device_key_decrypt_bug");
+    expect(env()).not.toHaveProperty("PENDING_FINGERPRINT");
+    expect(run(["confirm-fingerprint", "--dry-run"], yes).out).toContain("result=skip reason=gateway_mode_passphrase");
+    expect(run(["keys"]).out).toContain("made=REQUEST_TOKEN,LOG_HASH_KEY,GATEWAY_PASSPHRASE ");
+    const s = run(["secrets", "--dry-run"]);
+    expect(s.out).toMatch(/names=[^ ]*GATEWAY_PASSPHRASE,GATEWAY_MODE /);
+    expect(s.out).not.toMatch(/names=[^ ]*GATEWAY_PINNED_FINGERPRINT/);
+    expect(s.out).toContain("would_remove=GATEWAY_PINNED_FINGERPRINT_if_set,GATEWAY_KEY_VERSION_if_set"); // not deployed: can't list
+  });
+
+  it("config --gateway-mode takes passphrase | device-key only", () => {
+    expect(run(["config", "--gateway-mode", "rsa"]).out).toContain("bad=gateway-mode");
+    expect(run(["config", "--gateway-mode", "passphrase"]).out).toContain("gateway_mode=passphrase");
+    expect(settings().gatewayMode).toBe("passphrase");
+    expect(run(["config", "--gateway-mode", "device-key"]).out).toContain("gateway_mode=device_key");
+    expect(settings().gatewayMode).toBe("device_key");
+  });
+
+  it("device-key mode on a phone with no device key fails gateway-check with the way out", () => {
+    expect(run(["gateway-check"], { FAKE_DEVICES: dev() }).out).toContain("reason=device_key_mode_but_phone_has_no_device_key hint=update_app_to_v1.77+_or_config_--gateway-mode_passphrase");
+  });
+
+  it("SWITCH a deployed Worker device-key -> passphrase: dry run names the passphrase put and only the LISTED pin deletes, no values", () => {
+    deployedInDeviceKeyMode();
+    const c = run(["config", "--gateway-mode", "passphrase"]);
+    expect(c.out).toContain("gateway_mode=passphrase next=keys_then_secrets");
+    expect(run(["keys"]).out).toContain("made=GATEWAY_PASSPHRASE ");
+    const e = env();
+    const d = run(["secrets", "--dry-run"]);
+    expect(d.out).toMatch(/result=dry_run gateway_mode=passphrase would_set=\d+ names=[^ ]*GATEWAY_PASSPHRASE,GATEWAY_MODE would_remove=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION$/m);
+    for (const v of Object.values(e)) if (String(v).length >= 8) expect(d.out).not.toContain(String(v));
+    expect(calls()).toEqual(["secret list --format json"]); // read-only; nothing put or deleted
+    expect(worker()).toContain("GATEWAY_PINNED_FINGERPRINT");
+    // only what is listed: a Worker without the version secret
+    writeFileSync(join(dir, "fake.worker"), worker().filter((k) => k !== "GATEWAY_KEY_VERSION").join("\n") + "\n");
+    expect(run(["secrets", "--dry-run"]).out).toContain("would_remove=GATEWAY_PINNED_FINGERPRINT\n");
+    writeFileSync(join(dir, "fake.worker"), worker().filter((k) => k !== "GATEWAY_PINNED_FINGERPRINT").join("\n") + "\n");
+    expect(run(["secrets", "--dry-run"]).out).toContain("would_remove=none");
+  });
+
+  it("SWITCH for real: passphrase + mode put over stdin, pin and version deleted, Worker ends in passphrase mode", () => {
+    deployedInDeviceKeyMode();
+    run(["config", "--gateway-mode", "passphrase"]); run(["keys"]);
+    const s = run(["secrets"]);
+    expect(s.out).toContain("result=ok gateway_mode=passphrase");
+    expect(s.out).toContain("removed=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION");
+    expect(s.out).not.toContain(env().GATEWAY_PASSPHRASE);
+    const stdin = JSON.parse(readFileSync(join(dir, "fake.stdin"), "utf8"));
+    expect(stdin.GATEWAY_MODE).toBe("passphrase");
+    expect(stdin.GATEWAY_PASSPHRASE).toBe(env().GATEWAY_PASSPHRASE);
+    expect(stdin).not.toHaveProperty("GATEWAY_PINNED_FINGERPRINT");
+    expect(worker()).toContain("GATEWAY_PASSPHRASE");
+    expect(worker()).not.toContain("GATEWAY_PINNED_FINGERPRINT");
+    expect(worker()).not.toContain("GATEWAY_KEY_VERSION");
+    expect(calls().filter((c) => c.startsWith("secret delete"))).toEqual(["secret delete GATEWAY_PINNED_FINGERPRINT", "secret delete GATEWAY_KEY_VERSION"]);
+  });
+
+  it("Windows parity: the same switch through npx.cmd", () => {
+    const w = { FAKE_PLATFORM: "win32", ComSpec: "cmd.exe" };
+    deployedInDeviceKeyMode(w);
+    run(["config", "--gateway-mode", "passphrase"], w); run(["keys"], w);
+    expect(run(["secrets", "--dry-run"], w).out).toContain("would_remove=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION");
+    expect(run(["secrets"], w).out).toContain("removed=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION");
+    expect(worker()).not.toContain("GATEWAY_PINNED_FINGERPRINT");
   });
 });

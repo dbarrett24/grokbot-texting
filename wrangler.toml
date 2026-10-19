@@ -84,7 +84,8 @@ CAP_START_DATE = "REPLACE_WITH_START_DATE_YYYY-MM-DD"   # invalid = the cap stay
 
 # Secrets (set with `npx wrangler secret put NAME`, never written here):
 # REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, ALLOWLIST,
-# GATEWAY_PASSPHRASE (passphrase mode: device lists no publicKey; >= 32 chars, e.g. `openssl rand -base64 32`) OR
+# GATEWAY_MODE ("passphrase" or "device_key"; setup sets it) and either
+# GATEWAY_PASSPHRASE (passphrase mode; >= 32 chars, e.g. `openssl rand -base64 32`) OR
 # GATEWAY_PINNED_FINGERPRINT + GATEWAY_KEY_VERSION (device-key mode),
 # OWNER_NUMBER (your own number; needed for sms-mode notices, and always when GROUP_MMS = "1") and/or NTFY_URL + NTFY_TOKEN (ntfy mode),
 # LOG_HASH_KEY (required for direct send, >= 32 chars): HMAC key for number and body hashes,
