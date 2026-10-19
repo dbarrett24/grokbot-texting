@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, unlinkSync, mkdtempSync, rmdirSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { mainKind } from "./is-main.mjs";
 
 const E164 = /^\+[1-9]\d{7,14}$/;
 
@@ -200,4 +200,4 @@ function main(argv) {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main(process.argv);
+if (mainKind(import.meta.url) === "main") main(process.argv);

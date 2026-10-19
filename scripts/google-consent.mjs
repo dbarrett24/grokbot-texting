@@ -10,7 +10,7 @@
 import { createServer } from "node:http";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { mainKind } from "./is-main.mjs";
 
 export const SCOPE = "https://www.googleapis.com/auth/contacts.readonly";
 
@@ -125,4 +125,4 @@ async function main() {
   console.log(`${secretName} set. Add the label to GOOGLE_ACCOUNTS in wrangler.toml if it isn't there yet.`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main().catch((e) => { console.error(e.message); process.exit(1); });
+if (mainKind(import.meta.url) === "main") main().catch((e) => { console.error(e.message); process.exit(1); });
