@@ -4,7 +4,7 @@
 // reports the outcome once. It never retries a send: one claim, one imsg call, one result.
 // Zero dependencies. Node 18+. Config comes from the LaunchAgent (see install.sh); the token from the Keychain.
 import { execFile, execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { mainKind } from "./is-main.mjs";
 
 export const MIN_IMSG = [0, 14, 0]; // 0.14.0 added the delivery dispositions (not_started / may_have_completed / still_in_flight)
 export const IMSG_TIMEOUT_MS = 90_000; // under the relay's 2-minute claim timeout
@@ -156,7 +156,7 @@ async function main() {
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (mainKind(import.meta.url) === "main") {
   main().catch((e) => {
     console.error(`relay-device: ${e instanceof Error ? e.message : e}`);
     process.exit(78); // EX_CONFIG: launchd's KeepAlive throttles restarts

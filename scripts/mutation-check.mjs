@@ -241,6 +241,14 @@ const M = [
   ["multi_device_queues_202", "src/relay.ts", "if (queued.length) return json(202, { id, state: \"queued\"", "if (false) return json(202, { id, state: \"queued\""],
   ["multi_device_job_per_copy", "src/relay.ts", "{ kind: \"direct\", id: ids[i], who: whoOf(i), sha: bodySha }", "{ kind: \"direct\", id, who: whoOf(i), sha: bodySha }"],
   ["multi_device_notice_queued", "src/relay.ts", "const ok = await this.notifyDirectEach(ids[i], labels[i], text, now, d.queued);", "const ok = await this.notifyDirectEach(ids[i], labels[i], text, now);"],
+  // entry-point check (scripts/is-main.mjs): symlinked paths such as the macOS TMPDIR
+  ["entry_realpath_both_sides", "scripts/is-main.mjs", "return realpathSync(resolve(p));", "return resolve(p);"],
+  ["entry_unclear_is_loud", "scripts/is-main.mjs", 'if (kind === "unclear") {', "if (false) {"],
+  ["entry_setup_lib_uses_helper", "scripts/setup-lib.mjs", 'if (mainKind(import.meta.url, (msg) => { out("entry", "fail", { reason: "entry_check_mismatch" }); console.error(msg); }) === "main") {', "if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {"],
+  ["entry_import_contacts_uses_helper", "scripts/import-contacts.mjs", 'if (mainKind(import.meta.url) === "main") main(process.argv);', 'if (import.meta.url === "file://" + process.argv[1]) main(process.argv);'],
+  ["entry_google_consent_uses_helper", "scripts/google-consent.mjs", 'if (mainKind(import.meta.url) === "main") main()', 'if (import.meta.url === "file://" + process.argv[1]) main()'],
+  ["entry_mac_helper_uses_helper", "mac/relay-device.mjs", 'if (mainKind(import.meta.url) === "main") {', 'if (import.meta.url === "file://" + process.argv[1]) {'],
+  ["entry_install_copies_helper", "mac/install.sh", 'cp "$HERE/../scripts/is-main.mjs" "$DEST/is-main.mjs"', "true"],
 ];
 
 const only = process.argv[2];
