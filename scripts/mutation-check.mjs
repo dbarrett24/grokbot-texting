@@ -249,6 +249,24 @@ const M = [
   ["entry_google_consent_uses_helper", "scripts/google-consent.mjs", 'if (mainKind(import.meta.url) === "main") main()', 'if (import.meta.url === "file://" + process.argv[1]) main()'],
   ["entry_mac_helper_uses_helper", "mac/relay-device.mjs", 'if (mainKind(import.meta.url) === "main") {', 'if (import.meta.url === "file://" + process.argv[1]) {'],
   ["entry_install_copies_helper", "mac/install.sh", 'cp "$HERE/../scripts/is-main.mjs" "$DEST/is-main.mjs"', "true"],
+  // device-key setup mode (setup-device-key-mode): one derived mode, Worker pin push, fix hints; OAEP parameters
+  ["devkey_keys_no_passphrase", "scripts/setup-lib.mjs", 'mode === "passphrase" ? ["GATEWAY_PASSPHRASE"] : []', 'mode !== "none" ? ["GATEWAY_PASSPHRASE"] : []'],
+  ["devkey_mode_from_device", "scripts/setup-lib.mjs", 'if (s.deviceKey === true) return "device_key";', ""],
+  ["devkey_unknown_refuses", "scripts/setup-lib.mjs", 'if (mode === "unknown") return out("secrets", "fail", { reason: "gateway_mode_unknown", next: "gateway-check" });', ""],
+  ["devkey_pending_not_live", "scripts/setup-lib.mjs", 'm.set("PENDING_FINGERPRINT", fp); m.set("PENDING_KEY_VERSION", ver);', 'm.set("PENDING_FINGERPRINT", fp); m.set("PENDING_KEY_VERSION", ver); m.set("GATEWAY_KEY_VERSION", ver);'],
+  ["devkey_worker_push", "scripts/setup-lib.mjs", "await pushPin(s, m);", ""],
+  ["devkey_worker_account_match", "scripts/setup-lib.mjs", 'if (owned.accountId !== acct) return out(step, "fail", { reason: "different_cloudflare_account"', 'if (false) return out(step, "fail", { reason: "different_cloudflare_account"'],
+  ["devkey_stale_passphrase_removed", "scripts/setup-lib.mjs", 'if (!listed.includes("GATEWAY_PASSPHRASE")) return "no";', 'return "no";'],
+  ["devkey_delete_only_if_set", "scripts/setup-lib.mjs", 'if (!listed.includes("GATEWAY_PASSPHRASE")) return "no";', 'if (false) return "no";'],
+  ["devkey_secrets_removes_stale", "scripts/setup-lib.mjs", 'mode === "device_key" ? removeStalePassphrase("secrets", names) : "no"', '"no"'],
+  ["devkey_confirm_drops_local_passphrase", "scripts/setup-lib.mjs", 'm.delete("GATEWAY_PASSPHRASE"); // device-key mode never uses one', ""],
+  ["devkey_diag_no_pin", "scripts/setup-lib.mjs", 'if (gatewayMode(s, m) !== "device_key" || !pin || !ver) return "device_key_present_but_no_pin";', ""],
+  ["devkey_fix_hint_printed", "scripts/setup-lib.mjs", "{ reason: code, fix: GATEWAY_FIX[code] }", "{ reason: code }"],
+  ["devkey_dialog_short_groups", "scripts/setup-lib.mjs", '${g.slice(0, 2).join("  ")}   ...   ${g.slice(-2).join("  ")}', "${fp}"],
+  ["devkey_gateway_mode_line", "scripts/setup-lib.mjs", 'out("gateway_mode", DRY', 'void ("gateway_mode", DRY'],
+  ["devkey_show_refused", "scripts/setup-lib.mjs", 'if (name === "GATEWAY_PASSPHRASE" && gatewayMode(loadSettings(), m) !== "passphrase")', "if (false)"],
+  ["e2e_mgf1_is_sha1", "src/e2e.ts", 'const h = await digest("SHA-1", buf);', 'const h = await digest("SHA-256", buf);'],
+  ["e2e_oaep_label_hash_sha256", "src/e2e.ts", 'const lHash = await digest("SHA-256", new Uint8Array(0));', 'const lHash = await digest("SHA-1", new Uint8Array(0));'],
 ];
 
 const only = process.argv[2];

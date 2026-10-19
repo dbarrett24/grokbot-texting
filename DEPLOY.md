@@ -51,9 +51,10 @@ Commands are written for zsh (the macOS default); bash equivalents are given whe
 4. In the app, turn **Cloud Server** ON and **Local Server** OFF. Then tap **Offline** so it changes to **Online**. (Cloud mode works anywhere without opening your phone to the internet.) https://docs.sms-gate.app/getting-started/public-cloud-server/
 5. Leave webhooks, SMS forwarding and the email bridge **off**.
 6. The Cloud Server section now shows a **username** and **password**. Leave them on screen; you'll type them into hidden prompts in section 6. The same login opens dashboard.sms-gate.app, which can read your messages, so treat it like a bank password.
-7. **Encryption passphrase.** Skip this step if the `devices` call in 1.8 shows a `publicKey` (device-key mode, app v1.77.0 or newer): the relay then encrypts to the pinned device key from step 9, and no passphrase is needed. Otherwise, on your computer, run `openssl rand -base64 32`. It prints 44 characters.
-   - **HUMAN STEP:** In the app, open the **Settings** tab, find the **Encryption** section and tap **Passphrase**. Enter that exact value. (The docs say only that the passphrase is set in the device's own settings; the screen names here come from the app's source, v1.77.x.)
-   - Keep the terminal window open; you'll paste the same value in section 6. The relay refuses passphrases shorter than 32 characters.
+7. **Encryption: device key (easy, recommended) or passphrase (fallback).** App v1.77.0 or newer publishes a device key, and that is the easy path: nothing to make, type or paste. `gateway-check` (step 9) asks your phone which mode it is in and sets everything up for that mode; it never makes a passphrase when the phone has a device key.
+   - **Fallback, only if `gateway-check` says `reason=passphrase`** (older app, no device key). Easiest fix: update the app (step 1) and run `gateway-check` again. Otherwise:
+     - If the app **already has** a passphrase (Settings, Encryption, Passphrase is filled in), keep it: run `scripts/setup-mac.sh ask GATEWAY_PASSPHRASE` and type that same value at the hidden prompt. Setup never replaces a passphrase you already have.
+     - If not, `keys` makes one; `show GATEWAY_PASSPHRASE` shows it once so you can type it into **Settings**, **Encryption**, **Passphrase** in the app. (The screen names come from the app's source, v1.77.x.) The relay refuses passphrases shorter than 32 characters.
    - Background: https://docs.sms-gate.app/privacy/encryption/
 8. **Device id.** On your computer, run this. `read -s` hides what you type:
    ```sh
@@ -61,11 +62,11 @@ Commands are written for zsh (the macOS default); bash equivalents are given whe
    curl -s -u "$U:$P" https://api.sms-gate.app/3rdparty/v1/devices; echo; unset P
    ```
    (In bash, use `read -r -p "username: " U; read -rs -p "password: " P`.) Note your phone's `id` from the output, and whether it shows a `publicKey` and a `keyVersion`.
-9. **Device key (app v1.77.0 or newer: the `devices` output shows a `publicKey`).** The relay refuses to send until you pin that key, so a server that swapped it can't read your texts. https://docs.sms-gate.app/privacy/encryption/ ("Trust model and key verification")
-   - **HUMAN STEP:** In the app: **Settings**, **Device…**, **Device Key**, **Key fingerprint**. Tap it to copy. It looks like `A1B2:C3D4:…`, 16 groups of 4.
-   - Note the `keyVersion` number from the `devices` output in step 8.
-   - In the same **Device Key** section, set **Automatic key rotation** to **Disabled**. Every new key (rotated by hand or automatically) stops the relay until you pin it again (section 14).
-   - You'll store both in section 6. If there's no `publicKey`, skip this step.
+9. **Pick the mode and pin the device key: run `gateway-check`, then `confirm-fingerprint`.** (`scripts/setup-mac.sh <step>` on a Mac, `scripts\setup-windows.ps1 <step>` on Windows; run `ask GATEWAY_USER` and `ask GATEWAY_PASS` first.) The relay refuses to send until the device key is pinned, so a server that swapped it can't read your texts. https://docs.sms-gate.app/privacy/encryption/ ("Trust model and key verification")
+   - `gateway-check` reads `publicKey` and `keyVersion` from your phone's listing, computes the fingerprint, and prints `RELAY_STATUS step=gateway_mode result=ok reason=device_key` (or `reason=passphrase`, see step 7). You never copy the fingerprint or the key version anywhere.
+   - `confirm-fingerprint` opens a window showing the first two and last two groups big, the full value smaller. **HUMAN STEP:** in the app open **Settings**, **Device…**, **Device Key**, **Key fingerprint** and compare those groups by eye. Same: **Yes, it matches**. Different: **No, different**, and stop.
+   - After **Yes**, the pin and key version are saved; if the relay is already deployed from this computer, they go straight to the Worker too (and an old `GATEWAY_PASSPHRASE` there is removed). Not deployed yet: `secrets` sends them after section 7.
+   - In the same **Device Key** section, set **Automatic key rotation** to **Disabled**. Every new key (rotated by hand or automatically) stops the relay until you confirm it again (section 14).
 
 **Check:** the app shows **Online**, and the `devices` call lists exactly one device: yours.
 
@@ -143,16 +144,12 @@ npx wrangler secret put APPROVER_EMAIL       # email from 2.1
 npx wrangler secret put GATEWAY_USER         # from the app (1.6)
 npx wrangler secret put GATEWAY_PASS         # from the app (1.6)
 npx wrangler secret put GATEWAY_DEVICE_ID    # from 1.8
-npx wrangler secret put GATEWAY_PASSPHRASE   # the same 44 characters you put in the app (1.7); skip in device-key mode
+npx wrangler secret put GATEWAY_PASSPHRASE   # passphrase fallback only (1.7); skip in device-key mode
 npx wrangler secret put OWNER_NUMBER         # YOUR OWN number, + and country code, no spaces
 npx wrangler secret put ALLOWLIST            # {"+<your number>":"Your Name"}: your own number, so you can test
 openssl rand -base64 32 | tr -d '\n' | npx wrangler secret put LOG_HASH_KEY   # made and stored without showing it
 ```
-If your phone has a device key (section 1, step 9), also:
-```sh
-npx wrangler secret put GATEWAY_PINNED_FINGERPRINT   # the Key fingerprint from the app, A1B2:C3D4:... exactly
-npx wrangler secret put GATEWAY_KEY_VERSION          # the keyVersion number, e.g. 1
-```
+If your phone has a device key, don't type the pin: run `gateway-check` then `confirm-fingerprint` (section 1, step 9). They store `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` for you (on the Worker too, once it's deployed); `secrets` sends them otherwise.
 
 **Check:** `npx wrangler secret list` shows these names (values are never shown): REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, GATEWAY_PASSPHRASE (device-key mode: GATEWAY_PINNED_FINGERPRINT and GATEWAY_KEY_VERSION instead), OWNER_NUMBER, ALLOWLIST, LOG_HASH_KEY.
 
@@ -244,7 +241,14 @@ unset RT CID
 - `"sent"` means SMS Gateway's cloud accepted the encrypted text for your phone and gave it an id. It is not a delivery receipt: the phone sends it when it picks it up (right away if it's Online), and the app shows the real status.
 - `https://<APPROVE_HOST>/log` shows `direct_sent` with hashes only, never a number or the text.
 - A number on no list gets 403 `recipient_not_on_allowlist`.
-- If you get HTTP 502 `send_failed`: look in `/log`. Check the phone is Online and the passphrase matches the app exactly. `device_key_present_but_no_pin` or `device_key_pin_mismatch` in the log means section 1 step 9 / section 6: pin (or re-pin) the device key.
+- If you get HTTP 502 `send_failed`: `test-send` and `smoke` print a `fix=` hint for the gateway side. Also look in `/log`. Check the phone is Online.
+  | In `/log` or `fix=` | Fix |
+  |---|---|
+  | `device_key_present_but_no_pin` | The phone has a device key but the Worker has no pin (often: setup ran in passphrase mode). Run `gateway-check` then `confirm-fingerprint`; it updates the Worker. |
+  | `device_key_pin_mismatch` | The phone's key changed (rotation). Run `gateway-check` then `confirm-fingerprint`. |
+  | `no_device_key_and_no_passphrase` | The reverse: the phone has no device key and the Worker has no passphrase. Update the app to v1.77+ and run `gateway-check`, or set the passphrase (section 1 step 7). |
+  | `device_id_not_listed` | Run `gateway-check` (the phone id changed). |
+  | The app shows **"can't send message, key store operation failed"** after the relay said `sent` | The phone couldn't decrypt the text. Update SMS Gateway (section 1 step 1), force-stop it (Settings, Apps, SMS Gateway, Force stop), open it and retry. If it still fails, rotate the device key (app: **Settings**, **Device…**, **Device Key**, **Rotate device key**), then run `gateway-check` and `confirm-fingerprint`. Still failing: stop and ask for help; see the note on app v1.77.0–v1.77.4 in Known limits. |
 - Error 1102 or "exceeded CPU" means upgrade to Workers Paid.
 
 **Formatting rule (standard):** put a line break (a blank line) between the greeting, the ask and any link. No wall of text, and soft asks ("Would you be able to..."), not commands. In JSON, a line break is `\n`.
@@ -307,7 +311,7 @@ Rollback doesn't undo secrets or stored data.
 | Gateway password | Regenerate it in the app's Cloud Server settings, then `npx wrangler secret put GATEWAY_PASS` |
 | Passphrase (no device key only) | New `openssl rand -base64 32`. Set it in the app **and** with `npx wrangler secret put GATEWAY_PASSPHRASE` right after. Texts fail until both match |
 | Log key | `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler secret put LOG_HASH_KEY` (stored contacts are re-hashed on the next send) |
-| Device key | In the app, Settings, Device…, Device Key, **Rotate device key**. Then read the new Key fingerprint and `keyVersion` (section 1 steps 8–9) and `secret put` both `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION`. Sends refuse until both match |
+| Device key | In the app, Settings, Device…, Device Key, **Rotate device key**. Then run `gateway-check` then `confirm-fingerprint` (section 1 step 9); they update the Worker. Sends refuse until you confirm |
 | Google access | Remove the app at https://myaccount.google.com/permissions, then rerun section 9 step 5 |
 
 Do it right away if a phone, computer or bot that held one is lost or compromised.
@@ -327,7 +331,8 @@ Do it right away if a phone, computer or bot that held one is lost or compromise
 - **iPhone is BETA.** See [SETUP-iphone.md](SETUP-iphone.md). Android is the tested path.
 - **Group texts are Android only at launch,** and only after your own group test passes.
 - **`sent` is not delivered.** It means SMS Gateway's cloud accepted the text for your phone (section 10).
-- **Device-key mode:** when the `devices` call shows a `publicKey` (app v1.77.0+), the relay refuses to send until `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` match it (section 1 step 9). A rotated key stops sending until you re-pin. That's deliberate. Store the full fingerprint; when comparing it with the app by eye, check the first two and last two groups (64 bits). In this mode you don't set a passphrase.
+- **Device-key mode:** when the `devices` call shows a `publicKey` (app v1.77.0+), the relay refuses to send until `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` match it (section 1 step 9). A rotated key stops sending until you re-pin. That's deliberate. `gateway-check` stores the full fingerprint; `confirm-fingerprint` shows the first two and last two groups (64 bits) for the by-eye check. In this mode you don't set a passphrase, and setup never makes one.
+- **SMS Gateway v1.77.0–v1.77.4 device-key decrypt:** the format's docs say RSA-OAEP with SHA-256 and **MGF1-SHA-1** (the only MGF1 hash an Android Keystore key allows before Android 15), and the relay sends exactly that (`test-node/e2e-oaep-params.node.test.ts` proves it with an independent decryptor). The app's own decrypt code in those releases asks the Keystore for MGF1-SHA-256 instead (`RSAEncryptionProvider.kt`). If your phone shows "key store operation failed" for every device-key text, that's the likely cause; it's on the app side, and no relay setting changes it.
 - **The phone is the sender.** If it's off, offline, or Android kills the app, texts wait in the cloud queue. The app checks in at least every 15 minutes.
 - **Who can send:** anyone with the bot token can text anyone on your list with no tap. Guard the token like a password, and use section 13 if it leaks.
 - **Sign-in:** with `ALLOW_EMAIL_OTP = "1"` the passkey requirement rests on your Access policy alone (section 3).

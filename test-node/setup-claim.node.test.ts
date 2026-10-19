@@ -42,6 +42,11 @@ beforeEach(() => {
   writeFileSync(join(dir, "fake-dns.cjs"), FAKE_DNS);
   expect(run(["config", "--worker", "relay-t", "--domain", "owner.test", "--team", "t", "--country", "+1"]).out).toContain("result=ok");
 });
+/** What `gateway-check` records for a phone with no device key: passphrase mode (the fallback). */
+function passphraseMode() {
+  const cf = join(dir, ".relay-local", "settings.json");
+  writeFileSync(cf, JSON.stringify({ ...JSON.parse(readFileSync(cf, "utf8")), deviceKey: false }));
+}
 const claimed = () => readdirSync(join(dir, ".relay-local")).some((f) => f.startsWith("claimed-"));
 
 describe.skipIf(process.platform === "win32")("claim guard", () => {
@@ -147,6 +152,7 @@ describe.skipIf(process.platform === "win32")("claim guard", () => {
     expect(existsSync(join(dir, "fake.deploy"))).toBe(false);
     const full = { REQUEST_TOKEN: "TEST-ONLY-r", LOG_HASH_KEY: "TEST-ONLY-l", ACCESS_AUD: "a".repeat(64), APPROVER_EMAIL: "o@example.test", OWNER_NUMBER: "+15555550100", OWNER_NAME: "Test Owner", GATEWAY_USER: "TEST-ONLY-u", GATEWAY_PASS: "TEST-ONLY-p", GATEWAY_DEVICE_ID: "d1", GATEWAY_PASSPHRASE: "TEST-ONLY-passphrase" };
     writeFileSync(join(dir, ".relay-local", "secrets.env"), Object.entries(full).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join("\n") + "\n");
+    passphraseMode();
     expect(run(["secrets"], { FAKE_ACCOUNTS: "acct-b" }).out).toContain("reason=run_claim_first");
     expect(existsSync(join(dir, "fake.stdin"))).toBe(false);
   });
@@ -176,6 +182,7 @@ describe.skipIf(process.platform === "win32")("claim guard", () => {
     expect(existsSync(join(dir, "fake.deploy"))).toBe(false);
     const full = { REQUEST_TOKEN: "TEST-ONLY-r", LOG_HASH_KEY: "TEST-ONLY-l", ACCESS_AUD: "a".repeat(64), APPROVER_EMAIL: "o@example.test", OWNER_NUMBER: "+15555550100", OWNER_NAME: "Test Owner", GATEWAY_USER: "TEST-ONLY-u", GATEWAY_PASS: "TEST-ONLY-p", GATEWAY_DEVICE_ID: "d1", GATEWAY_PASSPHRASE: "TEST-ONLY-passphrase" };
     writeFileSync(join(dir, ".relay-local", "secrets.env"), Object.entries(full).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join("\n") + "\n");
+    passphraseMode();
     const s = run(["secrets"]);
     expect(s.out).toContain("reason=run_claim_first"); expect(existsSync(join(dir, "fake.stdin"))).toBe(false);
     // after a claim, secrets go on stdin only, never in argv or output
@@ -200,6 +207,7 @@ describe.skipIf(process.platform === "win32")("claim guard", () => {
 
 describe.skipIf(process.platform === "win32")("local secret writer", () => {
   it("writes secrets.env owner-only, never prints a value, and keeps existing keys", () => {
+    passphraseMode();
     const a = run(["keys"]);
     const f = join(dir, ".relay-local", "secrets.env");
     expect(statSync(f).mode & 0o777).toBe(0o600);

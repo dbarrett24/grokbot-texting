@@ -85,6 +85,8 @@ export const ASKABLE = {
   GOOGLE_CLIENT_ID: { prompt: "Google Cloud: the Client ID", hidden: false, ok: (v) => /\.apps\.googleusercontent\.com$/.test(v) },
   GOOGLE_CLIENT_SECRET: { prompt: "Google Cloud: the Client secret", hidden: true, ok: (v) => /^\S{10,200}$/.test(v) },
   NTFY_TOKEN: { prompt: "ntfy: your access token", hidden: true, ok: (v) => /^\S{10,200}$/.test(v) },
+  // Only when the app ALREADY has a passphrase (no device key): type that one in, so setup never replaces it.
+  GATEWAY_PASSPHRASE: { prompt: "SMS Gateway app: the passphrase already set under Settings, Encryption", hidden: true, ok: (v) => v.length >= 32 && v.length <= 256 && !/[\r\n]/.test(v) },
 };
 
 // ---------- native dialogs on the owner's screen (the answer never reaches stdout) ----------
@@ -105,8 +107,11 @@ function dialog({ prompt, hidden = false, show = null, buttons = null }) {
     const ps = winDialogScript({ prompt, hidden, show, buttons });
     r = spawnSync("powershell.exe", ["-NoProfile", "-STA", "-Command", "-"], { input: ps, encoding: "utf8" });
   } else {
-    const args = show !== null ? ["--info", `--title=${prompt}`, `--text=${show}`] : ["--entry", `--text=${prompt}`, ...(hidden ? ["--hide-text"] : [])];
+    const args = show !== null && buttons
+      ? ["--question", `--title=${prompt}`, `--text=${show}`, `--ok-label=${buttons[buttons.length - 1]}`, `--cancel-label=${buttons[0]}`]
+      : show !== null ? ["--info", `--title=${prompt}`, `--text=${show}`] : ["--entry", `--text=${prompt}`, ...(hidden ? ["--hide-text"] : [])];
     r = spawnSync("zenity", args, { encoding: "utf8" });
+    if (!r.error && show !== null && buttons) return { value: r.status === 0 ? buttons[buttons.length - 1] : buttons[0] };
   }
   if (r.error) return { error: "no_dialog" };
   if (r.status !== 0) return { cancelled: true };
@@ -175,11 +180,28 @@ function clearClaims() {
   for (const f of readdirSync(LOCAL)) if (f.startsWith("claimed-")) rmSync(join(LOCAL, f), { force: true });
 }
 
+/**
+ * How texts are encrypted to the phone. This is the ONE place that decides it; keys, show, secrets, status,
+ * confirm-fingerprint and smoke all read it. gateway-check records what the phone reports (settings.deviceKey).
+ *   "none"       Mac delivery: no SMS Gateway at all
+ *   "device_key" the phone publishes a device key (app v1.77.0+): pin it, never a passphrase. The easy path.
+ *   "passphrase" the phone has no device key: the fallback
+ *   "unknown"    gateway-check hasn't run yet: nothing gateway-related is made or sent until it does
+ * An older setup that pinned by hand (a stored pin, no recorded mode) counts as device_key.
+ */
+export function gatewayMode(s, m) {
+  if (s.delivery === "mac") return "none";
+  if (s.deviceKey === true) return "device_key";
+  if (s.deviceKey === false) return "passphrase";
+  return m.has("GATEWAY_PINNED_FINGERPRINT") ? "device_key" : "unknown";
+}
+const PIN_NAMES = ["GATEWAY_PINNED_FINGERPRINT", "GATEWAY_KEY_VERSION"];
 export function requiredSecrets(s, m) {
   const base = ["REQUEST_TOKEN", "LOG_HASH_KEY", "ACCESS_AUD", "APPROVER_EMAIL", "OWNER_NUMBER", "ALLOWLIST"];
-  if (s.delivery === "mac") return [...base, "DEVICE_TOKEN", "NTFY_URL", "NTFY_TOKEN"];
+  const mode = gatewayMode(s, m);
+  if (mode === "none") return [...base, "DEVICE_TOKEN", "NTFY_URL", "NTFY_TOKEN"];
   const gw = ["GATEWAY_USER", "GATEWAY_PASS", "GATEWAY_DEVICE_ID"];
-  const enc = m.has("GATEWAY_PINNED_FINGERPRINT") || s.deviceKey ? ["GATEWAY_PINNED_FINGERPRINT", "GATEWAY_KEY_VERSION"] : ["GATEWAY_PASSPHRASE"];
+  const enc = mode === "device_key" ? PIN_NAMES : mode === "passphrase" ? ["GATEWAY_PASSPHRASE"] : ["GATEWAY_MODE"];
   return [...base, ...gw, ...enc];
 }
 export function buildPayload(s, m) {
@@ -189,7 +211,8 @@ export function buildPayload(s, m) {
     if (k === "ALLOWLIST") {
       if (m.has("OWNER_NUMBER") && m.has("OWNER_NAME")) p.ALLOWLIST = JSON.stringify({ [m.get("OWNER_NUMBER")]: m.get("OWNER_NAME") });
       else missing.push(m.has("OWNER_NUMBER") ? "OWNER_NAME" : "OWNER_NUMBER");
-    } else if (m.has(k)) p[k] = m.get(k);
+    } else if (k === "GATEWAY_MODE") missing.push("gateway_mode_run_gateway-check"); // never sent; the mode isn't known yet
+    else if (m.has(k)) p[k] = m.get(k);
     else missing.push(k);
   }
   for (const k of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]) if (m.has(k)) p[k] = m.get(k);
@@ -216,6 +239,48 @@ export function leftoverPlaceholders(t) {
 export function fingerprintOf(publicKeyB64) {
   return createHash("sha256").update(Buffer.from(publicKeyB64, "base64")).digest("hex").toUpperCase().match(/.{4}/g).join(":");
 }
+/**
+ * One-line fixes for the relay's gateway security events (src/relay.ts gatewayPost), so a failed send says what
+ * to run instead of only "send_failed". device_key_present_but_no_pin and its reverse, no_device_key_and_no_passphrase.
+ */
+export const GATEWAY_FIX = {
+  device_key_present_but_no_pin: "run_gateway-check_then_confirm-fingerprint",
+  device_key_pin_mismatch: "phone_key_changed:run_gateway-check_then_confirm-fingerprint",
+  no_device_key_and_no_passphrase: "phone_has_no_device_key:update_SMS_Gateway_to_v1.77+_then_run_gateway-check",
+  device_id_not_listed: "phone_id_changed:run_gateway-check",
+};
+/**
+ * What the relay will do with this phone, given what setup stored. Mirrors gatewayPost's checks without
+ * sending anything: returns the relay's event code it would hit, or null when the two agree.
+ */
+export function gatewayDiagnosis(s, m, devs) {
+  if (gatewayMode(s, m) === "none") return null;
+  const d = Array.isArray(devs) ? devs.find((x) => x && String(x.id) === m.get("GATEWAY_DEVICE_ID")) : null;
+  if (!d) return "device_id_not_listed";
+  if (typeof d.publicKey === "string" && d.publicKey) {
+    const pin = m.get("GATEWAY_PINNED_FINGERPRINT"), ver = m.get("GATEWAY_KEY_VERSION");
+    if (gatewayMode(s, m) !== "device_key" || !pin || !ver) return "device_key_present_but_no_pin";
+    if (fingerprintOf(d.publicKey) !== pin || Number(ver) !== d.keyVersion) return "device_key_pin_mismatch";
+    return null;
+  }
+  return m.has("GATEWAY_PASSPHRASE") && gatewayMode(s, m) === "passphrase" ? null : "no_device_key_and_no_passphrase";
+}
+async function fetchDevices(m) {
+  if (DRY) return JSON.parse(process.env.RELAY_DRYRUN_DEVICES || "[]");
+  const r = await fetch(`${GATEWAY}/devices`, { signal: AbortSignal.timeout(30_000), headers: { authorization: "Basic " + Buffer.from(`${m.get("GATEWAY_USER")}:${m.get("GATEWAY_PASS")}`).toString("base64") } });
+  if (r.status === 401) throw new Error("wrong_username_or_password");
+  if (!r.ok) throw new Error(`gateway_http_${r.status}`);
+  return r.json();
+}
+/** Prints one RELAY_STATUS line for the gateway side of a check. Never prints a value. */
+async function gatewayCross(step, s, m) {
+  if (gatewayMode(s, m) === "none") return;
+  if (!m.has("GATEWAY_USER") || !m.has("GATEWAY_PASS")) return out(step, "skip", { reason: "no_gateway_login_stored" });
+  let devs;
+  try { devs = await fetchDevices(m); } catch (e) { return out(step, "fail", { reason: String(e?.message || "no_connection").replace(/^fetch failed$/, "no_connection") }); }
+  const code = gatewayDiagnosis(s, m, devs);
+  out(step, code ? "fail" : "ok", code ? { reason: code, fix: GATEWAY_FIX[code] } : { mode: gatewayMode(s, m) });
+}
 async function hostHasDns(host) {
   for (const f of [resolveDns4, resolve6, resolveCname]) {
     try { if ((await f(host)).length) return true; } catch { /* no record of that type */ }
@@ -234,6 +299,39 @@ async function relay(path, { token, body, method = "POST" }) {
   return { http: r.status, j };
 }
 
+// ---------- device-key pin on an already deployed Worker ----------
+/** Deletes a GATEWAY_PASSPHRASE secret left on the Worker, only if it's there. Returns yes | no | failed. */
+function removeStalePassphrase(step, listed) {
+  if (!listed.includes("GATEWAY_PASSPHRASE")) return "no";
+  const r = wrangler(["secret", "delete", "GATEWAY_PASSPHRASE"], { input: "", step });
+  return r.status === 0 ? "yes" : "failed";
+}
+function listedSecrets(step) {
+  const l = wrangler(["secret", "list", "--format", "json"], { step });
+  try { return JSON.parse(l.stdout).map((x) => x.name); } catch { return null; }
+}
+/**
+ * After confirm-fingerprint: if this Worker was deployed from this computer (owned-<worker>.json), put the
+ * pin and key version straight onto it (stdin, never argv or output) and remove a stale passphrase secret.
+ * Not deployed yet: secrets.env only; `secrets` sends them after deploy.
+ */
+async function pushPin(s, m) {
+  const step = "worker-pin";
+  const owned = s.worker ? readJson(ownedPath(s)) : null;
+  if (!owned || owned.worker !== s.worker) return out(step, "skip", { reason: "not_deployed_yet", saved: "local_only", next: "secrets_after_deploy" });
+  if (DRY) return out(step, "dry_run", { worker: s.worker, would_put: PIN_NAMES.join(","), would_remove: "GATEWAY_PASSPHRASE_if_set" });
+  if (!existsSync(CONFIG)) return out(step, "fail", { reason: "run_config_first" });
+  const acct = account(step); if (!acct) return;
+  if (owned.accountId !== acct) return out(step, "fail", { reason: "different_cloudflare_account", hint: "sign_in_with_the_account_that_deployed" });
+  const payload = Object.fromEntries(PIN_NAMES.map((k) => [k, m.get(k)]));
+  const r = wrangler(["secret", "bulk"], { input: JSON.stringify(payload), step });
+  if (r.status !== 0) return out(step, "fail", { log: `.relay-local/logs/${step}.log` });
+  const names = listedSecrets(step) || [];
+  const removed = removeStalePassphrase(step, names);
+  const absent = PIN_NAMES.filter((k) => !names.includes(k));
+  out(step, absent.length || removed === "failed" ? "fail" : "ok", { worker: s.worker, put: PIN_NAMES.join(","), absent: absent.join(","), removed_passphrase: removed });
+}
+
 // ---------- steps ----------
 const args = process.argv.slice(2);
 const DRY = args.includes("--dry-run");
@@ -243,12 +341,15 @@ const steps = {
   async keys() {
     const m = loadSecrets();
     const s = loadSettings();
-    const want = ["REQUEST_TOKEN", "LOG_HASH_KEY", ...(s.delivery === "mac" ? ["DEVICE_TOKEN", "NTFY_URL"] : ["GATEWAY_PASSPHRASE"])];
+    // A passphrase is made only in passphrase mode, and never replaces one already stored (or typed in with
+    // `ask GATEWAY_PASSPHRASE` because the app already has one). Device-key mode never gets one.
+    const mode = gatewayMode(s, m);
+    const want = ["REQUEST_TOKEN", "LOG_HASH_KEY", ...(mode === "none" ? ["DEVICE_TOKEN", "NTFY_URL"] : mode === "passphrase" ? ["GATEWAY_PASSPHRASE"] : [])];
     if (args.includes("--new-token")) m.delete("REQUEST_TOKEN"); // rotation: then run `secrets` and give the bot the new one
     const made = [];
     for (const k of want) if (!m.has(k)) { m.set(k, GENERATORS[k]()); made.push(k); }
     saveSecrets(m);
-    out("keys", "ok", { made: made.join(",") || "none", kept: want.filter((k) => !made.includes(k)).join(",") || "none", file: ".relay-local/secrets.env" });
+    out("keys", "ok", { made: made.join(",") || "none", kept: want.filter((k) => !made.includes(k)).join(",") || "none", gateway_mode: mode, ...(mode === "unknown" ? { next: "gateway-check" } : {}), file: ".relay-local/secrets.env" });
   },
 
   async ask() {
@@ -271,6 +372,7 @@ const steps = {
     const name = args.find((a) => SHOWABLE[a]);
     if (!name) return out("show", "fail", { reason: "unknown_name", allowed: Object.keys(SHOWABLE).join(",") });
     const m = loadSecrets();
+    if (name === "GATEWAY_PASSPHRASE" && gatewayMode(loadSettings(), m) !== "passphrase") return out("show", "fail", { name, reason: `gateway_mode_${gatewayMode(loadSettings(), m)}`, hint: "no_passphrase_in_device_key_mode" });
     if (!m.has(name)) return out("show", "fail", { name, reason: "run_keys_first" });
     const r = dialog({ prompt: SHOWABLE[name], show: m.get(name) });
     out("show", r.error ? "fail" : "ok", r.error ? { name, reason: r.error } : { name, shown: "on_screen_only" });
@@ -320,39 +422,58 @@ const steps = {
     const m = loadSecrets();
     if (!m.has("GATEWAY_USER") || !m.has("GATEWAY_PASS")) return out("gateway-check", "fail", { reason: "ask_gateway_login_first" });
     let devs;
-    if (DRY) devs = JSON.parse(process.env.RELAY_DRYRUN_DEVICES || "[]");
-    else {
-      try {
-        const r = await fetch(`${GATEWAY}/devices`, { signal: AbortSignal.timeout(30_000), headers: { authorization: "Basic " + Buffer.from(`${m.get("GATEWAY_USER")}:${m.get("GATEWAY_PASS")}`).toString("base64") } });
-        if (r.status === 401) return out("gateway-check", "fail", { reason: "wrong_username_or_password" });
-        if (!r.ok) return out("gateway-check", "fail", { reason: "gateway_http", http: r.status });
-        devs = await r.json();
-      } catch { return out("gateway-check", "fail", { reason: "no_connection" }); }
+    try { devs = await fetchDevices(m); } catch (e) {
+      const why = String(e?.message || "");
+      return out("gateway-check", "fail", why === "wrong_username_or_password" ? { reason: why } : why.startsWith("gateway_http_") ? { reason: "gateway_http", http: why.slice(13) } : { reason: "no_connection" });
     }
     if (!Array.isArray(devs) || devs.length === 0) return out("gateway-check", "fail", { reason: "no_device_yet", hint: "phone_app_online" });
     if (devs.length > 1) return out("gateway-check", "fail", { reason: "more_than_one_device", devices: devs.length });
     const d = devs[0];
     m.set("GATEWAY_DEVICE_ID", String(d.id));
     const s = loadSettings();
+    let next;
     if (typeof d.publicKey === "string" && d.publicKey) {
-      m.set("PENDING_FINGERPRINT", fingerprintOf(d.publicKey));
-      m.set("GATEWAY_KEY_VERSION", String(d.keyVersion));
+      // Device-key mode, the recommended path. The fingerprint is computed here; nobody types or pastes it.
+      const fp = fingerprintOf(d.publicKey), ver = String(d.keyVersion);
       s.deviceKey = true;
-    } else s.deviceKey = false;
+      if (m.get("GATEWAY_PINNED_FINGERPRINT") === fp && m.get("GATEWAY_KEY_VERSION") === ver) {
+        m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION");
+        next = "none_already_pinned";
+      } else {
+        // Held as pending until the owner confirms it by eye; a rotated key never replaces the pin unconfirmed.
+        m.set("PENDING_FINGERPRINT", fp); m.set("PENDING_KEY_VERSION", ver);
+        next = "confirm-fingerprint";
+      }
+    } else {
+      s.deviceKey = false;
+      m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION");
+      next = m.has("GATEWAY_PASSPHRASE") ? "none_passphrase_stored" : "update_app_to_v1.77+_or_keys_then_show_GATEWAY_PASSPHRASE";
+    }
     if (!DRY) { saveSecrets(m); saveSettings(s); } // a dry run changes nothing on disk
-    out("gateway-check", DRY ? "dry_run" : "ok", { devices: 1, device_key: s.deviceKey ? "yes" : "no", next: s.deviceKey ? "confirm-fingerprint" : "show_GATEWAY_PASSPHRASE" });
+    out("gateway-check", DRY ? "dry_run" : "ok", { devices: 1, device_key: s.deviceKey ? "yes" : "no", next });
+    out("gateway_mode", DRY ? "dry_run" : "ok", { reason: s.deviceKey ? "device_key" : "passphrase", ...(s.deviceKey ? {} : { hint: "device_key_is_easier:SMS_Gateway_v1.77+" }) });
   },
 
   async "confirm-fingerprint"() {
     const m = loadSecrets();
-    if (!m.has("PENDING_FINGERPRINT")) return out("confirm-fingerprint", "skip", { reason: "no_device_key" });
+    if (!m.has("PENDING_FINGERPRINT")) return out("confirm-fingerprint", "skip", { reason: m.has("GATEWAY_PINNED_FINGERPRINT") ? "already_pinned" : "no_device_key" });
     const fp = m.get("PENDING_FINGERPRINT");
-    const r = dialog({ prompt: "Does this match the Key fingerprint in the SMS Gateway app?", show: `${fp}\n\nIn the app: Settings, Device, Device Key, Key fingerprint.\nCheck the first two and the last two groups.`, buttons: ["No, different", "Yes, it matches"] });
+    const g = fp.split(":");
+    // Big and short: the first two and last two groups (64 bits) are what the owner compares. Full value below.
+    const show = `${g.slice(0, 2).join("  ")}   ...   ${g.slice(-2).join("  ")}\n\nCheck these first two and last two groups against the app:\nSettings, Device, Device Key, Key fingerprint.\n\nFull value (no need to read it all):\n${fp}`;
+    const r = dialog({ prompt: "Does this match the Key fingerprint in the SMS Gateway app?", show, buttons: ["No, different", "Yes, it matches"] });
     if (r.error) return out("confirm-fingerprint", "fail", { reason: r.error });
     if (r.value !== "Yes, it matches") return out("confirm-fingerprint", "fail", { reason: "fingerprint_mismatch", hint: "stop_and_ask_for_help" });
-    m.set("GATEWAY_PINNED_FINGERPRINT", fp); m.delete("PENDING_FINGERPRINT"); m.delete("GATEWAY_PASSPHRASE");
-    saveSecrets(m);
-    out("confirm-fingerprint", "ok", { pinned: "yes" });
+    const rotated = m.has("GATEWAY_PINNED_FINGERPRINT");
+    m.set("GATEWAY_PINNED_FINGERPRINT", fp);
+    m.set("GATEWAY_KEY_VERSION", m.get("PENDING_KEY_VERSION") ?? m.get("GATEWAY_KEY_VERSION"));
+    m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION");
+    m.delete("GATEWAY_PASSPHRASE"); // device-key mode never uses one
+    const s = loadSettings();
+    s.deviceKey = true;
+    saveSecrets(m); saveSettings(s);
+    out("confirm-fingerprint", "ok", { pinned: "yes", ...(rotated ? { replaced: "previous_pin" } : {}) });
+    await pushPin(s, m); // a deployed Worker gets the pin now, so nobody types it into `secret put`
   },
 
   async claim() {
@@ -393,18 +514,21 @@ const steps = {
   async secrets() {
     const s = settingsOrFail("secrets"); if (!s) return;
     const m = loadSecrets();
+    const mode = gatewayMode(s, m);
+    if (mode === "unknown") return out("secrets", "fail", { reason: "gateway_mode_unknown", next: "gateway-check" });
+    if (mode === "device_key" && m.has("PENDING_FINGERPRINT")) return out("secrets", "fail", { reason: "fingerprint_not_confirmed", next: "confirm-fingerprint" });
     const { payload, missing } = buildPayload(s, m);
-    if (missing.length) return out("secrets", "fail", { reason: "missing", names: missing.join(",") });
-    if (DRY) return out("secrets", "dry_run", { would_set: Object.keys(payload).length, names: Object.keys(payload).join(",") });
+    if (missing.length) return out("secrets", "fail", { reason: "missing", names: missing.join(","), ...(missing.includes("GATEWAY_PINNED_FINGERPRINT") ? { next: "gateway-check_then_confirm-fingerprint" } : {}) });
+    if (DRY) return out("secrets", "dry_run", { gateway_mode: mode, would_set: Object.keys(payload).length, names: Object.keys(payload).join(","), ...(mode === "device_key" ? { would_remove: "GATEWAY_PASSPHRASE_if_set" } : {}) });
     const acct = account("secrets"); if (!acct) return;
     if (!isClaimed(s, acct)) return out("secrets", "fail", { reason: "run_claim_first" });
     const r = wrangler(["secret", "bulk"], { input: JSON.stringify(payload), step: "secrets" });
     if (r.status !== 0) return out("secrets", "fail", { log: ".relay-local/logs/secrets.log" });
-    const l = wrangler(["secret", "list", "--format", "json"], { step: "secrets" });
-    let names = [];
-    try { names = JSON.parse(l.stdout).map((x) => x.name); } catch { /* checked below */ }
+    const names = listedSecrets("secrets") || [];
+    // Device-key mode: a passphrase from an earlier run stays on the Worker until removed (bulk never deletes).
+    const removed = mode === "device_key" ? removeStalePassphrase("secrets", names) : "no";
     const absent = Object.keys(payload).filter((k) => !names.includes(k));
-    out("secrets", absent.length ? "fail" : "ok", { set: Object.keys(payload).length, absent: absent.join(",") });
+    out("secrets", absent.length || removed === "failed" ? "fail" : "ok", { gateway_mode: mode, set: Object.keys(payload).length, absent: absent.join(","), removed_passphrase: removed });
   },
 
   async google() {
@@ -423,7 +547,10 @@ const steps = {
 
   async smoke() {
     const s = settingsOrFail("smoke"); if (!s) return;
-    if (DRY) return out("smoke", "dry_run", { would_check: "app_302,api_log_404,api_send_401" });
+    if (DRY) {
+      out("smoke", "dry_run", { would_check: "app_302,api_log_404,api_send_401,gateway_mode" });
+      return gatewayCross("smoke-gateway", s, loadSecrets()); // dry run: devices from RELAY_DRYRUN_DEVICES
+    }
     try {
       const a = await fetch(`https://${s.appHost}/log`, { redirect: "manual", signal: AbortSignal.timeout(20_000) });
       const b = await fetch(`https://${s.apiHost}/log`, { redirect: "manual", signal: AbortSignal.timeout(20_000) });
@@ -431,6 +558,7 @@ const steps = {
       const ok = a.status === 302 && b.status === 404 && c.http === 401;
       out("smoke", ok ? "ok" : "fail", { app: a.status, api_log: b.status, api_send: c.http, reason: ok ? "" : (c.http === 503 ? `setting_missing_${c.j?.error || ""}` : "unexpected") });
     } catch { out("smoke", "fail", { reason: "not_reachable_yet", hint: "wait_2_minutes" }); }
+    await gatewayCross("smoke-gateway", s, loadSecrets()); // the phone's mode vs. what the Worker was given
   },
 
   async resolve() {
@@ -460,6 +588,7 @@ const steps = {
       const state = r.j?.state || r.j?.error || "none";
       const good = (r.http === 200 && state === "sent") || (r.http === 202 && state === "queued");
       out("test-send", good ? "ok" : "fail", { http: r.http, state, retry: "never" });
+      if (!good && state === "send_failed") await gatewayCross("test-send-gateway", s, m); // name the likely cause
     } catch { out("test-send", "fail", { stage: "send", reason: "unknown_if_sent", hint: "check_phone_before_retry" }); }
   },
 
@@ -485,7 +614,7 @@ const steps = {
     const m = loadSecrets();
     const s = loadSettings();
     const { missing } = s.worker ? buildPayload(s, m) : { missing: ["config"] };
-    out("status", "ok", { worker: s.worker || "none", delivery: s.delivery || "none", have: [...m.keys()].join(","), missing: missing.join(",") || "none", claimed: s.worker && isClaimed(s) ? "yes" : "no" });
+    out("status", "ok", { worker: s.worker || "none", delivery: s.delivery || "none", gateway_mode: gatewayMode(s, m), have: [...m.keys()].join(","), missing: missing.join(",") || "none", claimed: s.worker && isClaimed(s) ? "yes" : "no" });
   },
 };
 
