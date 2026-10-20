@@ -38,7 +38,8 @@ DISABLED = "0"                            # "1" = kill switch: everything refuse
 # ---- Direct send (POST /send): the bot sends with no tap, to people on your list only. ----
 DIRECT_SEND = "1"                         # only exact "1" turns it on; "0" = tap-to-approve only
 CONTACTS_SNAPSHOT_ONLY = "0"              # DEPRECATED, kept one release for the upgrade: read once, when the old DIRECT_ALLOWLIST
-                                          # secret is imported as flagged legacy contacts ("0" = they were textable, so they stay on).
+                                          # secret is imported as flagged legacy contacts. On an UPGRADE, "0" = they were textable, so they stay on;
+                                          # a FRESH deploy imports them flagged but off, whatever this says.
                                           # Who the bot may text is now chosen on https://<APPROVE_HOST>/contacts (everyone starts off).
 RUNAWAY_PAUSE = "0"                       # "1" = more than RUNAWAY_MAX direct sends in 60 min pauses direct send until you
                                           # resume at https://<APPROVE_HOST>/direct. Unset counts as ON; only exact "0" turns it off.

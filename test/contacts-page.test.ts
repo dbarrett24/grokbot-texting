@@ -88,7 +88,7 @@ describe("default OFF, then owner switches on", () => {
     const raw = JSON.stringify(people);
     for (const n of [RILEY, SAM, ALEX, EXAMPLE, FRIEND]) expect(raw).not.toContain(n.slice(-7));
     // ALLOWLIST entries are shown read-only, badged
-    expect(people.filter((p) => p.readonly).map((p) => [p.name, p.label, p.enabled])).toEqual([["Test Friend", "set in secret", true], ["Test Two", "set in secret", true]]);
+    expect(people.filter((p) => p.readonly).map((p) => [p.name, p.label, p.enabled])).toEqual([["Test Friend", "always on (ALLOWLIST)", true], ["Test Two", "always on (ALLOWLIST)", true]]);
   });
 
   it("starring doesn't enable anyone; starred sort first", async () => {
@@ -263,6 +263,33 @@ describe("migration (enable once, flag)", () => {
     expect(await r.json()).toEqual({ updated: 4 });
     for (const n of [RILEY, SAM, ALEX]) expect(await sendable(n)).toBe(false);
     expect((await page()).html).not.toContain("were reachable before this update");
+  });
+
+  it("a migrated person who has since left the contacts doesn't count: the banner and the action agree, and the banner clears", async () => {
+    await existingDeploy();
+    await upload(snap([
+      { name: "Riley Moore", given: "Riley", numbers: [{ e164: RILEY, label: "mobile" }] },
+      { name: "Sam Lee", given: "Sam", numbers: [{ e164: SAM, label: "mobile" }] },
+      { name: "Example Person", given: "Example", numbers: [{ e164: EXAMPLE, label: "mobile" }] },
+    ])); // Alex is now gone (kept 30 days, still migrated+on)
+    const { csrf, html } = await page();
+    expect(html).toContain("<b>3</b> people were reachable before this update and are still on");
+    const r = await post("/contacts/migrated-off", { csrf, confirm_count: 3 });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ updated: 3 });
+    expect((await page()).html).not.toContain("were reachable before this update");
+  });
+});
+
+describe("ALLOWLIST numbers that are also contacts", () => {
+  it("show read-only as 'always on (ALLOWLIST)', once, with no switch key, because the bot can always text them", async () => {
+    await upload(snap([...BASE_SNAP.contacts, { name: "Friend Contact", given: "Friend", numbers: [{ e164: FRIEND, label: "mobile" }] }]));
+    const people = await list();
+    const friend = people.filter((p) => p.last4 === FRIEND.slice(-4));
+    expect(friend).toHaveLength(1);
+    expect(friend[0]).toMatchObject({ name: "Friend Contact", label: "always on (ALLOWLIST)", enabled: true, readonly: true, key: null });
+    expect(await sendable(FRIEND)).toBe(true);
+    expect(people.filter((p) => p.readonly).map((p) => p.name)).toEqual(["Friend Contact", "Test Two"]);
   });
 });
 

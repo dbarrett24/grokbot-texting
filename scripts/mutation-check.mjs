@@ -295,7 +295,15 @@ const M = [
   ["contacts_rehash_rotation", "src/relay.ts", "if (rotated) for (const [from, to] of remap)", "if (false) for (const [from, to] of remap)"],
   ["contacts_log_redaction", "src/relay.ts", "detail: `state=${state} matches=${hits.length} method=${who.method}`", "detail: `state=${state} matches=${hits.length} q=${name} method=${who.method}`"],
   // contacts page: extra guards beyond the spec's 10
-  ["contacts_legacy_was_on", "src/relay.ts", 'const wasOn = this.env.CONTACTS_SNAPSHOT_ONLY === "0";', "const wasOn = true;"],
+  ["contacts_legacy_was_on", "src/relay.ts", 'const wasOn = this.meta("deploy_kind") === "upgrade" && this.env.CONTACTS_SNAPSHOT_ONLY === "0";', 'const wasOn = this.meta("deploy_kind") === "upgrade";'],
+  // Review fixes on #12: fresh deploys never auto-enable; gone rows are out of the migrated count (shared predicate);
+  // ALLOWLIST numbers that are also contacts show read-only "always on"; direct_sent lines carry no names.
+  ["contacts_fresh_deploy_never_on", "src/relay.ts", 'const wasOn = this.meta("deploy_kind") === "upgrade" && this.env.CONTACTS_SNAPSHOT_ONLY === "0";', 'const wasOn = this.env.CONTACTS_SNAPSHOT_ONLY === "0";'],
+  ["contacts_deploy_kind_detect", "src/relay.ts", 'this.setMeta("deploy_kind", prior === 0 ? "fresh" : "upgrade");', 'this.setMeta("deploy_kind", "fresh");'],
+  ["contacts_migrated_gone_predicate", "src/relay.ts", 'const MIGRATED_ON = "migrated=1 AND enabled=1 AND gone_ms IS NULL";', 'const MIGRATED_ON = "migrated=1 AND enabled=1";'],
+  ["contacts_migrated_off_drift", "src/relay.ts", '`SELECT COUNT(*) AS c FROM contact_prefs WHERE ${MIGRATED_ON}`).one()["c"] as number;\n    if (body', '"SELECT COUNT(*) AS c FROM contact_prefs WHERE migrated=1 AND enabled=1").one()["c"] as number;\n    if (body'],
+  ["contacts_allowlist_contact_readonly", "src/relay.ts", "if (always.has(r.e164)) people[i] =", "if (false) people[i] ="],
+  ["direct_sent_no_names", "src/relay.ts", "to_hmac=${targets[i].e164_sha}${mode", "to_hmac=${targets[i].e164_sha} label=${labels[i]}${mode"],
   ["contacts_legacy_once", "src/relay.ts", 'if (this.meta("legacy_allowlist_v1") !== null) return;', ""],
   ["contacts_csrf_identity", "src/relay.ts", "row.email !== who.email.toLowerCase() ||", ""],
   ["contacts_migrated_off_count", "src/relay.ts", 'if (body["confirm_count"] !== n) throw new Refuse("confirm_count_mismatch", 409);', ""],
