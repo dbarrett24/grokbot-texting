@@ -346,6 +346,15 @@ const M = [
   ["gc2_disconnect_revoke", "src/relay.ts", 'revoke = rt ? await this.googleRevoke(rt) : "none";', 'revoke = "none";'],
   ["gc2_disconnect_delete", "src/relay.ts", "this.deleteGoogleAccount(label);\n", ""],
   ["gc2_disconnect_sources", "src/relay.ts", 'this.sql.exec("DELETE FROM contact_sources WHERE account=?", label);', ""],
+  // google-connect PR 3: /contacts Google panel (paste form, Connect button, deep links)
+  ["gc3_client_form_csrf", "src/relay.ts", 'const { form } = await this.googleForm(req);\n    const id = form.get("client_id")', 'const form = await req.formData();\n    const id = form.get("client_id")'],
+  ["gc3_client_validated", "src/relay.ts", 'if (!isClientId(id)) throw new Refuse("google_client_id_invalid");', ""],
+  ["gc3_csp_form_action", "src/relay.ts", "form-action 'self' https://accounts.google.com; base-uri 'none'", "form-action 'self'; base-uri 'none'"],
+  ["gc3_error_code_only", "src/relay.ts", "googleError: gErr && /^[a-z0-9_]{1,80}$/.test(gErr) ? gErr : null,", "googleError: gErr,"],
+  ["gc3_toast_label_only", "src/relay.ts", "const label = (v: string | null) => (v && /^[A-Z0-9_]{1,32}$/.test(v) ? v : null);", "const label = (v: string | null) => v;"],
+  ["gc3_links_noreferrer", "src/contacts.ts", 'target=_blank rel="noopener noreferrer"${GCP_PROJECT_LINKS', 'target=_blank${GCP_PROJECT_LINKS'],
+  ["gc3_connect_needs_client", "src/contacts.ts", 'const canConnect = g.tokenKey === "ok" && g.client !== null && g.client !== "unreadable";', "const canConnect = true;"],
+  ["gc3_disconnect_confirm", "src/contacts.ts", 'class=inl data-confirm="Stop syncing', 'class=inl data-x="Stop syncing'],
 ];
 
 const only = process.argv[2];
