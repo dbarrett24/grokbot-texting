@@ -1258,8 +1258,7 @@ export class Relay extends DurableObject<Env> {
         this.log("google_connect_refused", { detail: `label=${label} reason=google_scope_not_exact revoke=${rv}` });
         throw new Error("google_scope_not_exact");
       }
-      if (!tok.refreshToken) throw new Error("google_no_refresh_token");
-      await this.saveGoogleAccount(label, tok.refreshToken, GOOGLE_SCOPE, null);
+      await this.saveGoogleAccount(label, tok.refreshToken ?? "", GOOGLE_SCOPE, null); // refuses google_no_refresh_token on ""
       this.log("google_connected", { detail: `label=${label}` });
       return this.toContacts({ connected: label });
     } catch (e) {
