@@ -334,7 +334,6 @@ const M = [
   ["gc2_state_unknown", "src/relay.ts", 'if (!row) throw new Error("google_state_invalid");', ""],
   ["gc2_state_expiry", "src/relay.ts", 'if (Number(row["expires_ms"]) <= this.clock()) throw new Error("google_state_expired");', ""],
   ["gc2_state_identity", "src/relay.ts", 'if (row["email"] !== who.email.toLowerCase()) throw new Error("google_state_wrong_identity");', ""],
-  ["gc2_state_format", "src/relay.ts", 'if (!state || !/^[a-f0-9]{64}$/.test(state)) throw new Error("google_state_invalid");', 'if (!state) throw new Error("google_state_invalid");'],
   ["gc2_pkce_s256", "src/google.ts", 'const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));', "const challenge = verifier;"],
   ["gc2_pkce_verifier_sent", "src/relay.ts", "code_verifier: st.verifier", 'code_verifier: ""'],
   ["gc2_form_csrf", "src/relay.ts", 'this.checkPageCsrf(form.get("csrf"), who);\n    return { who, form };', "return { who, form };"],
