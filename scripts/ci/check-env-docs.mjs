@@ -3,8 +3,7 @@
 // Config/doc drift check (mistake class "docs drift": F0, F1, F5, 429d155, pr6 N1, 2987c6e).
 //   1. every [vars] key in wrangler.toml is a field of `interface Env` (src/env.ts)            → error
 //   2. every Env field is named in README.md, DEPLOY.md or SETUP-iphone.md                        → warning today, error with --strict
-// Part 2 is a warning until GATEWAY_BASE_URL and GATEWAY_PBKDF2_ITERATIONS are documented (DEPLOY.md, after the
-// contacts work merges); then `check:env-docs` adds --strict.
+// `npm run check:env-docs` passes --strict (google-connect 4/4 documented the last two), so part 2 is an error.
 // Usage: node scripts/ci/check-env-docs.mjs [--strict] [repoDir]
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
