@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { API, BASE, harness, type Harness } from "./helpers";
 import { fakeGoogle, inRelay, must, sql as sqlOf, type FakeGoogle } from "./google-fixture";
-import { GCP_LINKS } from "../src/contacts";
+import { GCP_LINKS, GCP_PROJECT_LINKS, projectNumberOf, withProject } from "../src/contacts";
 import { GOOGLE_SCOPE } from "../src/google";
 
 const KEY = "ab".repeat(32); // obviously fake
@@ -39,7 +39,7 @@ describe("Set up Google checklist", () => {
     expect(html).toContain('<code id=gredir>https://approve.example.test/contacts/google/callback</code>');
     expect(html).toMatch(/<details id=gsetup open>/);
     for (const k of ["enablePeople", "peopleLibrary", "branding", "audience", "createClient"] as const) expect(html).toContain(`href="${GCP_LINKS[k]}" target=_blank rel="noopener noreferrer" data-gproj`);
-    for (const k of ["createProject", "permissions"] as const) expect(html).not.toContain(`href="${GCP_LINKS[k]}" target=_blank rel="noopener noreferrer" data-gproj`);
+    for (const k of ["createProject", "connections"] as const) expect(html).not.toContain(`href="${GCP_LINKS[k]}" target=_blank rel="noopener noreferrer" data-gproj`);
     expect(html).toMatch(/<button disabled>Connect Google<\/button>/); // no client yet
   });
 
@@ -51,7 +51,7 @@ describe("Set up Google checklist", () => {
       branding: "https://console.cloud.google.com/auth/overview/create",
       audience: "https://console.cloud.google.com/auth/audience",
       createClient: "https://console.cloud.google.com/auth/clients/create",
-      permissions: "https://myaccount.google.com/permissions",
+      connections: "https://myaccount.google.com/connections",
     });
     expect(GOOGLE_SCOPE).toBe("https://www.googleapis.com/auth/contacts.readonly");
   });
@@ -118,7 +118,8 @@ describe("accounts panel + Connect Google end to end", () => {
     const cb = await h.relay.fetch(`${BASE}/contacts/google/callback?state=${state}&code=TEST-ONLY-code`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt() }, redirect: "manual" });
     expect(loc(cb)).toBe("/contacts?connected=WORK");
     const { html } = await page("?connected=WORK");
-    expect(html).toContain("<b>WORK</b>: connected here");
+    expect(html).toMatch(/<b>WORK<\/b>: Connected \S+/);
+    expect(html).not.toContain("myaccount.google.com/permissions");
     expect(html).toContain('action="/contacts/google/disconnect" class=inl data-confirm="Stop syncing WORK? Its contacts are removed from the list, and Google access is revoked."');
     expect(html).toContain("Connected WORK. Press Sync now to load its contacts.");
     expect(html).toContain('<button id=sync>Sync now</button>');
@@ -137,7 +138,7 @@ describe("accounts panel + Connect Google end to end", () => {
 
   it("google_error shows its fix; anything that isn't a plain code is ignored (no reflection)", async () => {
     expect((await page("?google_error=google_scope_not_exact")).html).toContain("Google granted a different permission than read-only contacts, so it was revoked.");
-    expect((await page("?google_error=google_no_refresh_token")).html).toContain("myaccount.google.com/permissions");
+    expect((await page("?google_error=google_no_refresh_token")).html).toContain("myaccount.google.com/connections");
     const evil = await page(`?google_error=${encodeURIComponent('<script>x</script>')}&connected=${encodeURIComponent("<b>")}`);
     expect(evil.html).not.toContain("<script>x");
     expect(evil.html).not.toContain("role=alert");
@@ -148,5 +149,51 @@ describe("accounts panel + Connect Google end to end", () => {
     const { html } = await page();
     expect(html).not.toMatch(/google-consent|setup step google|No Google accounts configured \(GOOGLE_ACCOUNTS\)/);
     expect(html).toContain("No Google accounts yet: use Connect Google below.");
+  });
+});
+
+describe("EL review fixes (deep links land in the right project; disconnect leftovers; rotation status)", () => {
+  it("withProject adds ?project= / &project= to links 2-6 and drops a bad id", () => {
+    expect([...GCP_PROJECT_LINKS]).toEqual(["enablePeople", "peopleLibrary", "branding", "audience", "createClient"]);
+    expect(withProject(GCP_LINKS.enablePeople, "contacts-relay-123456")).toBe("https://console.cloud.google.com/flows/enableapi?apiid=people.googleapis.com&project=contacts-relay-123456");
+    for (const k of ["peopleLibrary", "branding", "audience", "createClient"] as const) expect(withProject(GCP_LINKS[k], "contacts-relay-123456")).toBe(`${GCP_LINKS[k]}?project=contacts-relay-123456`);
+    expect(withProject(GCP_LINKS.audience, "123456789012")).toBe(`${GCP_LINKS.audience}?project=123456789012`);
+    for (const bad of ["", "X", "a b", "evil&x=1", "-bad-start"]) expect(withProject(`${GCP_LINKS.audience}?project=old-project-1`, bad)).toBe(GCP_LINKS.audience);
+  });
+
+  it("the project number comes from a Web client ID", () => {
+    expect(projectNumberOf("123456789012-abc123.apps.googleusercontent.com")).toBe("123456789012");
+    expect(projectNumberOf("123-testonly.apps.googleusercontent.com")).toBeNull();
+    expect(projectNumberOf(null)).toBeNull();
+  });
+
+  it("with a stored client, links 2-6 are rendered with that project and the field is prefilled; the script reuses withProject and blocks project-less clicks", async () => {
+    await inRelay(h, (i) => i.saveGoogleClient("424242-abc123.apps.googleusercontent.com", CLIENT_SECRET));
+    const { html } = await page();
+    for (const k of GCP_PROJECT_LINKS) expect(html).toContain(`href="${withProject(GCP_LINKS[k], "424242").replace(/&/g, "&amp;")}"`);
+    for (const k of ["createProject", "connections"] as const) expect(html).toContain(`href="${GCP_LINKS[k]}"`);
+    expect(html).toContain('value="424242"');
+    expect(html).toContain(`const withProject=${withProject.toString()};`);
+    expect(html).toContain("Type the project ID first");
+    expect(html).toContain("the link lands on the overview page instead");
+  });
+
+  it("a disconnected GOOGLE_ACCOUNTS label: the page says to remove the legacy setting and secret", async () => {
+    await h.setEnv({ GOOGLE_ACCOUNTS: "work", GOOGLE_RT_WORK: "TEST-ONLY-legacy-rt" });
+    await inRelay(h, (i) => i.saveGoogleAccount("WORK", "TEST-ONLY-rt", GOOGLE_SCOPE, null));
+    const r = await post("/contacts/google/disconnect", { csrf: csrfOf((await page()).html), label: "work" });
+    expect(loc(r)).toContain("disconnected=WORK");
+    const { html } = await page();
+    expect(html).toContain("WORK was disconnected here and no longer syncs");
+    expect(html).toContain("npx wrangler secret delete GOOGLE_RT_WORK");
+    expect(html).not.toContain("<b>WORK</b>");
+  });
+
+  it("rotation status: counts rows on the old key, then confirms all are on the current key", async () => {
+    await inRelay(h, async (i) => { await i.saveGoogleClient(CLIENT_ID, CLIENT_SECRET); await i.saveGoogleAccount("WORK", "TEST-ONLY-rt", GOOGLE_SCOPE, null); });
+    await h.setEnv({ GOOGLE_TOKEN_KEY: "cd".repeat(32), GOOGLE_TOKEN_KEY_OLD: KEY });
+    expect((await page()).html).toMatch(/1 of 2 stored Google sign-ins are still on the old GOOGLE_TOKEN_KEY/); // the page load re-sealed the client
+    await inRelay(h, (i) => i.googleRefreshToken("WORK"));
+    expect((await page()).html).toContain("All 2 stored Google sign-ins are on the current GOOGLE_TOKEN_KEY.");
   });
 });

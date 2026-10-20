@@ -79,7 +79,12 @@ describe("POST /contacts/google/start", () => {
 
   it("refuses before going to Google when there is no GOOGLE_TOKEN_KEY or no client", async () => {
     await h.setEnv({ GOOGLE_TOKEN_KEY: "" });
-    expect((await start()).status).toBe(503);
+    expect(where(await start()).searchParams.get("google_error")).toBe("google_token_key_missing");
+    await h.setEnv({ GOOGLE_TOKEN_KEY: "not-a-valid-key" });
+    const bad = await start();
+    expect(bad.status).toBe(303); // a code on the page, not a 500
+    expect(where(bad).searchParams.get("google_error")).toBe("google_token_key_invalid");
+    expect(await sql("SELECT * FROM google_oauth_state")).toEqual([]);
     await h.setEnv({ GOOGLE_TOKEN_KEY: KEY });
     await sql("DELETE FROM google_client");
     expect(where(await start()).searchParams.get("google_error")).toBe("google_client_not_configured");
@@ -190,6 +195,23 @@ describe("POST /contacts/google/disconnect", () => {
     expect(await sql("SELECT * FROM contact_sources WHERE account='WORK'")).toEqual([]);
     expect(await sql("SELECT * FROM meta WHERE k LIKE 'acct:WORK:%'")).toEqual([]);
     expect((await sql("SELECT detail FROM log WHERE event='google_disconnected'"))[0]?.["detail"]).toBe("label=WORK revoke=ok");
+  });
+
+  it("a disconnected GOOGLE_ACCOUNTS label stops syncing: no fallback to GOOGLE_RT_<LABEL> until it is connected again", async () => {
+    await seed();
+    await h.setEnv({ GOOGLE_ACCOUNTS: "work", GOOGLE_RT_WORK: "TEST-ONLY-legacy-rt" });
+    await form("/contacts/google/disconnect", { csrf: await pageCsrf(), label: "work" });
+    expect(await inRelay(h, (i) => i.googleLabels())).toEqual([]);
+    expect(await inRelay(h, (i) => i.googleLegacyLeftovers())).toEqual(["WORK"]);
+    const r = await inRelay(h, (i) => i.syncContacts({ alert: false }));
+    expect(r).toEqual({ updated: [], failed: [] });
+    expect(g.tokenCalls.map((c) => c.get("refresh_token"))).not.toContain("TEST-ONLY-legacy-rt");
+    expect(await sql("SELECT * FROM contact_sources WHERE account='WORK'")).toEqual([]);
+    // Connecting again clears the marker.
+    const state = must(new URL(must((await start()).headers.get("location"))).searchParams.get("state"));
+    await callback({ state, code: "TEST-ONLY-code" });
+    expect(await inRelay(h, (i) => i.googleLabels())).toEqual(["WORK"]);
+    expect(await inRelay(h, (i) => i.googleLegacyLeftovers())).toEqual([]);
   });
 
   it("still deletes when Google's revoke fails, and says so", async () => {
