@@ -99,10 +99,10 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     expect(run(["confirm-fingerprint", "--dry-run"], yes).out).toContain("pinned=yes");
     expect(run(["config"]).out).toContain("result=ok");
     const k = run(["keys"]);
-    expect(k.out).toContain("made=REQUEST_TOKEN,LOG_HASH_KEY ");
+    expect(k.out).toContain("made=REQUEST_TOKEN,LOG_HASH_KEY,GOOGLE_TOKEN_KEY ");
     expect(k.out).not.toContain("GATEWAY_PASSPHRASE");
     const s = run(["secrets", "--dry-run"]);
-    expect(s.out).toContain("names=REQUEST_TOKEN,LOG_HASH_KEY,ACCESS_AUD,APPROVER_EMAIL,OWNER_NUMBER,ALLOWLIST,GATEWAY_USER,GATEWAY_PASS,GATEWAY_DEVICE_ID,GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION,GATEWAY_MODE ");
+    expect(s.out).toContain("names=REQUEST_TOKEN,LOG_HASH_KEY,ACCESS_AUD,APPROVER_EMAIL,OWNER_NUMBER,ALLOWLIST,GATEWAY_USER,GATEWAY_PASS,GATEWAY_DEVICE_ID,GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION,GATEWAY_MODE,GOOGLE_TOKEN_KEY ");
     expect(s.out).not.toMatch(/names=[^ ]*GATEWAY_PASSPHRASE/);
     const e = env();
     expect(e.GATEWAY_PINNED_FINGERPRINT).toBe(fingerprintOf(KEY_A));
@@ -116,7 +116,7 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     const g = run(["gateway-check"], { FAKE_DEVICES: dev() });
     expect(g.out).toContain("reason=passphrase");
     expect(settings().deviceKey).toBe(false);
-    expect(run(["keys"]).out).toContain("made=REQUEST_TOKEN,LOG_HASH_KEY,GATEWAY_PASSPHRASE ");
+    expect(run(["keys"]).out).toContain("made=REQUEST_TOKEN,LOG_HASH_KEY,GOOGLE_TOKEN_KEY,GATEWAY_PASSPHRASE ");
     expect(run(["secrets", "--dry-run"]).out).toMatch(/names=[^ ]*GATEWAY_PASSPHRASE/);
   });
 
@@ -292,7 +292,7 @@ describe.skipIf(process.platform === "win32")("CARO vet fixes", () => {
     expect(k.out).toContain("gateway_mode=device_key");
     expect(k.out).not.toContain("GATEWAY_PASSPHRASE");
     const sec = run(["secrets", "--dry-run"]);
-    expect(sec.out).toMatch(/names=[^ ]*GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION,GATEWAY_MODE /);
+    expect(sec.out).toMatch(/names=[^ ]*GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION,GATEWAY_MODE(,GOOGLE_TOKEN_KEY)? /);
     expect(sec.out).not.toContain("would_remove=GATEWAY_PINNED_FINGERPRINT");
     expect(run(["smoke", "--dry-run"], { RELAY_DRYRUN_DEVICES: dev(KEY_A, 1) }).out).toContain("step=smoke-gateway result=ok mode=device_key");
     // an explicit choice still wins
@@ -412,9 +412,9 @@ describe.skipIf(process.platform === "win32")("default mode: passphrase while th
     expect(g.out).toContain("step=gateway_mode result=ok reason=passphrase hint=default_while_app_v1.77.0-1.77.4_device_key_decrypt_bug");
     expect(env()).not.toHaveProperty("PENDING_FINGERPRINT");
     expect(run(["confirm-fingerprint", "--dry-run"], yes).out).toContain("result=skip reason=gateway_mode_passphrase");
-    expect(run(["keys"]).out).toContain("made=REQUEST_TOKEN,LOG_HASH_KEY,GATEWAY_PASSPHRASE ");
+    expect(run(["keys"]).out).toContain("made=REQUEST_TOKEN,LOG_HASH_KEY,GOOGLE_TOKEN_KEY,GATEWAY_PASSPHRASE ");
     const s = run(["secrets", "--dry-run"]);
-    expect(s.out).toMatch(/names=[^ ]*GATEWAY_PASSPHRASE,GATEWAY_MODE /);
+    expect(s.out).toMatch(/names=[^ ]*GATEWAY_PASSPHRASE,GATEWAY_MODE(,GOOGLE_TOKEN_KEY)? /);
     expect(s.out).not.toMatch(/names=[^ ]*GATEWAY_PINNED_FINGERPRINT/);
     expect(s.out).toContain("would_remove=GATEWAY_PINNED_FINGERPRINT_if_set,GATEWAY_KEY_VERSION_if_set"); // not deployed: can't list
   });
@@ -438,7 +438,7 @@ describe.skipIf(process.platform === "win32")("default mode: passphrase while th
     expect(run(["keys"]).out).toContain("made=GATEWAY_PASSPHRASE ");
     const e = env();
     const d = run(["secrets", "--dry-run"]);
-    expect(d.out).toMatch(/result=dry_run gateway_mode=passphrase would_set=\d+ names=[^ ]*GATEWAY_PASSPHRASE,GATEWAY_MODE would_remove=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION( owner_next=\S+)?$/m);
+    expect(d.out).toMatch(/result=dry_run gateway_mode=passphrase would_set=\d+ names=[^ ]*GATEWAY_PASSPHRASE,GATEWAY_MODE(,GOOGLE_TOKEN_KEY)? would_remove=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION( owner_next=\S+)?$/m);
     for (const v of Object.values(e)) if (String(v).length >= 8) expect(d.out).not.toContain(String(v));
     expect(calls()).toEqual(["secret list --format json"]); // read-only; nothing put or deleted
     expect(worker()).toContain("GATEWAY_PINNED_FINGERPRINT");
