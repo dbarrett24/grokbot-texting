@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "node scripts/check-example-numbers.mjs && vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "mutation": "bash scripts/mutation-check.sh",
     "lint": "oxlint --type-aware .",
@@ -14,7 +14,8 @@
     "verify": "node scripts/verify.mjs",
     "check:env-docs": "node scripts/ci/check-env-docs.mjs",
     "check:ancestors": "node scripts/ci/check-ancestors.mjs",
-    "check:pii": "node scripts/ci/pii-scan.mjs"
+    "check:pii": "node scripts/ci/pii-scan.mjs",
+    "check:numbers": "node scripts/check-example-numbers.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.4",

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
-import { harness, API, BASE, OWNER, type Harness } from "./helpers";
+import type { Relay } from "../src/relay";
+import { harness, API, BASE, OWNER, type Harness, enableAll } from "./helpers";
 
 // Fake Google: each refresh token maps to one account's People API pages. All values are TEST-ONLY.
 type Person = { names?: { displayName?: string; givenName?: string }[]; phoneNumbers?: { value?: string; canonicalForm?: string; type?: string }[] };
@@ -14,7 +15,7 @@ let google: Record<string, { pages?: Person[][]; tokenStatus?: number; peopleSta
 const runIn = runInDurableObject as unknown as (s: unknown, f: (i: any) => Promise<any>) => Promise<any>;
 const sql = (q: string, ...a: unknown[]) => runIn(h.relay, async (i) => i.ctx.storage.sql.exec(q, ...a).toArray()) as Promise<any[]>;
 const merged = async () => Object.fromEntries((await sql("SELECT e164, name FROM contacts ORDER BY e164")).map((r) => [r.e164, r.name]));
-const sync = () => runIn(h.relay, async (i) => i.syncContacts());
+const sync = async () => { const r = await runInDurableObject(h.relay, (i: Relay) => i.syncContacts()); await enableAll(h); return r; };
 const logRows = () => sql("SELECT event, detail FROM log ORDER BY seq");
 const ownerTexts = async () => Promise.all(h.messagesPosted().map(async (m) => ({ to: await h.decrypt(m.phoneNumbers[0]), text: await h.decrypt(m.textMessage.text) }))).then((p) => p.filter((x) => x.to === OWNER).map((x) => x.text));
 

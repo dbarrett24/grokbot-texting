@@ -20,11 +20,11 @@ export interface Env {
   ALLOW_EMAIL_OTP?: string; // "1" (exact; the template's normal setting) = skip REQUIRED_AMR when idp.type is "cloudflare" (method=email_otp)
   //                             or when the token has no amr and no idp claim at all (method=email_otp_or_policy). The passkey then rests on the Access policy alone
   REQUEST_HOST: string; // hostname serving only POST /request, POST /send and GET /request/:id (no Access)
-  APPROVE_HOST: string; // hostname serving only /approve/*, /log, /direct*, /contacts (whole host behind Access)
+  APPROVE_HOST: string; // hostname serving only /approve/*, /log, /direct*, /contacts* (whole host behind Access; every /contacts* path is 404 on REQUEST_HOST)
   DISABLED?: string; // "1" = kill switch: refuse everything (direct sends included)
   // ---- direct send (POST /send). See README "Direct send". ----
   DIRECT_SEND?: string; // "1" (exact; template default) = on. REQUEST_TOKEN can then send WITHOUT approval to numbers on the direct list
-  CONTACTS_SNAPSHOT_ONLY?: string; // only gates the DIRECT_ALLOWLIST secret: exact "0" (template default) = included; anything else/unset = excluded. Google sync, upload and the tap ALLOWLIST are always included
+  CONTACTS_SNAPSHOT_ONLY?: string; // REMOVED. Read once, by the DIRECT_ALLOWLIST upgrade import only: exact "0" = those entries were textable, so they stay on (flagged)
   RUNAWAY_PAUSE?: string; // unset = on; only "0" (template default) turns it off. More than RUNAWAY_MAX direct sends in 60 min pauses direct send
   RUNAWAY_MAX?: string; // default "10"
   DIRECT_DAILY_CAP?: string; // opt-in; unset/"off" = no cap; digits 1..100000; garbage = direct refused
@@ -38,7 +38,7 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string; // secret
   // GOOGLE_RT_<LABEL>: secret refresh token per account, read dynamically (e.g. GOOGLE_RT_PRIMARY)
   LOG_HASH_KEY?: string; // secret, 32+ chars: HMAC key for number and body hashes. Missing = direct send refused (direct_config_invalid); tap log rows fall back to plain SHA-256
-  DIRECT_ALLOWLIST?: string; // secret, optional, JSON {"+<E.164>":"name"}; ignored unless CONTACTS_SNAPSHOT_ONLY="0"
+  DIRECT_ALLOWLIST?: string; // DEPRECATED secret, JSON {"+<E.164>":"name"}: imported ONCE as the ALLOWLIST_LEGACY source (flagged), then ignored. Delete it after review
   // ---- secrets (wrangler secret put) ----
   REQUEST_TOKEN: string; // request-only bearer token used by the bot
   ACCESS_AUD: string; // Access application AUD tag

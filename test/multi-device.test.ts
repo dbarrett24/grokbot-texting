@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
-import { harness, postRequest, approve, API, BASE, OWNER, FRIEND, TWO, type Harness } from "./helpers";
+import { harness, postRequest, approve, API, BASE, OWNER, FRIEND, TWO, type Harness , enableAll } from "./helpers";
 import { scan } from "./phone-scan";
 
 // Multi-send, group mode and tap requests by name alongside the iPhone delivery paths (DELIVERY=mac|shortcut).
@@ -38,7 +38,12 @@ async function claim(): Promise<any> {
   expect(r.status).toBe(200);
   return ((await r.json()) as any).job;
 }
-async function upload() {
+async function upload(...a: Parameters<typeof uploadRaw>) {
+  const r = await uploadRaw(...a);
+  if (r.ok) await enableAll(h);
+  return r;
+}
+async function uploadRaw() {
   return h.relay.fetch(`${BASE}/contacts`, { method: "POST", headers: { "content-type": "application/json", "Cf-Access-Jwt-Assertion": await h.jwt() }, body: JSON.stringify(SNAPSHOT) });
 }
 /**

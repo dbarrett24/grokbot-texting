@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
-import { harness, postRequest, approve, API, BASE, OWNER, FRIEND, TWO, STRANGER, T0, type Harness } from "./helpers";
+import { harness, postRequest, approve, API, BASE, OWNER, FRIEND, TWO, STRANGER, T0, type Harness , enableAll } from "./helpers";
 import { sha256Hex, hmacHex, importHmacKey } from "../src/e2e";
+import type { Relay } from "../src/relay";
 
 const TEST_KEY = "TEST-ONLY-log-hash-key-not-a-real-secret";
 const hm = async (s: string, k = TEST_KEY) => hmacHex(await importHmacKey(k), s);
@@ -30,7 +31,12 @@ const count = async (q: string, ...a: unknown[]) => (await sql(q, ...a))[0].c as
 const logRows = () => sql("SELECT event, request_id, recipient, sha256, detail FROM log ORDER BY seq");
 const direct = (body: unknown, token = "TEST-ONLY-request-token") =>
   h.relay.fetch(`${API}/send`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-async function upload(snap: unknown = SNAPSHOT, opts: { jwt?: string | null; ct?: string; origin?: string } = {}) {
+async function upload(...a: Parameters<typeof uploadRaw>) {
+  const r = await uploadRaw(...a);
+  if (r.ok) await enableAll(h);
+  return r;
+}
+async function uploadRaw(snap: unknown = SNAPSHOT, opts: { jwt?: string | null; ct?: string; origin?: string } = {}) {
   const headers: Record<string, string> = { "content-type": opts.ct ?? "application/json" };
   const jwt = opts.jwt === undefined ? await h.jwt() : opts.jwt;
   if (jwt) headers["Cf-Access-Jwt-Assertion"] = jwt;
@@ -528,17 +534,26 @@ describe("contacts snapshot upload", () => {
   });
 });
 
-describe("CONTACTS_SNAPSHOT_ONLY", () => {
-  it.each([undefined, "1", "yes"])("%j (on): the DIRECT_ALLOWLIST secret is ignored", async (v) => {
+describe("DIRECT_ALLOWLIST (deprecated): imported once as flagged legacy", () => {
+  const prefOf = (e164: string) => runInDurableObject(h.relay, (_i: Relay, state: DurableObjectState) => state.storage.sql.exec("SELECT p.enabled, p.migrated FROM contacts c JOIN contact_prefs p ON p.person_key=c.e164_sha WHERE c.e164=?", e164).toArray()[0]);
+  it.each([undefined, "1", "yes"])("CONTACTS_SNAPSHOT_ONLY=%j (entries were not textable): imported flagged but OFF", async (v) => {
     await h.setEnv({ CONTACTS_SNAPSHOT_ONLY: v as unknown as string, DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person" }) });
     await expectRefused(await direct({ to: OTHER, body: "x" }), 403, "recipient_not_on_allowlist");
-    expect(await (await direct({ to_name: "Other Person", body: "x" })).json()).toEqual({ state: "no_match", candidates: [] });
+    expect(await prefOf(OTHER)).toEqual({ enabled: 0, migrated: 1 });
   });
 
-  it("\"0\" (off): DIRECT_ALLOWLIST numbers are also direct", async () => {
+  it("CONTACTS_SNAPSHOT_ONLY=\"0\" (old default, entries were textable): imported ON and flagged, so the bot keeps working", async () => {
     await h.setEnv({ CONTACTS_SNAPSHOT_ONLY: "0", DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person" }) });
     expect(await (await direct({ to: OTHER, body: "x" })).json()).toMatchObject({ state: "sent", to: "Other Person" });
     expect(await sentTo()).toEqual([OTHER]);
+    expect(await prefOf(OTHER)).toEqual({ enabled: 1, migrated: 1 });
+  });
+
+  it("runs once: a later edit to the secret adds no one", async () => {
+    await h.setEnv({ CONTACTS_SNAPSHOT_ONLY: "0", DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person" }) });
+    expect((await direct({ to: OTHER, body: "x" })).status).toBe(200);
+    await h.setEnv({ DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person", [STRANGER]: "Late Add" }) });
+    await expectRefused(await direct({ to: STRANGER, body: "x" }), 403, "recipient_not_on_allowlist");
   });
 });
 
@@ -596,9 +611,10 @@ describe("LOG_HASH_KEY (HMAC for number and body hashes)", () => {
     expect((await logRows()).find((x) => x.event === "direct_sent").detail).toMatch(new RegExp(`to_hmac=(${await hm(`num:${KB}`, NEW)}|${await hm(`num:${KO}`, NEW)})`));
   });
 
-  it("a fresh upload stores no hashes until the next direct request", async () => {
-    expect((await upload()).status).toBe(200);
-    expect(await count("SELECT COUNT(*) AS c FROM contact_sources WHERE e164_sha IS NOT NULL")).toBe(0);
+  it("a fresh upload hashes no new number until the next direct request (known numbers keep theirs, for key rotation)", async () => {
+    expect((await uploadRaw({ ...SNAPSHOT, contacts: [...SNAPSHOT.contacts, { name: "Late Add", numbers: [{ e164: OTHER, label: "mobile" }] }] })).status).toBe(200);
+    expect(await count("SELECT COUNT(*) AS c FROM contact_sources WHERE e164_sha IS NOT NULL AND e164=?", OTHER)).toBe(0);
+    expect(await count("SELECT COUNT(*) AS c FROM contact_sources WHERE e164_sha IS NULL AND e164<>?", OTHER)).toBe(0);
     await direct({ to: FRIEND, body: "x" });
     expect(await count("SELECT COUNT(*) AS c FROM contact_sources WHERE e164_sha IS NULL")).toBe(0);
   });
