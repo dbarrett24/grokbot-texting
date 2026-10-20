@@ -5,7 +5,7 @@ import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./pass
 import { verifyAccess, type Net } from "./access";
 import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, isClientId, isClientSecret, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
-  CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
+  CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, projectNumberOf, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
 } from "./contacts";
 import { E164, Refuse, hasLink, localDate, maskNumber, parseAllowlist, parseCount, parseSwitch, parseTapConfig, parseTimezone, sendCap, validateRequestBody, validateTapText, type TapConfig } from "./rules";
 import {
@@ -1328,7 +1328,20 @@ export class Relay extends DurableObject<Env> {
       client = "unreadable";
     }
     const stored = new Set(this.sql.exec("SELECT label FROM google_accounts").toArray().flatMap((r) => (typeof r["label"] === "string" ? [r["label"]] : [])));
-    return { tokenKey, client, redirectUri: this.googleRedirectUri(), accounts: this.googleLabels().map((label) => ({ label, stored: stored.has(label), fromSeed: !stored.has(label) && !!this.legacyRt(label) })) };
+    let project: string | null = null;
+    try {
+      project = projectNumberOf((await this.googleClient())?.id ?? null);
+    } catch {
+      project = null;
+    }
+    const when = new Map(this.sql.exec("SELECT label, connected_ms FROM google_accounts").toArray().flatMap((r) => (typeof r["label"] === "string" && typeof r["connected_ms"] === "number" ? [[r["label"], r["connected_ms"]] as const] : [])));
+    const ks = await this.googleKeyStatus();
+    return {
+      tokenKey, client, project, redirectUri: this.googleRedirectUri(),
+      accounts: this.googleLabels().map((label) => { const ms = when.get(label); return { label, stored: stored.has(label), fromSeed: !stored.has(label) && !!this.legacyRt(label), connected: ms === undefined ? null : this.fmtTime(ms) }; }),
+      leftovers: this.googleLegacyLeftovers(),
+      keyStatus: { total: ks.total, onOld: ks.onOld },
+    };
   }
 
   /** POST /contacts/google/disconnect {csrf, label}: revoke at Google, delete the sealed token and that label's contacts. */
@@ -1538,7 +1551,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
       canSync: accts.length > 0,
       toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors: see Health"
         : label(connected) ? `Connected ${label(connected)}. Press Sync now to load its contacts.`
-        : label(disconnected) ? `Disconnected ${label(disconnected)}${q.get("revoke") === "failed" ? " (Google didn't confirm the revoke: remove it at myaccount.google.com/permissions)" : ""}`
+        : label(disconnected) ? `Disconnected ${label(disconnected)}${q.get("revoke") === "failed" ? " (Google didn't confirm the revoke: remove it at myaccount.google.com/connections)" : ""}`
         : q.get("google_client") === "saved" ? "Google client saved" : null,
       hashKeyMissing: !key,
       google: await this.googlePanel(),

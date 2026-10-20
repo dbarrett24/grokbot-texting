@@ -357,6 +357,14 @@ const M = [
   ["gc3_toast_label_only", "src/relay.ts", "const label = (v: string | null) => (v && /^[A-Z0-9_]{1,32}$/.test(v) ? v : null);", "const label = (v: string | null) => v;"],
   ["gc3_links_noreferrer", "src/contacts.ts", 'target=_blank rel="noopener noreferrer"${GCP_PROJECT_LINKS', 'target=_blank${GCP_PROJECT_LINKS'],
   ["gc3_connect_needs_client", "src/contacts.ts", 'const canConnect = g.tokenKey === "ok" && g.client !== null && g.client !== "unreadable";', "const canConnect = true;"],
+  ["gc3_links_use_project", "src/contacts.ts", "const href = proj && g.project ? withProject(L[k], g.project) : L[k];", "const href = L[k];"],
+  ["gc3_withproject_sets", "src/contacts.ts", 'u.searchParams.set("project", id);', ""],
+  ["gc3_withproject_validates", "src/contacts.ts", 'if (/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(id) || /^[0-9]{6,20}$/.test(id)) u.searchParams', 'if (id) u.searchParams'],
+  ["gc3_project_from_client", "src/relay.ts", "project = projectNumberOf((await this.googleClient())?.id ?? null);", "project = null;"],
+  ["gc3_click_guard", "src/contacts.ts", 'toast("Type the project ID first, so this opens in the right project")', 'void 0'],
+  ["gc3_leftover_notice", "src/relay.ts", "leftovers: this.googleLegacyLeftovers(),", "leftovers: [],"],
+  ["gc3_key_status", "src/relay.ts", "keyStatus: { total: ks.total, onOld: ks.onOld },", "keyStatus: { total: ks.total, onOld: 0 },"],
+  ["gc3_connected_date", "src/relay.ts", "connected: ms === undefined ? null : this.fmtTime(ms)", "connected: null"],
   ["gc3_disconnect_confirm", "src/contacts.ts", 'class=inl data-confirm="Stop syncing', 'class=inl data-x="Stop syncing'],
 ];
 
