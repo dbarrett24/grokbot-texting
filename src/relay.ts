@@ -1160,6 +1160,22 @@ export class Relay extends DurableObject<Env> {
     this.sql.exec("INSERT OR REPLACE INTO google_accounts(label, email, rt_ct, rt_iv, scope, connected_ms, key_ver) VALUES(?,?,?,?,?,?,?)", label, email, s.ct, s.iv, scope, connectedMs, s.kid);
   }
 
+  /**
+   * Rotation check: how many stored rows (sign-ins + the client) are sealed under the current GOOGLE_TOKEN_KEY.
+   * Delete GOOGLE_TOKEN_KEY_OLD only when onOld is 0.
+   */
+  async googleKeyStatus(): Promise<{ total: number; onCurrent: number; onOld: number }> {
+    let cur: TokenKey | null = null;
+    try {
+      cur = (await this.tokenKeys()).cur;
+    } catch {
+      cur = null;
+    }
+    const kids = [...this.sql.exec("SELECT key_ver FROM google_accounts").toArray(), ...this.sql.exec("SELECT key_ver FROM google_client").toArray()].map((r) => r["key_ver"]);
+    const onCurrent = kids.filter((k) => cur !== null && k === cur.kid).length;
+    return { total: kids.length, onCurrent, onOld: kids.length - onCurrent };
+  }
+
   /** Remove a label's stored token. (Revoking at Google is the Disconnect route's job.) */
   deleteGoogleAccount(label: string): boolean {
     const n = this.sql.exec("SELECT COUNT(*) AS c FROM google_accounts WHERE label=?", label).one()["c"] as number;
