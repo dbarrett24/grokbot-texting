@@ -340,7 +340,7 @@ const M = [
   ["gc2_form_origin", "src/relay.ts", 'this.sameOrigin(req, false);\n    const form = await req.formData();\n    this.checkPageCsrf', "const form = await req.formData();\n    this.checkPageCsrf"],
   ["gc2_host_404", "src/relay.ts", 'if (host !== apprHost) return json(404, { error: "not_found" });', ""],
   ["gc2_start_needs_key", "src/relay.ts", "await this.requireTokenKey(); // nowhere to keep", "// nowhere to keep"],
-  ["gc2_no_refresh_token", "src/relay.ts", 'if (!tok.refreshToken) throw new Error("google_no_refresh_token");', ""],
+  ["gc2_no_refresh_token", "src/relay.ts", 'if (!refreshToken) throw new Refuse("google_no_refresh_token");', ""],
   ["gc2_disconnect_revoke", "src/relay.ts", 'revoke = rt ? await this.googleRevoke(rt) : "none";', 'revoke = "none";'],
   ["gc2_disconnect_delete", "src/relay.ts", "this.deleteGoogleAccount(label);\n", ""],
   ["gc2_disconnect_sources", "src/relay.ts", 'this.sql.exec("DELETE FROM contact_sources WHERE account=?", label);', ""],
