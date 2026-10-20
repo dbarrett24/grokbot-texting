@@ -61,10 +61,13 @@ export function parseEnableAllBody(b: Record<string, unknown>): { keys: string[]
   return { keys: [...new Set(b["keys"] as string[])], confirm: b["confirm_count"] };
 }
 
+/** One fix line for google_token_key_missing, shared by the sync table and the /contacts google_error table. */
+export const TOKEN_KEY_MISSING_FIX = "GOOGLE_TOKEN_KEY is missing or doesn't match: run setup step keys, then secrets (DEPLOY.md section 14 for rotation).";
+
 /** Sync error code → the DEPLOY.md fix text (section 9 table). */
 export const SYNC_FIX: Record<string, string> = {
   google_client_not_configured: "No Google client yet: finish Set up Google below (paste the Client ID and secret).",
-  google_token_key_missing: "GOOGLE_TOKEN_KEY is missing or doesn't match: run setup step keys, then secrets (DEPLOY.md section 14 for rotation).",
+  google_token_key_missing: TOKEN_KEY_MISSING_FIX,
   google_token_decrypt_failed: "The stored Google token can't be read: press Reconnect for that account.",
   default_country_code_invalid: "Set DEFAULT_COUNTRY_CODE (DEPLOY.md section 5) and deploy.",
   google_people_status_403: "People API not enabled: DEPLOY.md section 9 step 2.",
@@ -99,7 +102,8 @@ export const GOOGLE_ERROR_FIX: Record<string, string> = {
   google_client_not_configured: "Paste the Client ID and secret first (Set up Google).",
   google_client_id_invalid: "That doesn't look like a Client ID (it ends in .apps.googleusercontent.com).",
   google_client_secret_invalid: "That doesn't look like a client secret.",
-  google_token_key_missing: "GOOGLE_TOKEN_KEY is not set: run setup step keys, then secrets.",
+  google_token_key_missing: TOKEN_KEY_MISSING_FIX,
+  google_token_key_invalid: "GOOGLE_TOKEN_KEY is malformed (it must be 32 bytes, as hex or base64): make a new one with setup step keys, then secrets (DEPLOY.md section 14).",
   google_consent_denied: "Google sign-in was cancelled.",
   google_state_invalid: "That sign-in link was already used or isn't ours. Press Connect Google again.",
   google_state_expired: "The sign-in took longer than 10 minutes. Press Connect Google again.",
