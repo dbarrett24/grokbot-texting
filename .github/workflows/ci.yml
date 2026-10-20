@@ -1,0 +1,75 @@
+# CI for sms-relay-template: a subset of `npm run verify` (see AGENTS.md).
+# Blocking: npm ci, both tsc configs (`npm run typecheck`), `npm test`, gitleaks, `npm run check:ancestors`.
+# Advisory (continue-on-error, so in-flight branches aren't blocked): lint + lint ratchet, strict-next and .mjs
+# typecheck ratchets, env/doc drift. They become blocking in a later PR, once the contacts work has merged.
+# Personal-data scan: blocking once the PII_TERMS repo secret exists; until then only the phone-number scan runs.
+# Mutation: nightly, on manual dispatch, or when a PR has the `mutation` label. No deploy, no Cloudflare secrets.
+name: ci
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 9 * * *" # nightly mutation run, 09:17 UTC (3:17 AM MT)
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  # The event name keeps the nightly (ref main) out of the push-to-main group, so a merge can't cancel it.
+  # Labeled runs (mutation only) get their own group, so adding a label never cancels a PR's verify run.
+  group: ci-${{ github.event_name }}-${{ github.event.action == 'labeled' && 'labeled' || 'run' }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+jobs:
+  verify:
+    if: github.event_name != 'schedule' && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: typecheck (both tsc configs)
+        run: npm run typecheck
+      - name: tests
+        run: npm test
+      - name: banned ancestors (746a756, d9811fc)
+        run: npm run check:ancestors
+      - name: gitleaks
+        env:
+          GITLEAKS_SHA256: 5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
+        run: |
+          curl -sSfL -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          echo "$GITLEAKS_SHA256  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          ./gitleaks git --redact --no-banner .
+          ./gitleaks dir --redact --no-banner .
+      - name: lint + ratchets (advisory)
+        continue-on-error: true
+        run: |
+          npm run lint
+          npm run lint:ratchet
+          npm run typecheck:strict-next
+          npm run typecheck:scripts
+      - name: env/doc drift (advisory)
+        continue-on-error: true
+        run: npm run check:env-docs
+      - name: personal-data scan
+        if: github.event_name == 'pull_request'
+        env:
+          PII_TERMS: ${{ secrets.PII_TERMS }}
+          PII_REQUIRED: ${{ secrets.PII_TERMS != '' && '1' || '0' }}
+        run: node scripts/ci/pii-scan.mjs --range "origin/${{ github.base_ref }}..HEAD"
+  mutation:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'mutation'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: mutation
+        run: npm run mutation
