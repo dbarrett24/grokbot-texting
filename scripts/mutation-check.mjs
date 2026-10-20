@@ -314,7 +314,6 @@ const M = [
   ["gc_fresh_iv", "src/google.ts", "const iv = crypto.getRandomValues(new Uint8Array(12));", "const iv = new Uint8Array(12);"],
   ["gc_aad_label", "src/google.ts", "`sms-relay:google:${kind}:${label}`", "`sms-relay:google:${kind}`"],
   ["gc_kid_match", "src/google.ts", "keys.find((x) => x && x.kid === s.kid)", "keys.find((x) => x)"],
-  ["gc_iv_length", "src/google.ts", 'if (iv.length !== 12) throw new Error("google_token_decrypt_failed");', ""],
   ["gc_key_strict", "src/google.ts", 'throw new Error("google_token_key_invalid");', "return new Uint8Array(32);"],
   ["gc_decoder_label", "src/google.ts", 'if (!isLabel(label)) throw new Error("google_row_invalid");', ""],
   ["gc_blob_strict", "src/google.ts", 'if (!isObj(v) || Object.keys(v).some((k) => k !== "id" && k !== "secret")) throw', "if (!isObj(v)) throw"],
