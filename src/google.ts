@@ -21,12 +21,12 @@ const b64 = (u: Uint8Array) => btoa(String.fromCharCode(...u));
 export function parseTokenKeyBytes(raw: string | undefined): Uint8Array | null {
   if (raw === undefined || raw.trim() === "") return null;
   const t = raw.trim();
-  if (/^[0-9a-fA-F]{64}$/.test(t)) return Uint8Array.from(t.match(/../g)!.map((h) => parseInt(h, 16)));
+  if (/^[0-9a-fA-F]{64}$/.test(t)) return Uint8Array.from({ length: 32 }, (_, i) => parseInt(t.slice(i * 2, i * 2 + 2), 16));
   if (/^[A-Za-z0-9+/]{43}=$/.test(t)) {
     const b = unb64(t);
     if (b.length === 32) return b;
   }
-  return new Uint8Array(32);
+  throw new Error("google_token_key_invalid");
 }
 
 /** Import a key; kid = first 16 hex of SHA-256(key bytes), stored per row so rotation knows which key sealed it. */
