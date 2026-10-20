@@ -45,7 +45,7 @@ const M = [
   ["upload_unknown_fields", "src/direct.ts", 'if (Object.keys(o).some((k) => k !== "name" && k !== "given" && k !== "numbers")) bad("unknown_field");', ""],
   // contacts sync
   ["sync_empty_keeps_old", "src/relay.ts", 'if (!snap.rows.length) throw new Error("empty_result");', ""],
-  ["sync_name_precedence", "src/relay.ts", "const order = [...parseAccounts(this.env.GOOGLE_ACCOUNTS).valid, UPLOAD_SOURCE];", "const order = [...parseAccounts(this.env.GOOGLE_ACCOUNTS).valid.reverse(), UPLOAD_SOURCE];"],
+  ["sync_name_precedence", "src/relay.ts", "const order = [...this.googleLabels(), UPLOAD_SOURCE, LEGACY_SOURCE];", "const order = [...this.googleLabels().reverse(), UPLOAD_SOURCE, LEGACY_SOURCE];"],
   ["sync_missing_secret", "src/relay.ts", "if (!rt) {\n        failed.push", "if (false) {\n        failed.push"],
   ["sync_label_charset", "src/direct.ts", "if (!/^[A-Z0-9_]+$/.test(label) ||", "if ("],
   // review round
@@ -310,6 +310,22 @@ const M = [
   ["contacts_gone_30_days", "src/relay.ts", 'this.sql.exec("DELETE FROM contact_prefs WHERE gone_ms IS NOT NULL AND gone_ms < ?", now - GONE_KEEP_MS);', ""],
   ["contacts_page_requires_json", "src/relay.ts", 'throw new Refuse("contacts_must_be_json", 415);\n    let raw', '{}\n    let raw'],
   ["example_numbers_repo_check", "scripts/check-example-numbers.mjs", "if (!/^01\\d\\d$/.test(m[m.length - 1] ?? \"\"))", "if (false)"],
+  // google-connect PR 1: sealed storage (src/google.ts + Relay storage methods)
+  ["gc_fresh_iv", "src/google.ts", "const iv = crypto.getRandomValues(new Uint8Array(12));", "const iv = new Uint8Array(12);"],
+  ["gc_aad_label", "src/google.ts", "`sms-relay:google:${kind}:${label}`", "`sms-relay:google:${kind}`"],
+  ["gc_kid_match", "src/google.ts", "keys.find((x) => x && x.kid === s.kid)", "keys.find((x) => x)"],
+  ["gc_key_strict", "src/google.ts", 'throw new Error("google_token_key_invalid");', "return new Uint8Array(32);"],
+  ["gc_decoder_label", "src/google.ts", 'if (!isLabel(label)) throw new Error("google_row_invalid");', ""],
+  ["gc_blob_strict", "src/google.ts", 'if (!isObj(v) || Object.keys(v).some((k) => k !== "id" && k !== "secret")) throw', "if (!isObj(v)) throw"],
+  ["gc_rt_stored_first", "src/relay.ts", 'const raw = this.sql.exec("SELECT * FROM google_accounts WHERE label=?", label).toArray()[0];', "const raw = undefined;"],
+  ["gc_rt_secret_fallback", "src/relay.ts", "return rt || null;", "return null;"],
+  ["gc_client_stored_first", "src/relay.ts", 'const raw = this.sql.exec("SELECT blob_ct, blob_iv, key_ver, saved_ms FROM google_client WHERE id=1").toArray()[0];', "const raw = undefined;"],
+  ["gc_rt_reseal", "src/relay.ts", "if (cur && kid !== cur.kid) await this.saveGoogleAccount(", "if (false) await this.saveGoogleAccount("],
+  ["gc_client_reseal", "src/relay.ts", "if (cur && kid !== cur.kid) await this.saveGoogleClient(", "if (false) await this.saveGoogleClient("],
+  ["gc_old_key_decrypt", "src/relay.ts", "old: await importTokenKey(this.env.GOOGLE_TOKEN_KEY_OLD)", "old: null"],
+  ["gc_seed_first", "src/relay.ts", "return [...seed, ...stored.filter((l) => !seed.includes(l))];", "return [...stored, ...seed.filter((l) => !stored.includes(l))];"],
+  ["gc_keystatus_kid", "src/relay.ts", "const onCurrent = kids.filter((k) => cur !== null && k === cur.kid).length;", "const onCurrent = kids.length;"],
+  ["gc_setup_makes_key", "scripts/setup-lib.mjs", '"REQUEST_TOKEN", "LOG_HASH_KEY", "GOOGLE_TOKEN_KEY", ...', '"REQUEST_TOKEN", "LOG_HASH_KEY", ...'],
 ];
 
 const only = process.argv[2];

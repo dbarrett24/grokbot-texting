@@ -37,6 +37,8 @@ export interface Env {
   GOOGLE_CLIENT_ID?: string; // secret: OAuth client (contacts.readonly) used for every account's refresh token
   GOOGLE_CLIENT_SECRET?: string; // secret
   // GOOGLE_RT_<LABEL>: secret refresh token per account, read dynamically (e.g. GOOGLE_RT_PRIMARY)
+  GOOGLE_TOKEN_KEY?: string; // secret: 32 random bytes (base64 or 64 hex; setup step keys makes it). Seals in-app Google tokens and the pasted client (AES-GCM) in the DO. Unset = in-app connect off; GOOGLE_* secrets still work
+  GOOGLE_TOKEN_KEY_OLD?: string; // secret, rotation only: the previous GOOGLE_TOKEN_KEY, accepted for decrypt; rows are re-sealed under the new key on next use
   LOG_HASH_KEY?: string; // secret, 32+ chars: HMAC key for number and body hashes. Missing = direct send refused (direct_config_invalid); tap log rows fall back to plain SHA-256
   DIRECT_ALLOWLIST?: string; // DEPRECATED secret, JSON {"+<E.164>":"name"}: imported ONCE as the ALLOWLIST_LEGACY source (flagged), then ignored. Delete it after review
   // ---- secrets (wrangler secret put) ----

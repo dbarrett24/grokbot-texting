@@ -69,6 +69,7 @@ export function typeablePassphrase() {
 const GENERATORS = {
   REQUEST_TOKEN: () => randomBytes(32).toString("hex"),
   LOG_HASH_KEY: () => randomBytes(32).toString("base64"),
+  GOOGLE_TOKEN_KEY: () => randomBytes(32).toString("base64"), // seals in-app Google tokens (src/google.ts)
   GATEWAY_PASSPHRASE: typeablePassphrase,
   DEVICE_TOKEN: () => randomBytes(32).toString("hex"),
   NTFY_URL: () => `https://ntfy.sh/relay-${randomBytes(16).toString("hex")}`, // the long random topic name keeps it private
@@ -225,7 +226,7 @@ export function buildPayload(s, m) {
     else if (m.has(k)) p[k] = m.get(k);
     else missing.push(k);
   }
-  for (const k of ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]) if (m.has(k)) p[k] = m.get(k);
+  for (const k of ["GOOGLE_TOKEN_KEY", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]) if (m.has(k)) p[k] = m.get(k);
   return { payload: p, missing: [...new Set(missing)] };
 }
 export function renderConfig(template, s) {
@@ -381,7 +382,7 @@ const steps = {
     // A passphrase is made only in passphrase mode, and never replaces one already stored (or typed in with
     // `ask GATEWAY_PASSPHRASE` because the app already has one). Device-key mode never gets one.
     const mode = gatewayMode(s, m);
-    const want = ["REQUEST_TOKEN", "LOG_HASH_KEY", ...(mode === "none" ? ["DEVICE_TOKEN", "NTFY_URL"] : mode === "passphrase" ? ["GATEWAY_PASSPHRASE"] : [])];
+    const want = ["REQUEST_TOKEN", "LOG_HASH_KEY", "GOOGLE_TOKEN_KEY", ...(mode === "none" ? ["DEVICE_TOKEN", "NTFY_URL"] : mode === "passphrase" ? ["GATEWAY_PASSPHRASE"] : [])];
     if (args.includes("--new-token")) m.delete("REQUEST_TOKEN"); // rotation: then run `secrets` and give the bot the new one
     const made = [];
     for (const k of want) if (!m.has(k)) { m.set(k, GENERATORS[k]()); made.push(k); }
