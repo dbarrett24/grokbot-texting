@@ -135,6 +135,18 @@ describe("Relay storage", () => {
     expect(await inRelay(h, (i) => i.googleRefreshToken("WORK"))).toBe(RT);
   });
 
+  it("googleKeyStatus counts rows still on the old key until each is re-sealed (rotation check)", async () => {
+    await saveBoth();
+    await inRelay(h, (i) => i.saveGoogleAccount("CLUB", RT, "s", null));
+    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 3, onCurrent: 3, onOld: 0 });
+    await h.setEnv({ GOOGLE_TOKEN_KEY: KEY_B, GOOGLE_TOKEN_KEY_OLD: KEY_A });
+    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 3, onCurrent: 0, onOld: 3 });
+    await inRelay(h, (i) => i.googleRefreshToken("WORK"));
+    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 3, onCurrent: 1, onOld: 2 });
+    await inRelay(h, (i) => i.syncContacts({ alert: false }));
+    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 3, onCurrent: 3, onOld: 0 });
+  });
+
   it("a tampered stored row fails that account's sync with a code, keeps the old list, and leaks nothing", async () => {
     await saveBoth();
     await sql("UPDATE google_accounts SET rt_iv=?", btoa("x".repeat(12)));
