@@ -3,7 +3,7 @@
 # one at a time; each prints RELAY_STATUS lines it can read. Nothing here needs sudo.
 #   bash scripts/setup-mac.sh <step> [--dry-run] [options]
 # Steps: node install-node fetch deps test login iphone-helper mac-permissions, and (via scripts/setup-lib.mjs) keys ask
-#        show config gateway-check confirm-fingerprint claim deploy secrets google smoke resolve
+#        show config gateway-check confirm-fingerprint claim deploy secrets google contacts smoke resolve
 #        test-send copy-token clear-clipboard status
 # Secrets never appear on screen, in a log, or on a command line. They stay in .relay-local/ (gitignored).
 set -euo pipefail
@@ -164,7 +164,7 @@ case "$STEP" in
   login) step_login ;;
   iphone-helper) step_iphone_helper ;;
   mac-permissions) step_mac_permissions ;;
-  keys|ask|show|config|gateway-check|confirm-fingerprint|claim|deploy|secrets|google|smoke|resolve|test-send|copy-token|clear-clipboard|status)
+  keys|ask|show|config|gateway-check|confirm-fingerprint|claim|deploy|secrets|google|contacts|smoke|resolve|test-send|copy-token|clear-clipboard|status)
     need_repo
     command -v node >/dev/null 2>&1 || { status "$STEP" fail reason=no_node next=install-node; exit 1; }
     exec node "$DIR/scripts/setup-lib.mjs" "$STEP" "$@" ;;

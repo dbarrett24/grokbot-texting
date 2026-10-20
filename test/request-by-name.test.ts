@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
-import { harness, postRequest, approve, BASE, OWNER, FRIEND, STRANGER, T0, type Harness } from "./helpers";
+import { harness, postRequest, approve, BASE, OWNER, FRIEND, STRANGER, T0, type Harness , enableAll } from "./helpers";
 
 // Tap flow (POST /request) filed by contact name or candidate id instead of a number.
 // Fake numbers only (555-01xx).
@@ -18,7 +18,12 @@ let h: Harness;
 const runIn = runInDurableObject as unknown as (s: unknown, f: (i: any) => Promise<any>) => Promise<any>;
 const sql = (q: string, ...a: unknown[]) => runIn(h.relay, async (i) => i.ctx.storage.sql.exec(q, ...a).toArray()) as Promise<any[]>;
 const count = async (q: string, ...a: unknown[]) => (await sql(q, ...a))[0].c as number;
-async function upload(snap: unknown = SNAPSHOT) {
+async function upload(...a: Parameters<typeof uploadRaw>) {
+  const r = await uploadRaw(...a);
+  if (r.ok) await enableAll(h);
+  return r;
+}
+async function uploadRaw(snap: unknown = SNAPSHOT) {
   return h.relay.fetch(`${BASE}/contacts`, { method: "POST", headers: { "content-type": "application/json", "Cf-Access-Jwt-Assertion": await h.jwt() }, body: JSON.stringify(snap) });
 }
 /** Every /messages call that isn't a notice to the owner, decoded. */
