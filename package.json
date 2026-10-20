@@ -9,7 +9,8 @@
     "mutation": "bash scripts/mutation-check.sh",
     "lint": "oxlint --type-aware .",
     "lint:ratchet": "node scripts/ci/lint-ratchet.mjs",
-    "typecheck:strict-next": "node scripts/ci/tsc-ratchet.mjs tsc-strict-next-baseline.json tsconfig.strict-next.json tsconfig.node.strict-next.json"
+    "typecheck:strict-next": "node scripts/ci/tsc-ratchet.mjs tsc-strict-next-baseline.json tsconfig.strict-next.json tsconfig.node.strict-next.json",
+    "typecheck:scripts": "node scripts/ci/tsc-ratchet.mjs tsc-scripts-baseline.json tsconfig.scripts.json"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.4",
