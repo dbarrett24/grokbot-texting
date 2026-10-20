@@ -59,7 +59,6 @@ export async function open(keys: (TokenKey | null)[], s: Sealed, aad: Uint8Array
   } catch {
     throw new Error("google_token_decrypt_failed");
   }
-  if (iv.length !== 12) throw new Error("google_token_decrypt_failed");
   try {
     const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: aad }, k.key, ct);
     return { plaintext: new TextDecoder().decode(pt), kid: k.kid };
