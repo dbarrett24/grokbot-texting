@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "mutation": "bash scripts/mutation-check.sh",
     "lint": "oxlint --type-aware .",
-    "lint:ratchet": "node scripts/ci/lint-ratchet.mjs"
+    "lint:ratchet": "node scripts/ci/lint-ratchet.mjs",
+    "typecheck:strict-next": "node scripts/ci/tsc-ratchet.mjs tsc-strict-next-baseline.json tsconfig.strict-next.json tsconfig.node.strict-next.json"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.4",
