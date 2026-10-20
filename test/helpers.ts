@@ -178,3 +178,15 @@ export function tamperSig(jwt: string): string {
   p[2] = p[2].slice(0, m) + (p[2][m] === "A" ? "B" : "A") + p[2].slice(m + 1);
   return p.join(".");
 }
+
+/**
+ * Contacts start OFF (Contacts page). Tests written for "everyone loaded is sendable" switch everyone on
+ * through storage, the way the owner would on the page. The page's own guards are tested in contacts-page.test.ts.
+ */
+export async function enableAll(h: Harness): Promise<void> {
+  // Loading the list runs the relay's own hash pass, which creates the (OFF) pref rows. 503 without a hash key: nothing to enable.
+  await h.relay.fetch(`${BASE}/contacts/list`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt() } });
+  await runInDurableObject(h.relay, (_inst: Relay, state: DurableObjectState) => {
+    state.storage.sql.exec("UPDATE contact_prefs SET enabled=1");
+  });
+}

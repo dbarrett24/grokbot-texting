@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
-import { harness, postRequest, API, BASE, OWNER, FRIEND, TWO, STRANGER, T0, type Harness } from "./helpers";
+import { harness, postRequest, API, BASE, OWNER, FRIEND, TWO, STRANGER, T0, type Harness , enableAll } from "./helpers";
 import { hmacHex, importHmacKey } from "../src/e2e";
 
 // Multi-send on POST /send: to_names / candidate_ids (2..3), separate 1:1 copies by default, or ONE group
@@ -29,7 +29,12 @@ const logRows = () => sql("SELECT event, request_id, recipient, sha256, detail F
 const events = async (ev: string) => (await logRows()).filter((x) => x.event === ev);
 const direct = (body: unknown, token = "TEST-ONLY-request-token") =>
   h.relay.fetch(`${API}/send`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-async function upload(snap: unknown = SNAPSHOT) {
+async function upload(...a: Parameters<typeof uploadRaw>) {
+  const r = await uploadRaw(...a);
+  if (r.ok) await enableAll(h);
+  return r;
+}
+async function uploadRaw(snap: unknown = SNAPSHOT) {
   return h.relay.fetch(`${BASE}/contacts`, { method: "POST", headers: { "content-type": "application/json", "Cf-Access-Jwt-Assertion": await h.jwt() }, body: JSON.stringify(snap) });
 }
 /** Every /messages call, decoded: kind (sms = textMessage, mms = mmsMessage), all recipients, text. */

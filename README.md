@@ -15,7 +15,8 @@ Setup takes about 90 minutes and is written step by step in **[DEPLOY.md](DEPLOY
 - **Direct send.** You say "text Sam: ...", the bot reads it back, you say yes, and it calls `POST /send`. There is no tap step (`DIRECT_SEND = "1"`).
 - **Only people on your list.** The bot can text people in your Google Contacts (synced read-only, daily), numbers you upload, and numbers you list in the `ALLOWLIST` secret. Anything else is refused. One text can go to up to 3 people as **separate 1:1 copies** (`to_names` / `candidate_ids`). A real group thread (one group MMS) is off unless you turn on `GROUP_MMS`.
 - **No daily cap, and links are allowed.** Both are switches you can turn on (`DIRECT_DAILY_CAP`, `BLOCK_LINKS`).
-- **A private page** at `https://<APPROVE_HOST>/direct` behind Cloudflare Access: status, per-account contact counts (no numbers), a **Sync contacts now** button, and the log.
+- **A private Contacts page** at `https://<APPROVE_HOST>/contacts` behind Cloudflare Access: switch each person on or off for the bot (everyone starts off), star favorites, Sync now, a resolve preview, and sync health. Only the last 4 digits are ever shown. See DEPLOY.md "Contacts page".
+- **A private status page** at `https://<APPROVE_HOST>/direct`: status, per-account contact counts (no numbers), a **Sync contacts now** button, and the log.
 - **Tap-to-approve** is still built in. Set `DIRECT_SEND = "0"` and the bot can only file requests (`POST /request`, by number or by contact name) that you approve on your phone.
 - **Nothing readable in the log.** Numbers are HMACs or masked to the last 4 digits, and the message text is never logged.
 
@@ -37,7 +38,6 @@ All settings are `[vars]` in `wrangler.toml`; secrets go in with `npx wrangler s
 | `ALLOW_EMAIL_OTP` | `"1"` | Normal setting. See "Sign-in and the passkey" below. |
 | `REQUIRED_AMR` | `"otp"` | amr values the Worker accepts when a token carries one. |
 | `RUNAWAY_PAUSE` / `RUNAWAY_MAX` | `"0"` / `"10"` | `"1"`: more than MAX direct sends in 60 minutes pauses direct send and texts you; resume on `/direct`. |
-| `CONTACTS_SNAPSHOT_ONLY` | `"0"` | `"0"` adds the optional `DIRECT_ALLOWLIST` secret to the direct list. |
 | `DISABLED` | `"0"` | `"1"` = kill switch: every route refused; the daily alarm only purges old rows. |
 | `GROUP_MMS` | `"0"` | `"1"` lets `/send` send one group MMS (`"group": true`). Needs a valid `OWNER_NUMBER`. Android (SMS Gateway) only: with `DELIVERY = "mac"` or `"shortcut"` a group send gets 409 `group_mms_unsupported_delivery`. See "Group MMS" below and live-test first. |
 | `NOTIFY_MODE` | `"sms"` | Notices (sync failures, tap requests, pauses) go to `OWNER_NUMBER` through your phone, or `"ntfy"` with a token. |
@@ -74,7 +74,7 @@ All settings are `[vars]` in `wrangler.toml`; secrets go in with `npx wrangler s
 
 `CAP_START_DATE` (`YYYY-MM-DD`): an invalid value keeps the tap cap at `SEND_CAP_INITIAL`.
 
-**Secrets:** `REQUEST_TOKEN` (the bot's token), `ACCESS_AUD`, `APPROVER_EMAIL`, `GATEWAY_USER`, `GATEWAY_PASS`, `GATEWAY_DEVICE_ID`, `OWNER_NUMBER` (your own number, `+` and country code; notices in sms mode, and required whenever `GROUP_MMS = "1"`), `ALLOWLIST` (`{"+<number>":"Name"}`), `LOG_HASH_KEY` (32+ characters; direct send refuses without it), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, one `GOOGLE_RT_<LABEL>` per Google account. Encryption: `GATEWAY_MODE` plus either `GATEWAY_PASSPHRASE` (32+ characters; the default for now, because SMS Gateway v1.77.0–v1.77.4 can't decrypt device-key texts) or, opt-in with `config --gateway-mode device-key`, `GATEWAY_PINNED_FINGERPRINT` + `GATEWAY_KEY_VERSION` (`confirm-fingerprint` stores them, nobody types them). DEPLOY.md section 1, steps 7 and 9. Optional: `DIRECT_ALLOWLIST`, `NTFY_URL` + `NTFY_TOKEN`.
+**Secrets:** `REQUEST_TOKEN` (the bot's token), `ACCESS_AUD`, `APPROVER_EMAIL`, `GATEWAY_USER`, `GATEWAY_PASS`, `GATEWAY_DEVICE_ID`, `OWNER_NUMBER` (your own number, `+` and country code; notices in sms mode, and required whenever `GROUP_MMS = "1"`), `ALLOWLIST` (`{"+<number>":"Name"}`), `LOG_HASH_KEY` (32+ characters; direct send refuses without it), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, one `GOOGLE_RT_<LABEL>` per Google account. Encryption: `GATEWAY_MODE` plus either `GATEWAY_PASSPHRASE` (32+ characters; the default for now, because SMS Gateway v1.77.0–v1.77.4 can't decrypt device-key texts) or, opt-in with `config --gateway-mode device-key`, `GATEWAY_PINNED_FINGERPRINT` + `GATEWAY_KEY_VERSION` (`confirm-fingerprint` stores them, nobody types them). DEPLOY.md section 1, steps 7 and 9. Optional: `NTFY_URL` + `NTFY_TOKEN`. `DIRECT_ALLOWLIST` is deprecated: imported once as flagged legacy contacts, then ignored (DEPLOY.md "Contacts page").
 
 ## Sign-in and the passkey (read this)
 The private page sits behind Cloudflare Access with **email one-time PIN plus a passkey** (Access's independent MFA). The Worker verifies the Access token again itself: RS256 signature against your team's keys, audience, issuer, expiry, and that the email is `APPROVER_EMAIL`. Those checks are always on.
@@ -88,6 +88,8 @@ The private page sits behind Cloudflare Access with **email one-time PIN plus a 
 | request | `POST /request` | `Bearer REQUEST_TOKEN` | Tap flow: `{to, text}`, `{to_name, text}` or `{candidate_id, text}`. Stores a pending request and notifies you. Never sends by itself. |
 | request | `GET /request/<id>` | `Bearer REQUEST_TOKEN` | State only. |
 | approve | `GET /direct`, `POST /direct/sync`, `POST /direct/resume` | Access + same Origin + CSRF | Status page, Sync contacts now, resume after a runaway pause. |
+| approve | `GET /contacts`, `GET /contacts/list` | Access | Contacts page; the list carries only the last 4 digits. |
+| approve | `POST /contacts/prefs`, `/contacts/enable-all`, `/contacts/migrated-off`, `/contacts/preview` | Access + same Origin (required) + JSON + page CSRF (15 min, bound to the Access identity) | Turn people on/off, star, enable all shown (count must match), turn all migrated off, resolve preview (never sends). On `<API_HOST>` every `/contacts*` path is 404. |
 | approve | `GET/POST /approve/<id>` | Access + same Origin + CSRF | Tap approval page. |
 | approve | `GET /log` | Access | Last 500 log rows: no text, no full numbers. |
 | approve | `POST /contacts` | Access | Optional manual contact upload (`scripts/import-contacts.mjs`). |
@@ -117,9 +119,9 @@ One shared thread instead of separate copies.
 - **Live-test before turning it on:** one text-only group to two numbers you control. Check that each phone shows one thread listing the others, and that a reply reaches everyone. If not, leave it off and use separate copies.
 
 ## Tap requests by name
-With tap-to-approve (`DIRECT_SEND = "0"`), the bot can file `{"to_name": "Sam Lee", "text": "…"}` or `{"candidate_id": "…", "text": "…"}` instead of a number. The name is looked up in the same list `/send` uses (contacts, then `DIRECT_ALLOWLIST` when allowed, then `ALLOWLIST`). Exactly one match files the request (202, with `"to": "<name>"`); no match answers `{"state":"no_match"}` and several matches answer `{"state":"ambiguous","candidates":[…]}`, and neither files anything. Candidate ids from `/send` lookups work too, and are single use. At approve time the number must still be on that list. Filing by name needs `LOG_HASH_KEY` (503 `config_invalid` without it). Filing by number (`{to, text}`) is unchanged and still needs `ALLOWLIST`, at filing and at approval. One recipient per tap request.
+With tap-to-approve (`DIRECT_SEND = "0"`), the bot can file `{"to_name": "Sam Lee", "text": "…"}` or `{"candidate_id": "…", "text": "…"}` instead of a number. The name is looked up in the same list `/send` uses (contacts switched on in the Contacts page, then `ALLOWLIST`). Exactly one match files the request (202, with `"to": "<name>"`); no match answers `{"state":"no_match"}` and several matches answer `{"state":"ambiguous","candidates":[…]}`, and neither files anything. Candidate ids from `/send` lookups work too, and are single use. At approve time the number must still be on that list. Filing by name needs `LOG_HASH_KEY` (503 `config_invalid` without it). Filing by number (`{to, text}`) is unchanged and still needs `ALLOWLIST`, at filing and at approval. One recipient per tap request.
 
-**Tap-only setups:** with `DIRECT_SEND = "0"`, `/request` by name can still reach anyone on the full send list (every synced contact, not just `ALLOWLIST`), and each one still needs your tap to approve.
+**Tap-only setups:** with `DIRECT_SEND = "0"`, `/request` by name can still reach anyone on the full send list (every contact switched on in the Contacts page, plus `ALLOWLIST`), and each one still needs your tap to approve.
 
 ## How a direct send is checked
 ```mermaid
