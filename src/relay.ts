@@ -1096,6 +1096,15 @@ export class Relay extends DurableObject<Env> {
   }
 
   // ---------- Google connect storage (src/google.ts) ----------
+  /** Set by Disconnect, cleared by a new sign-in: sync skips the legacy secret for this label. */
+  googleDisconnected(label: string): boolean {
+    return this.meta(`gdisc:${label}`) !== null;
+  }
+  /** GOOGLE_ACCOUNTS labels disconnected on the page whose legacy setting is still there (the page says to remove it). */
+  googleLegacyLeftovers(): string[] {
+    return parseAccounts(this.env.GOOGLE_ACCOUNTS).valid.filter((l) => this.googleDisconnected(l));
+  }
+
   /** Current GOOGLE_TOKEN_KEY, then GOOGLE_TOKEN_KEY_OLD (decrypt only, for rotation). A malformed key throws its code. */
   private async tokenKeys(): Promise<{ cur: TokenKey | null; old: TokenKey | null }> {
     return { cur: await importTokenKey(this.env.GOOGLE_TOKEN_KEY), old: await importTokenKey(this.env.GOOGLE_TOKEN_KEY_OLD) };
@@ -1108,8 +1117,9 @@ export class Relay extends DurableObject<Env> {
 
   /** Account order: GOOGLE_ACCOUNTS (legacy seed, first wins name conflicts), then in-app connected labels by connect time. */
   googleLabels(): string[] {
-    const seed = parseAccounts(this.env.GOOGLE_ACCOUNTS).valid;
     const stored = this.sql.exec("SELECT label FROM google_accounts ORDER BY connected_ms, label").toArray().flatMap((r) => (typeof r["label"] === "string" ? [r["label"]] : []));
+    // Disconnected on the page: the legacy GOOGLE_ACCOUNTS / GOOGLE_RT_<LABEL> fallback no longer syncs it.
+    const seed = parseAccounts(this.env.GOOGLE_ACCOUNTS).valid.filter((l) => stored.includes(l) || !this.googleDisconnected(l));
     return [...seed, ...stored.filter((l) => !seed.includes(l))];
   }
 
@@ -1209,8 +1219,13 @@ export class Relay extends DurableObject<Env> {
     } catch (e) {
       return this.toContacts({ google_error: errCode(e) });
     }
-    await this.requireTokenKey(); // nowhere to keep the token: refuse before sending the owner to Google
-    const client = await this.googleClient();
+    let client: GoogleClient | null;
+    try {
+      await this.requireTokenKey(); // nowhere to keep the token: refuse before sending the owner to Google
+      client = await this.googleClient();
+    } catch (e) {
+      return this.toContacts({ google_error: e instanceof Refuse ? e.code : errCode(e) }); // e.g. a malformed GOOGLE_TOKEN_KEY: a code, not a 500
+    }
     if (!client) return this.toContacts({ google_error: "google_client_not_configured" });
     const now = this.clock();
     const state = hex(crypto.getRandomValues(new Uint8Array(32)));
@@ -1271,6 +1286,7 @@ export class Relay extends DurableObject<Env> {
         throw new Error("google_scope_not_exact");
       }
       await this.saveGoogleAccount(label, tok.refreshToken ?? "", GOOGLE_SCOPE, null); // refuses google_no_refresh_token on ""
+      this.setMeta(`gdisc:${label}`, null);
       this.log("google_connected", { detail: `label=${label}` });
       return this.toContacts({ connected: label });
     } catch (e) {
@@ -1299,6 +1315,7 @@ export class Relay extends DurableObject<Env> {
     }
     this.ctx.storage.transactionSync(() => {
       this.deleteGoogleAccount(label);
+      this.setMeta(`gdisc:${label}`, String(this.clock())); // so sync doesn't fall back to GOOGLE_RT_<LABEL>
       this.sql.exec("DELETE FROM contact_sources WHERE account=?", label);
       this.sql.exec("DELETE FROM meta WHERE k LIKE ?", `acct:${label}:%`);
       this.rebuildContacts();
