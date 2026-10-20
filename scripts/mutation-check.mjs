@@ -324,6 +324,7 @@ const M = [
   ["gc_client_reseal", "src/relay.ts", "if (cur && kid !== cur.kid) await this.saveGoogleClient(", "if (false) await this.saveGoogleClient("],
   ["gc_old_key_decrypt", "src/relay.ts", "old: await importTokenKey(this.env.GOOGLE_TOKEN_KEY_OLD)", "old: null"],
   ["gc_seed_first", "src/relay.ts", "return [...seed, ...stored.filter((l) => !seed.includes(l))];", "return [...stored, ...seed.filter((l) => !stored.includes(l))];"],
+  ["gc_keystatus_kid", "src/relay.ts", "const onCurrent = kids.filter((k) => cur !== null && k === cur.kid).length;", "const onCurrent = kids.length;"],
   ["gc_setup_makes_key", "scripts/setup-lib.mjs", '"REQUEST_TOKEN", "LOG_HASH_KEY", "GOOGLE_TOKEN_KEY", ...', '"REQUEST_TOKEN", "LOG_HASH_KEY", ...'],
   // google-connect PR 2: sign-in routes (state + PKCE, exact scope, host split, revoke + delete)
   ["gc2_scope_exact", "src/google.ts", "return parts.length === 1 && parts[0] === GOOGLE_SCOPE;", "return parts.includes(GOOGLE_SCOPE);"],
@@ -343,6 +344,10 @@ const M = [
   ["gc2_no_refresh_token", "src/relay.ts", 'if (!refreshToken) throw new Refuse("google_no_refresh_token");', ""],
   ["gc2_disconnect_revoke", "src/relay.ts", 'revoke = rt ? await this.googleRevoke(rt) : "none";', 'revoke = "none";'],
   ["gc2_disconnect_delete", "src/relay.ts", "this.deleteGoogleAccount(label);\n", ""],
+  ["gc2_disconnect_marker", "src/relay.ts", "this.setMeta(`gdisc:${label}`, String(this.clock()));", ""],
+  ["gc2_marker_skips_seed", "src/relay.ts", ".valid.filter((l) => stored.includes(l) || !this.googleDisconnected(l));", ".valid;"],
+  ["gc2_reconnect_clears_marker", "src/relay.ts", "this.setMeta(`gdisc:${label}`, null);", ""],
+  ["gc2_bad_key_redirects", "src/relay.ts", "return this.toContacts({ google_error: e instanceof Refuse ? e.code : errCode(e) }); // e.g. a malformed", "throw e; // e.g. a malformed"],
   ["gc2_disconnect_sources", "src/relay.ts", 'this.sql.exec("DELETE FROM contact_sources WHERE account=?", label);', ""],
   // google-connect PR 3: /contacts Google panel (paste form, Connect button, deep links)
   ["gc3_client_form_csrf", "src/relay.ts", 'const { form } = await this.googleForm(req);\n    const id = form.get("client_id")', 'const form = await req.formData();\n    const id = form.get("client_id")'],
