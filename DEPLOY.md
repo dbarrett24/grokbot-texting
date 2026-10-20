@@ -184,9 +184,9 @@ Read-only access to your contacts' names and numbers. Emails, notes and addresse
 
 You use **your own** Google Cloud project, so your contacts only ever go to your Worker. Google has no API for creating this kind of client, so the first part is about 5 minutes of clicking. The page's **Set up Google** checklist links to each console page. Type your project ID once, and the links open inside that project.
 
-1. **HUMAN STEP:** Create a project (for example `contacts-relay`): https://console.cloud.google.com/projectcreate. Type its project ID into the checklist.
+1. **HUMAN STEP:** Create a project (for example `contacts-relay`): https://console.cloud.google.com/projectcreate. Type its project ID into the checklist. Without it, each console link opens whichever project you used last; the page blocks those links until a project ID is typed. After you save a client, the page uses the project number from the Client ID.
 2. Enable the People API: the checklist's link (`https://console.cloud.google.com/flows/enableapi?apiid=people.googleapis.com&project=<id>`). If that page errors, use the library page `https://console.cloud.google.com/apis/library/people.googleapis.com?project=<id>` and press Enable.
-3. Branding (`https://console.cloud.google.com/auth/overview/create?project=<id>`):
+3. Branding (`https://console.cloud.google.com/auth/overview/create?project=<id>`; if the project's Google Auth Platform is already set up, this redirects to `/auth/overview`: open Branding from there):
    - User type: **External**. Give it an app name (for example `Contacts relay`) and your email.
 4. Audience (`https://console.cloud.google.com/auth/audience?project=<id>`): **Publish app (In production)**.
    - Staying in **Testing** works too if you add each Google account as a test user, but access then expires after **7 days** and sync stops.
@@ -195,12 +195,12 @@ You use **your own** Google Cloud project, so your contacts only ever go to your
 5. Create an OAuth client (`https://console.cloud.google.com/auth/clients/create?project=<id>`): Application type **Web application**. Under **Authorized redirect URIs**, add exactly the address the checklist shows (with a Copy button): `https://<APPROVE_HOST>/contacts/google/callback`. No trailing slash.
 6. Google shows the **Client secret only once**. Paste the Client ID and the secret into the checklist's form and press **Save client**. The Worker stores them encrypted (AES-GCM under `GOOGLE_TOKEN_KEY`, section 6); they're never shown again.
 7. **HUMAN STEP:** Type a name for the account (for example `primary` or `work`) and press **Connect Google**. Pick the Google account and allow **read-only contacts** only. Back on the page it shows "Connected PRIMARY". The Worker refuses, and revokes at Google, if anything other than read-only contacts was granted.
-   - "Google sent no long-lived token": remove the app at https://myaccount.google.com/permissions, then Connect again.
+   - "Google sent no long-lived token": remove the app at https://myaccount.google.com/connections, then Connect again.
    - Repeat for each Google account. The first connected account wins when two accounts have the same number. Accounts in `GOOGLE_ACCOUNTS` come first.
 8. Press **Sync now**. After that, a daily sync runs on its own. A failed sync keeps the last good list and texts you once.
 9. **HUMAN STEP:** on the same page, turn on the people you want the bot to text (see "Contacts page" below). Everyone starts **off**.
 
-**Reconnect** signs in again for the same name (use it after `google_token_status_400`). **Disconnect** asks first, then revokes the access at Google and deletes the stored sign-in and that account's contacts. If Google doesn't confirm the revoke, it still deletes and tells you; remove it at https://myaccount.google.com/permissions.
+**Reconnect** signs in again for the same name (use it after `google_token_status_400`). **Disconnect** asks first, then revokes the access at Google and deletes the stored sign-in and that account's contacts. If Google doesn't confirm the revoke, it still deletes and tells you; remove it at https://myaccount.google.com/connections. Disconnect also stops the old fallback: an account still listed in `GOOGLE_ACCOUNTS` (with a `GOOGLE_RT_<LABEL>` secret) is no longer synced from the secret. The page then shows a note to remove it from `GOOGLE_ACCOUNTS`, deploy, and run `npx wrangler secret delete GOOGLE_RT_<LABEL>`. Connecting that name again clears this.
 
 **Upgrading a relay that uses `GOOGLE_RT_<LABEL>` secrets:** nothing breaks. Those accounts keep syncing from the secrets and show as "legacy" on the page, and `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` still work. A sign-in or client saved on the page wins over the secret. To move over: add `GOOGLE_TOKEN_KEY` (section 6), add the redirect URI from step 5 to your client (a Desktop client can't take one, so create a Web client), press Reconnect for each account, then delete the old secrets with `npx wrangler secret delete GOOGLE_RT_<LABEL>`. `scripts/google-consent.mjs` (setup step `google`) is **legacy**. It still works for the secret-based setup, but new deploys don't need it.
 
@@ -344,9 +344,9 @@ Rollback doesn't undo secrets or stored data.
 | Passphrase (no device key only) | New `openssl rand -base64 32`. Set it in the app **and** with `npx wrangler secret put GATEWAY_PASSPHRASE` right after. Texts fail until both match |
 | Log key | `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler secret put LOG_HASH_KEY` (stored contacts are re-hashed on the next send) |
 | Device key | In the app, Settings, Device…, Device Key, **Rotate device key**. Then run `gateway-check` then `confirm-fingerprint` (section 1 step 9); they update the Worker. Sends refuse until you confirm |
-| Google access | **Disconnect** the account on the Contacts page (revokes at Google and deletes it), then **Connect Google** again. Legacy secret accounts: remove the app at https://myaccount.google.com/permissions, then press Reconnect |
+| Google access | **Disconnect** the account on the Contacts page (revokes at Google and deletes it), then **Connect Google** again. Legacy secret accounts: remove the app at https://myaccount.google.com/connections, then press Reconnect |
 | Google client secret | In the console's Clients page, add a new secret, paste it with the Client ID in the Contacts page's **Save client** form, then delete the old secret in the console |
-| `GOOGLE_TOKEN_KEY` | `npx wrangler secret put GOOGLE_TOKEN_KEY_OLD` with the **current** value, then `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler secret put GOOGLE_TOKEN_KEY`. The old key still decrypts, and each stored sign-in is re-sealed under the new key at the next sync, and the client at the next sync or Contacts page visit. After a sync, delete the old one: `npx wrangler secret delete GOOGLE_TOKEN_KEY_OLD`. Without `_OLD`, stored sign-ins fail with `google_token_key_missing` until you Reconnect and paste the client again |
+| `GOOGLE_TOKEN_KEY` | `npx wrangler secret put GOOGLE_TOKEN_KEY_OLD` with the **current** value, then `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler secret put GOOGLE_TOKEN_KEY`. The old key still decrypts, and each stored sign-in is re-sealed under the new key at the next sync, and the client at the next sync or Contacts page visit. Delete the old one **only after every stored sign-in has been re-sealed**: press **Sync now** on the Contacts page, reload it, and check that the Google accounts panel reads "All N stored Google sign-ins are on the current GOOGLE_TOKEN_KEY" (while any are left it says "X of N … are still on the old GOOGLE_TOKEN_KEY"). Then `npx wrangler secret delete GOOGLE_TOKEN_KEY_OLD`. An account whose sync failed isn't re-sealed, so fix it first or Reconnect it. Without `_OLD`, stored sign-ins fail with `google_token_key_missing` until you Reconnect and paste the client again |
 
 Do it right away if a phone, computer or bot that held one is lost or compromised.
 
@@ -354,12 +354,12 @@ Do it right away if a phone, computer or bot that held one is lost or compromise
 1. `npx wrangler delete` (removes the Worker and its stored contacts and log). Confirm in the dashboard that it's gone.
 2. Zero Trust: delete the Access application and its policy.
 3. DNS: remove any records left for `<API_HOST>` and `<APPROVE_HOST>`.
-4. Google: remove the app at https://myaccount.google.com/permissions for each account, then delete the Cloud project (https://console.cloud.google.com/, IAM & Admin, Settings, Shut down).
+4. Google: remove the app at https://myaccount.google.com/connections for each account, then delete the Cloud project (https://console.cloud.google.com/, IAM & Admin, Settings, Shut down).
 5. Phone: go Offline, turn off Cloud Server, then uninstall SMS Gateway.
 6. Bot: delete the stored token (`SMS_RELAY_TOKEN` on Grok Bot).
 7. Optional: cancel the domain and close the Cloudflare account and the dedicated email.
 
-**Check:** `curl -si https://<API_HOST>/send` no longer reaches the relay, and https://myaccount.google.com/permissions no longer lists the app.
+**Check:** `curl -si https://<API_HOST>/send` no longer reaches the relay, and https://myaccount.google.com/connections no longer lists the app.
 
 ## Known limits
 - **iPhone is BETA.** See [SETUP-iphone.md](SETUP-iphone.md). Android is the tested path.
