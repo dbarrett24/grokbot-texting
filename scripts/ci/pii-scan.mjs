@@ -36,8 +36,8 @@ for (const f of git("ls-files").split("\n").filter(Boolean)) {
 }
 if (range !== undefined) {
   scan(`patch ${range}`, git("log", "-p", "--no-merges", "--format=", range));
-  scan(`messages ${range}`, git("log", "--format=%B", range));
-  scan(`authors ${range}`, git("log", "--format=%h %an <%ae> | %cn <%ce>", range));
+  scan(`messages ${range}`, git("log", "--no-merges", "--format=%B", range)); // merge commits: GitHub-made (PR ref), author = PR opener
+  scan(`authors ${range}`, git("log", "--no-merges", "--format=%h %an <%ae> | %cn <%ce>", range));
 }
 if (!terms.length) {
   console.error("pii-scan: NO TERM LIST (set PII_TERMS or PII_TERMS_FILE). Term scan skipped; phone scan ran.");
