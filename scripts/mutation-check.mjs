@@ -326,6 +326,26 @@ const M = [
   ["gc_old_key_decrypt", "src/relay.ts", "old: await importTokenKey(this.env.GOOGLE_TOKEN_KEY_OLD)", "old: null"],
   ["gc_seed_first", "src/relay.ts", "return [...seed, ...stored.filter((l) => !seed.includes(l))];", "return [...stored, ...seed.filter((l) => !stored.includes(l))];"],
   ["gc_setup_makes_key", "scripts/setup-lib.mjs", '"REQUEST_TOKEN", "LOG_HASH_KEY", "GOOGLE_TOKEN_KEY", ...', '"REQUEST_TOKEN", "LOG_HASH_KEY", ...'],
+  // google-connect PR 2: sign-in routes (state + PKCE, exact scope, host split, revoke + delete)
+  ["gc2_scope_exact", "src/google.ts", "return parts.length === 1 && parts[0] === GOOGLE_SCOPE;", "return parts.includes(GOOGLE_SCOPE);"],
+  ["gc2_scope_checked", "src/relay.ts", "if (!scopeIsExact(tok.scope)) {", "if (false) {"],
+  ["gc2_scope_requested", "src/google.ts", 'u.searchParams.set("scope", GOOGLE_SCOPE);', 'u.searchParams.set("scope", GOOGLE_SCOPE + " openid");'],
+  ["gc2_scope_revoke", "src/relay.ts", 'const rv = t ? await this.googleRevoke(t) : "none";', 'const rv = "none";'],
+  ["gc2_state_single_use", "src/relay.ts", 'this.sql.exec("DELETE FROM google_oauth_state WHERE state=?", state);', ""],
+  ["gc2_state_unknown", "src/relay.ts", 'if (!row) throw new Error("google_state_invalid");', ""],
+  ["gc2_state_expiry", "src/relay.ts", 'if (Number(row["expires_ms"]) <= this.clock()) throw new Error("google_state_expired");', ""],
+  ["gc2_state_identity", "src/relay.ts", 'if (row["email"] !== who.email.toLowerCase()) throw new Error("google_state_wrong_identity");', ""],
+  ["gc2_state_format", "src/relay.ts", 'if (!state || !/^[a-f0-9]{64}$/.test(state)) throw new Error("google_state_invalid");', 'if (!state) throw new Error("google_state_invalid");'],
+  ["gc2_pkce_s256", "src/google.ts", 'const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));', "const challenge = verifier;"],
+  ["gc2_pkce_verifier_sent", "src/relay.ts", "code_verifier: st.verifier", 'code_verifier: ""'],
+  ["gc2_form_csrf", "src/relay.ts", 'this.checkPageCsrf(form.get("csrf"), who);\n    return { who, form };', "return { who, form };"],
+  ["gc2_form_origin", "src/relay.ts", 'this.sameOrigin(req, false);\n    const form = await req.formData();\n    this.checkPageCsrf', "const form = await req.formData();\n    this.checkPageCsrf"],
+  ["gc2_host_404", "src/relay.ts", 'if (host !== apprHost) return json(404, { error: "not_found" });', ""],
+  ["gc2_start_needs_key", "src/relay.ts", "await this.requireTokenKey(); // nowhere to keep", "// nowhere to keep"],
+  ["gc2_no_refresh_token", "src/relay.ts", 'if (!tok.refreshToken) throw new Error("google_no_refresh_token");', ""],
+  ["gc2_disconnect_revoke", "src/relay.ts", 'revoke = rt ? await this.googleRevoke(rt) : "none";', 'revoke = "none";'],
+  ["gc2_disconnect_delete", "src/relay.ts", "this.deleteGoogleAccount(label);\n", ""],
+  ["gc2_disconnect_sources", "src/relay.ts", 'this.sql.exec("DELETE FROM contact_sources WHERE account=?", label);', ""],
 ];
 
 const only = process.argv[2];

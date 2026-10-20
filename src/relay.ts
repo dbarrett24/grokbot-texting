@@ -3,7 +3,7 @@ import type { Env } from "./env";
 import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, importHmacKey } from "./e2e";
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
-import { aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, isClientId, isClientSecret, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
+import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, isClientId, isClientSecret, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
   CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
 } from "./contacts";
@@ -153,6 +153,8 @@ export class Relay extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS page_csrf(token TEXT PRIMARY KEY, email TEXT, expires_ms INTEGER)`);
     // Google connect: refresh tokens and the pasted OAuth client, AES-GCM sealed under GOOGLE_TOKEN_KEY (src/google.ts).
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_accounts(label TEXT PRIMARY KEY, email TEXT, rt_ct TEXT NOT NULL, rt_iv TEXT NOT NULL, scope TEXT NOT NULL, connected_ms INTEGER NOT NULL, key_ver TEXT NOT NULL)`);
+    // One row per sign-in in flight: single use, 10 minutes, bound to the Access identity that started it.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS google_oauth_state(state TEXT PRIMARY KEY, label TEXT NOT NULL, verifier TEXT NOT NULL, email TEXT NOT NULL, expires_ms INTEGER NOT NULL)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_client(id INTEGER PRIMARY KEY CHECK (id = 1), blob_ct TEXT NOT NULL, blob_iv TEXT NOT NULL, key_ver TEXT NOT NULL, saved_ms INTEGER NOT NULL)`);
     try {
       this.sql.exec("ALTER TABLE contacts ADD COLUMN account TEXT");
@@ -1165,6 +1167,131 @@ export class Relay extends DurableObject<Env> {
     return n > 0;
   }
 
+  // ---------- Google sign-in routes (APPROVE_HOST /contacts/google/*, behind Access; 404 on REQUEST_HOST) ----------
+  private googleRedirectUri(): string {
+    return `https://${this.env.APPROVE_HOST}/contacts/google/callback`;
+  }
+  /** Access + same Origin + form + the Contacts page CSRF token. */
+  private async googleForm(req: Request): Promise<{ who: Owner; form: FormData }> {
+    const who = await this.requireOwner(req, "google");
+    this.sameOrigin(req, false);
+    const form = await req.formData();
+    this.checkPageCsrf(form.get("csrf"), who);
+    return { who, form };
+  }
+  /** Back to /contacts with a code or label in the query; nothing secret ever goes in it. */
+  private toContacts(q: Record<string, string>): Response {
+    return new Response(null, { status: 303, headers: { location: `/contacts?${new URLSearchParams(q).toString()}`, "cache-control": "no-store", "referrer-policy": "no-referrer" } });
+  }
+
+  /** POST /contacts/google/start {csrf, label}: mint state + PKCE, then 302 to Google's consent page. */
+  private async googleStart(req: Request): Promise<Response> {
+    const { who, form } = await this.googleForm(req);
+    let label: string;
+    try {
+      label = parseLabelInput(form.get("label"));
+    } catch (e) {
+      return this.toContacts({ google_error: errCode(e) });
+    }
+    await this.requireTokenKey(); // nowhere to keep the token: refuse before sending the owner to Google
+    const client = await this.googleClient();
+    if (!client) return this.toContacts({ google_error: "google_client_not_configured" });
+    const now = this.clock();
+    const state = hex(crypto.getRandomValues(new Uint8Array(32)));
+    const { verifier, challenge } = await pkcePair();
+    this.sql.exec("DELETE FROM google_oauth_state WHERE expires_ms <= ?", now);
+    this.sql.exec("INSERT INTO google_oauth_state(state,label,verifier,email,expires_ms) VALUES(?,?,?,?,?)", state, label, verifier, who.email.toLowerCase(), now + GOOGLE_STATE_TTL_MS);
+    this.log("google_connect_started", { detail: `label=${label}` });
+    return new Response(null, { status: 302, headers: { location: buildAuthUrl({ clientId: client.id, redirectUri: this.googleRedirectUri(), state, challenge }), "cache-control": "no-store", "referrer-policy": "no-referrer" } });
+  }
+
+  /** Single use: the row is deleted whether or not it checks out. Missing, expired or another identity = refused. */
+  private takeState(state: string | null, who: Owner): { label: string; verifier: string } {
+    if (!state || !/^[a-f0-9]{64}$/.test(state)) throw new Error("google_state_invalid");
+    const row = this.sql.exec("SELECT label, verifier, email, expires_ms FROM google_oauth_state WHERE state=?", state).toArray()[0];
+    this.sql.exec("DELETE FROM google_oauth_state WHERE state=?", state);
+    if (!row) throw new Error("google_state_invalid");
+    if (Number(row["expires_ms"]) <= this.clock()) throw new Error("google_state_expired");
+    if (row["email"] !== who.email.toLowerCase()) throw new Error("google_state_wrong_identity");
+    const label = row["label"], verifier = row["verifier"];
+    if (typeof label !== "string" || typeof verifier !== "string") throw new Error("google_state_invalid");
+    return { label, verifier };
+  }
+
+  /** Best effort; the result is a code for the log. */
+  private async googleRevoke(token: string): Promise<string> {
+    try {
+      const r = await this.net(new Request(GOOGLE_REVOKE_URL, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token }).toString() }));
+      return r.ok ? "ok" : `status_${r.status}`;
+    } catch {
+      return "network";
+    }
+  }
+
+  /** GET /contacts/google/callback?state&code: swap the code (PKCE verifier + client secret), check the scope, seal the token. */
+  private async googleCallback(req: Request): Promise<Response> {
+    const who = await this.requireOwner(req, "google");
+    const q = new URL(req.url).searchParams;
+    let label = "";
+    try {
+      const st = this.takeState(q.get("state"), who);
+      label = st.label;
+      if (q.get("error")) throw new Error("google_consent_denied");
+      const code = q.get("code");
+      if (!code) throw new Error("google_code_missing");
+      const client = await this.googleClient();
+      if (!client) throw new Error("google_client_not_configured");
+      const tr = await this.net(new Request(GOOGLE_TOKEN_URL, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ code, client_id: client.id, client_secret: client.secret, redirect_uri: this.googleRedirectUri(), grant_type: "authorization_code", code_verifier: st.verifier }).toString(),
+      }));
+      if (!tr.ok) throw new Error(`google_token_status_${tr.status}`);
+      const tok = decodeTokenReply(await jsonOr(tr, "google_token_bad_json"));
+      if (!scopeIsExact(tok.scope)) {
+        const t = tok.refreshToken ?? tok.accessToken;
+        const rv = t ? await this.googleRevoke(t) : "none";
+        this.log("google_connect_refused", { detail: `label=${label} reason=google_scope_not_exact revoke=${rv}` });
+        throw new Error("google_scope_not_exact");
+      }
+      if (!tok.refreshToken) throw new Error("google_no_refresh_token");
+      await this.saveGoogleAccount(label, tok.refreshToken, GOOGLE_SCOPE, null);
+      this.log("google_connected", { detail: `label=${label}` });
+      return this.toContacts({ connected: label });
+    } catch (e) {
+      const code = e instanceof Refuse ? e.code : errCode(e);
+      if (code !== "google_scope_not_exact") this.log("google_connect_failed", { detail: `label=${label || "?"} reason=${code}` });
+      return this.toContacts({ google_error: code });
+    }
+  }
+
+  /** POST /contacts/google/disconnect {csrf, label}: revoke at Google, delete the sealed token and that label's contacts. */
+  private async googleDisconnect(req: Request): Promise<Response> {
+    const { form } = await this.googleForm(req);
+    let label: string;
+    try {
+      label = parseLabelInput(form.get("label"));
+    } catch (e) {
+      return this.toContacts({ google_error: errCode(e) });
+    }
+    if (!this.sql.exec("SELECT 1 FROM google_accounts WHERE label=?", label).toArray().length) return this.toContacts({ google_error: "google_not_connected" });
+    let revoke: string;
+    try {
+      const rt = await this.googleRefreshToken(label);
+      revoke = rt ? await this.googleRevoke(rt) : "none";
+    } catch (e) {
+      revoke = `skipped_${errCode(e)}`; // can't read it, so can't revoke; still delete it
+    }
+    this.ctx.storage.transactionSync(() => {
+      this.deleteGoogleAccount(label);
+      this.sql.exec("DELETE FROM contact_sources WHERE account=?", label);
+      this.sql.exec("DELETE FROM meta WHERE k LIKE ?", `acct:${label}:%`);
+      this.rebuildContacts();
+      this.log("google_disconnected", { detail: `label=${label} revoke=${revoke}` });
+    });
+    return this.toContacts({ disconnected: label, ...(revoke === "ok" ? {} : { revoke: "failed" }) });
+  }
+
   /** OAuth refresh → People API connections (names + phone numbers only). Errors are codes, never token values. */
   private async fetchGoogleContacts(refreshToken: string, cc: string | null) {
     const client = await this.googleClient();
@@ -1270,6 +1397,9 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     if (req.method === "POST" && path === "/contacts/enable-all") return await this.contactsEnableAll(req);
     if (req.method === "POST" && path === "/contacts/migrated-off") return await this.contactsMigratedOff(req);
     if (req.method === "POST" && path === "/contacts/preview") return await this.contactsPreview(req);
+    if (req.method === "POST" && path === "/contacts/google/start") return await this.googleStart(req);
+    if (req.method === "GET" && path === "/contacts/google/callback") return await this.googleCallback(req);
+    if (req.method === "POST" && path === "/contacts/google/disconnect") return await this.googleDisconnect(req);
     return json(404, { error: "not_found" });
   }
 
@@ -1465,7 +1595,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
   }
 
   // ---------- Access side (the owner) ----------
-  private async requireOwner(req: Request, route: "page" | "decide" | "log" | "contacts" | "direct" | "resume" | "sync" | "contacts_page" | "prefs" | "preview"): Promise<Owner> {
+  private async requireOwner(req: Request, route: "page" | "decide" | "log" | "contacts" | "direct" | "resume" | "sync" | "contacts_page" | "prefs" | "preview" | "google"): Promise<Owner> {
     // Token split: the bot's request token must never work here, so refuse any Authorization header.
     if (req.headers.get("Authorization")) throw new Error("access_bearer_not_allowed");
     const who = await verifyAccess(
