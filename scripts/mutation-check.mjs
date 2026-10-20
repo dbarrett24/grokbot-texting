@@ -324,6 +324,7 @@ const M = [
   ["gc_client_reseal", "src/relay.ts", "if (cur && kid !== cur.kid) await this.saveGoogleClient(", "if (false) await this.saveGoogleClient("],
   ["gc_old_key_decrypt", "src/relay.ts", "old: await importTokenKey(this.env.GOOGLE_TOKEN_KEY_OLD)", "old: null"],
   ["gc_seed_first", "src/relay.ts", "return [...seed, ...stored.filter((l) => !seed.includes(l))];", "return [...stored, ...seed.filter((l) => !stored.includes(l))];"],
+  ["gc_keystatus_kid", "src/relay.ts", "const onCurrent = kids.filter((k) => cur !== null && k === cur.kid).length;", "const onCurrent = kids.length;"],
   ["gc_setup_makes_key", "scripts/setup-lib.mjs", '"REQUEST_TOKEN", "LOG_HASH_KEY", "GOOGLE_TOKEN_KEY", ...', '"REQUEST_TOKEN", "LOG_HASH_KEY", ...'],
 ];
 
