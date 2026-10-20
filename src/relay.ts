@@ -5,7 +5,7 @@ import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./pass
 import { verifyAccess, type Net } from "./access";
 import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, isClientId, isClientSecret, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
-  CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
+  CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, projectNumberOf, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
 } from "./contacts";
 import { E164, Refuse, hasLink, localDate, maskNumber, parseAllowlist, parseCount, parseSwitch, parseTapConfig, parseTimezone, sendCap, validateRequestBody, validateTapText, type TapConfig } from "./rules";
 import {
@@ -1157,8 +1157,12 @@ export class Relay extends DurableObject<Env> {
       if (cur && kid !== cur.kid) await this.saveGoogleAccount(row.label, plaintext, row.scope, row.email, row.connected_ms);
       return plaintext;
     }
-    const rt = (this.env as unknown as Record<string, string | undefined>)[`GOOGLE_RT_${label}`];
+    const rt = this.legacyRt(label);
     return rt || null;
+  }
+  /** GOOGLE_RT_<LABEL>, read dynamically (pre-connect deploys). */
+  private legacyRt(label: string): string | undefined {
+    return (this.env as unknown as Record<string, string | undefined>)[`GOOGLE_RT_${label}`];
   }
 
   /** Store (or replace) a label's refresh token, sealed with the label as associated data. */
@@ -1294,6 +1298,50 @@ export class Relay extends DurableObject<Env> {
       if (code !== "google_scope_not_exact") this.log("google_connect_failed", { detail: `label=${label || "?"} reason=${code}` });
       return this.toContacts({ google_error: code });
     }
+  }
+
+  /** POST /contacts/google/client {csrf, client_id, client_secret}: the paste form. Sealed under GOOGLE_TOKEN_KEY; never echoed. */
+  private async googleSaveClient(req: Request): Promise<Response> {
+    const { form } = await this.googleForm(req);
+    const id = form.get("client_id"), secret = form.get("client_secret");
+    try {
+      await this.saveGoogleClient(typeof id === "string" ? id.trim() : "", typeof secret === "string" ? secret.trim() : "");
+    } catch (e) {
+      return this.toContacts({ google_error: e instanceof Refuse ? e.code : errCode(e) });
+    }
+    this.log("google_client_saved", { detail: "source=paste" });
+    return this.toContacts({ google_client: "saved" });
+  }
+
+  /** What the Google panel shows. Never a secret: only which source is in use. */
+  private async googlePanel(): Promise<GooglePanel> {
+    let tokenKey: GooglePanel["tokenKey"] = "missing";
+    try {
+      tokenKey = (await importTokenKey(this.env.GOOGLE_TOKEN_KEY)) ? "ok" : "missing";
+    } catch {
+      tokenKey = "invalid";
+    }
+    let client: GooglePanel["client"];
+    try {
+      client = (await this.googleClient())?.source ?? null;
+    } catch {
+      client = "unreadable";
+    }
+    const stored = new Set(this.sql.exec("SELECT label FROM google_accounts").toArray().flatMap((r) => (typeof r["label"] === "string" ? [r["label"]] : [])));
+    let project: string | null = null;
+    try {
+      project = projectNumberOf((await this.googleClient())?.id ?? null);
+    } catch {
+      project = null;
+    }
+    const when = new Map(this.sql.exec("SELECT label, connected_ms FROM google_accounts").toArray().flatMap((r) => (typeof r["label"] === "string" && typeof r["connected_ms"] === "number" ? [[r["label"], r["connected_ms"]] as const] : [])));
+    const ks = await this.googleKeyStatus();
+    return {
+      tokenKey, client, project, redirectUri: this.googleRedirectUri(),
+      accounts: this.googleLabels().map((label) => { const ms = when.get(label); return { label, stored: stored.has(label), fromSeed: !stored.has(label) && !!this.legacyRt(label), connected: ms === undefined ? null : this.fmtTime(ms) }; }),
+      leftovers: this.googleLegacyLeftovers(),
+      keyStatus: { total: ks.total, onOld: ks.onOld },
+    };
   }
 
   /** POST /contacts/google/disconnect {csrf, label}: revoke at Google, delete the sealed token and that label's contacts. */
@@ -1432,6 +1480,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     if (req.method === "POST" && path === "/contacts/google/start") return await this.googleStart(req);
     if (req.method === "GET" && path === "/contacts/google/callback") return await this.googleCallback(req);
     if (req.method === "POST" && path === "/contacts/google/disconnect") return await this.googleDisconnect(req);
+    if (req.method === "POST" && path === "/contacts/google/client") return await this.googleSaveClient(req);
     return json(404, { error: "not_found" });
   }
 
@@ -1486,7 +1535,11 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     const accts = this.googleLabels();
     const lastErr = this.sql.exec("SELECT ms, detail FROM log WHERE event IN ('contacts_sync','contacts_sync_failed','contacts_snapshot') ORDER BY seq DESC LIMIT 1").toArray()[0] as { ms: number; detail: string } | undefined;
     const errCodeOf = lastErr?.detail?.match(/reason=([a-zA-Z0-9_]+)/)?.[1];
-    const synced = new URL(req.url).searchParams.get("synced");
+    const q = new URL(req.url).searchParams;
+    const synced = q.get("synced");
+    const gErr = q.get("google_error");
+    const connected = q.get("connected"), disconnected = q.get("disconnected");
+    const label = (v: string | null) => (v && /^[A-Z0-9_]{1,32}$/.test(v) ? v : null);
     const html = renderContactsPage({
       csrf, nonce, method: who.method,
       migratedOn: key ? (this.sql.exec(`SELECT COUNT(*) AS c FROM contact_prefs WHERE ${MIGRATED_ON}`).one()["c"] as number) : 0,
@@ -1496,13 +1549,18 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
       }),
       lastError: errCodeOf && lastErr ? { code: errCodeOf, when: this.fmtTime(lastErr.ms) } : null,
       canSync: accts.length > 0,
-      toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors: see Health" : null,
+      toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors: see Health"
+        : label(connected) ? `Connected ${label(connected)}. Press Sync now to load its contacts.`
+        : label(disconnected) ? `Disconnected ${label(disconnected)}${q.get("revoke") === "failed" ? " (Google didn't confirm the revoke: remove it at myaccount.google.com/connections)" : ""}`
+        : q.get("google_client") === "saved" ? "Google client saved" : null,
       hashKeyMissing: !key,
+      google: await this.googlePanel(),
+      googleError: gErr && /^[a-z0-9_]{1,80}$/.test(gErr) ? gErr : null,
     });
     return new Response(html, {
       headers: {
         "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "same-origin", // not no-referrer: Chrome then sends Origin: null on the Sync now form
-        "content-security-policy": `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'`,
+        "content-security-policy": `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com; base-uri 'none'`, // Connect Google posts here, then 302s to Google's consent page
       },
     });
   }
