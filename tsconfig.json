@@ -2,6 +2,7 @@
   "compilerOptions": {
     "target": "ES2022", "module": "ES2022", "moduleResolution": "Bundler", "lib": ["ES2022"],
     "strict": true, "noEmit": true, "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true, "noImplicitReturns": true, "allowUnreachableCode": false, "allowUnusedLabels": false, "isolatedModules": true,
     "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"]
   },
   "include": ["src", "test"]
