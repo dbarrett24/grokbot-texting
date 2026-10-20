@@ -3,6 +3,7 @@ import type { Env } from "./env";
 import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, importHmacKey } from "./e2e";
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
+import { aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, isClientId, isClientSecret, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
   CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
 } from "./contacts";
@@ -150,6 +151,9 @@ export class Relay extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS contacts_migration(e164 TEXT PRIMARY KEY, enabled INTEGER NOT NULL)`);
     // Contacts page CSRF: per page load, reusable for 15 minutes, bound to the Access identity.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS page_csrf(token TEXT PRIMARY KEY, email TEXT, expires_ms INTEGER)`);
+    // Google connect: refresh tokens and the pasted OAuth client, AES-GCM sealed under GOOGLE_TOKEN_KEY (src/google.ts).
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS google_accounts(label TEXT PRIMARY KEY, email TEXT, rt_ct TEXT NOT NULL, rt_iv TEXT NOT NULL, scope TEXT NOT NULL, connected_ms INTEGER NOT NULL, key_ver TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS google_client(id INTEGER PRIMARY KEY CHECK (id = 1), blob_ct TEXT NOT NULL, blob_iv TEXT NOT NULL, key_ver TEXT NOT NULL, saved_ms INTEGER NOT NULL)`);
     try {
       this.sql.exec("ALTER TABLE contacts ADD COLUMN account TEXT");
     } catch {
@@ -992,7 +996,7 @@ export class Relay extends DurableObject<Env> {
    * Outstanding candidate ids are retired, since the list they were drawn from changed.
    */
   private rebuildContacts() {
-    const order = [...parseAccounts(this.env.GOOGLE_ACCOUNTS).valid, UPLOAD_SOURCE, LEGACY_SOURCE];
+    const order = [...this.googleLabels(), UPLOAD_SOURCE, LEGACY_SOURCE];
     this.sql.exec("DELETE FROM contacts");
     this.setMeta("hash_key_fp", null); // pref rows follow the new list on the next read
     this.sql.exec("DELETE FROM candidates");
@@ -1018,7 +1022,8 @@ export class Relay extends DurableObject<Env> {
    */
   async syncContacts(opts: { alert: boolean } = { alert: true }): Promise<{ updated: string[]; failed: { account: string; reason: string }[] }> {
     const now = this.clock();
-    const { valid, invalid } = parseAccounts(this.env.GOOGLE_ACCOUNTS);
+    const { invalid } = parseAccounts(this.env.GOOGLE_ACCOUNTS);
+    const valid = this.googleLabels();
     const failed: { account: string; reason: string }[] = invalid.map((l) => ({ account: l, reason: "invalid_label" }));
     const updated: string[] = [];
     let cc: string | null = null;
@@ -1033,7 +1038,13 @@ export class Relay extends DurableObject<Env> {
         failed.push({ account: acct, reason: ccError });
         continue;
       }
-      const rt = (this.env as unknown as Record<string, string | undefined>)[`GOOGLE_RT_${acct}`];
+      let rt: string | null;
+      try {
+        rt = await this.googleRefreshToken(acct);
+      } catch (e) {
+        failed.push({ account: acct, reason: errCode(e) });
+        continue;
+      }
       if (!rt) {
         failed.push({ account: acct, reason: `missing_secret_GOOGLE_RT_${acct}` });
         continue;
@@ -1082,11 +1093,99 @@ export class Relay extends DurableObject<Env> {
     return { updated, failed };
   }
 
+  // ---------- Google connect storage (src/google.ts) ----------
+  /** Current GOOGLE_TOKEN_KEY, then GOOGLE_TOKEN_KEY_OLD (decrypt only, for rotation). A malformed key throws its code. */
+  private async tokenKeys(): Promise<{ cur: TokenKey | null; old: TokenKey | null }> {
+    return { cur: await importTokenKey(this.env.GOOGLE_TOKEN_KEY), old: await importTokenKey(this.env.GOOGLE_TOKEN_KEY_OLD) };
+  }
+  private async requireTokenKey(): Promise<TokenKey> {
+    const { cur } = await this.tokenKeys();
+    if (!cur) throw new Refuse("google_token_key_missing", 503);
+    return cur;
+  }
+
+  /** Account order: GOOGLE_ACCOUNTS (legacy seed, first wins name conflicts), then in-app connected labels by connect time. */
+  googleLabels(): string[] {
+    const seed = parseAccounts(this.env.GOOGLE_ACCOUNTS).valid;
+    const stored = this.sql.exec("SELECT label FROM google_accounts ORDER BY connected_ms, label").toArray().flatMap((r) => (typeof r["label"] === "string" ? [r["label"]] : []));
+    return [...seed, ...stored.filter((l) => !seed.includes(l))];
+  }
+
+  /** The OAuth client: the in-app (stored, sealed) one first, then the GOOGLE_CLIENT_ID/SECRET secrets. null = neither. */
+  async googleClient(): Promise<GoogleClient | null> {
+    const raw = this.sql.exec("SELECT blob_ct, blob_iv, key_ver, saved_ms FROM google_client WHERE id=1").toArray()[0];
+    if (raw) {
+      const row = decodeClientRow(raw);
+      const { cur, old } = await this.tokenKeys();
+      const { plaintext, kid } = await open([cur, old], { ct: row.blob_ct, iv: row.blob_iv, kid: row.key_ver }, aadFor("client", "client"));
+      const c = decodeClientBlob(plaintext);
+      if (cur && kid !== cur.kid) await this.saveGoogleClient(c.id, c.secret, row.saved_ms); // rotation: re-seal under the new key
+      return { ...c, source: "stored" };
+    }
+    const id = this.env.GOOGLE_CLIENT_ID, secret = this.env.GOOGLE_CLIENT_SECRET;
+    return id && secret ? { id, secret, source: "secrets" } : null;
+  }
+
+  /** Store the pasted client, sealed. Needs GOOGLE_TOKEN_KEY. */
+  async saveGoogleClient(id: string, secret: string, savedMs = this.clock()): Promise<void> {
+    if (!isClientId(id)) throw new Refuse("google_client_id_invalid");
+    if (!isClientSecret(secret)) throw new Refuse("google_client_secret_invalid");
+    const k = await this.requireTokenKey();
+    const s = await seal(k, JSON.stringify({ id, secret }), aadFor("client", "client"));
+    this.sql.exec("INSERT OR REPLACE INTO google_client(id, blob_ct, blob_iv, key_ver, saved_ms) VALUES(1,?,?,?,?)", s.ct, s.iv, s.kid, savedMs);
+  }
+
+  /** A label's refresh token: the stored row first, else the GOOGLE_RT_<LABEL> secret (pre-upgrade deploys). null = neither. */
+  async googleRefreshToken(label: string): Promise<string | null> {
+    const raw = this.sql.exec("SELECT * FROM google_accounts WHERE label=?", label).toArray()[0];
+    if (raw) {
+      const row = decodeAccountRow(raw);
+      const { cur, old } = await this.tokenKeys();
+      const { plaintext, kid } = await open([cur, old], { ct: row.rt_ct, iv: row.rt_iv, kid: row.key_ver }, aadFor("rt", row.label));
+      if (cur && kid !== cur.kid) await this.saveGoogleAccount(row.label, plaintext, row.scope, row.email, row.connected_ms);
+      return plaintext;
+    }
+    const rt = (this.env as unknown as Record<string, string | undefined>)[`GOOGLE_RT_${label}`];
+    return rt || null;
+  }
+
+  /** Store (or replace) a label's refresh token, sealed with the label as associated data. */
+  async saveGoogleAccount(label: string, refreshToken: string, scope: string, email: string | null, connectedMs = this.clock()): Promise<void> {
+    if (!isLabel(label)) throw new Refuse("google_label_invalid");
+    if (!refreshToken) throw new Refuse("google_no_refresh_token");
+    const k = await this.requireTokenKey();
+    const s = await seal(k, refreshToken, aadFor("rt", label));
+    this.sql.exec("INSERT OR REPLACE INTO google_accounts(label, email, rt_ct, rt_iv, scope, connected_ms, key_ver) VALUES(?,?,?,?,?,?,?)", label, email, s.ct, s.iv, scope, connectedMs, s.kid);
+  }
+
+  /**
+   * Rotation check: how many stored rows (sign-ins + the client) are sealed under the current GOOGLE_TOKEN_KEY.
+   * Delete GOOGLE_TOKEN_KEY_OLD only when onOld is 0.
+   */
+  async googleKeyStatus(): Promise<{ total: number; onCurrent: number; onOld: number }> {
+    let cur: TokenKey | null = null;
+    try {
+      cur = (await this.tokenKeys()).cur;
+    } catch {
+      cur = null;
+    }
+    const kids = [...this.sql.exec("SELECT key_ver FROM google_accounts").toArray(), ...this.sql.exec("SELECT key_ver FROM google_client").toArray()].map((r) => r["key_ver"]);
+    const onCurrent = kids.filter((k) => cur !== null && k === cur.kid).length;
+    return { total: kids.length, onCurrent, onOld: kids.length - onCurrent };
+  }
+
+  /** Remove a label's stored token. (Revoking at Google is the Disconnect route's job.) */
+  deleteGoogleAccount(label: string): boolean {
+    const n = this.sql.exec("SELECT COUNT(*) AS c FROM google_accounts WHERE label=?", label).one()["c"] as number;
+    this.sql.exec("DELETE FROM google_accounts WHERE label=?", label);
+    return n > 0;
+  }
+
   /** OAuth refresh → People API connections (names + phone numbers only). Errors are codes, never token values. */
   private async fetchGoogleContacts(refreshToken: string, cc: string | null) {
-    const id = this.env.GOOGLE_CLIENT_ID;
-    const secret = this.env.GOOGLE_CLIENT_SECRET;
-    if (!id || !secret) throw new Error("google_client_not_configured");
+    const client = await this.googleClient();
+    if (!client) throw new Error("google_client_not_configured");
+    const { id, secret } = client;
     const tr = await this.net(
       new Request("https://oauth2.googleapis.com/token", {
         method: "POST",
@@ -1135,8 +1234,8 @@ export class Relay extends DurableObject<Env> {
 ${this.devicePageLine()}
 <p><b>DEFAULT_COUNTRY_CODE:</b> ${(() => { try { return esc(parseCountryCode(this.env.DEFAULT_COUNTRY_CODE) ?? "none (strict E.164)"); } catch { return "NOT SET: contact sync is refused until it is"; } })()}</p>
 <p><b>Direct list:</b> ${snapAt ? `${esc(this.meta("snapshot_numbers") ?? "?")} numbers under ${esc(this.meta("snapshot_names") ?? "?")} distinct names, rebuilt ${esc(this.fmtTime(Number(snapAt)))}` : "empty"}</p>
-<ul>${[...parseAccounts(this.env.GOOGLE_ACCOUNTS).valid, UPLOAD_SOURCE].map((a) => { const ok = this.meta(`acct:${a}:ok_ms`); return `<li>${esc(a)}: ${ok ? `${esc(this.meta(`acct:${a}:numbers`) ?? "?")} numbers${this.meta(`acct:${a}:dropped`) ? ` (${esc(this.meta(`acct:${a}:dropped`)!)} fax/pager dropped)` : ""}, last good ${esc(this.fmtTime(Number(ok)))}` : "never loaded"}</li>`; }).join("")}</ul>
-${parseAccounts(this.env.GOOGLE_ACCOUNTS).valid.length ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${csrf}"><button>Sync contacts now</button></form>` : "<p>No Google accounts configured (GOOGLE_ACCOUNTS).</p>"}
+<ul>${[...this.googleLabels(), UPLOAD_SOURCE].map((a) => { const ok = this.meta(`acct:${a}:ok_ms`); return `<li>${esc(a)}: ${ok ? `${esc(this.meta(`acct:${a}:numbers`) ?? "?")} numbers${this.meta(`acct:${a}:dropped`) ? ` (${esc(this.meta(`acct:${a}:dropped`)!)} fax/pager dropped)` : ""}, last good ${esc(this.fmtTime(Number(ok)))}` : "never loaded"}</li>`; }).join("")}</ul>
+${this.googleLabels().length ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${csrf}"><button>Sync contacts now</button></form>` : "<p>No Google accounts configured (GOOGLE_ACCOUNTS).</p>"}
 ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=csrf value="${csrf}"><button style="font-size:1.2em">Resume direct send</button></form>` : ""}
 </body>`;
     return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" } });
@@ -1238,7 +1337,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     this.setMeta("contacts_last_visit_ms", String(now));
     const csrf = this.mintPageCsrf(who, now);
     const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
-    const accts = parseAccounts(this.env.GOOGLE_ACCOUNTS).valid;
+    const accts = this.googleLabels();
     const lastErr = this.sql.exec("SELECT ms, detail FROM log WHERE event IN ('contacts_sync','contacts_sync_failed','contacts_snapshot') ORDER BY seq DESC LIMIT 1").toArray()[0] as { ms: number; detail: string } | undefined;
     const errCodeOf = lastErr?.detail?.match(/reason=([a-zA-Z0-9_]+)/)?.[1];
     const synced = new URL(req.url).searchParams.get("synced");
