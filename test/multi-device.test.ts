@@ -166,7 +166,7 @@ describe("multi-send separate copies on the iPhone paths", () => {
     const sent = await logOf("direct_sent");
     expect(sent).toHaveLength(1);
     expect(sent[0].request_id).toBe(approved[0]);
-    expect(sent[0].detail).toContain("label=Jordan Bauer");
+    expect(sent[0].detail).not.toMatch(/label=|Jordan Bauer/); // names stay out of direct_sent lines
     expect(sent[0].detail).toContain("copy=1/2");
     const failed = await logOf("direct_send_failed");
     expect(failed.map((x) => x.request_id)).toEqual([approved[1]]);

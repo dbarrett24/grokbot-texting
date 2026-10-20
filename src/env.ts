@@ -24,7 +24,7 @@ export interface Env {
   DISABLED?: string; // "1" = kill switch: refuse everything (direct sends included)
   // ---- direct send (POST /send). See README "Direct send". ----
   DIRECT_SEND?: string; // "1" (exact; template default) = on. REQUEST_TOKEN can then send WITHOUT approval to numbers on the direct list
-  CONTACTS_SNAPSHOT_ONLY?: string; // REMOVED. Read once, by the DIRECT_ALLOWLIST upgrade import only: exact "0" = those entries were textable, so they stay on (flagged)
+  CONTACTS_SNAPSHOT_ONLY?: string; // REMOVED. Read once, by the DIRECT_ALLOWLIST upgrade import only: on an upgrade, exact "0" = those entries were textable, so they stay on (flagged); a fresh deploy never enables them
   RUNAWAY_PAUSE?: string; // unset = on; only "0" (template default) turns it off. More than RUNAWAY_MAX direct sends in 60 min pauses direct send
   RUNAWAY_MAX?: string; // default "10"
   DIRECT_DAILY_CAP?: string; // opt-in; unset/"off" = no cap; digits 1..100000; garbage = direct refused

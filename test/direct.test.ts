@@ -113,7 +113,7 @@ describe("raw number", () => {
     expect(row.detail).toContain(`to_hmac=${await hm(`num:${FRIEND}`)}`);
     expect(row.detail).not.toContain(await sha256Hex(FRIEND));
     expect(row.detail).toContain("method=direct via=number");
-    expect(row.detail).toContain("label=Test Friend");
+    expect(row.detail).not.toMatch(/label=|Test Friend/); // names stay out of direct_sent lines
     expect(JSON.stringify(await logRows())).not.toContain("On my way");
   });
 
@@ -535,6 +535,26 @@ describe("contacts snapshot upload", () => {
 });
 
 describe("DIRECT_ALLOWLIST (deprecated): imported once as flagged legacy", () => {
+  /** Make this Durable Object look like an older version ran here (some prior state), then boot the new version. */
+  const asUpgrade = () => runInDurableObject(h.relay, (i: Relay, state: DurableObjectState) => {
+    state.storage.sql.exec("DELETE FROM meta WHERE k IN ('contacts_prefs_v1','deploy_kind')");
+    state.storage.sql.exec("INSERT INTO log(ms, event) VALUES(0, 'old_version_traffic')");
+    i.migratePrefs();
+  });
+  const kindOf = () => runInDurableObject(h.relay, (_i: Relay, state: DurableObjectState) => state.storage.sql.exec("SELECT v FROM meta WHERE k='deploy_kind'").toArray()[0]?.["v"]);
+
+  it("a brand-new Durable Object is a fresh deploy; one with earlier state is an upgrade", async () => {
+    expect(await kindOf()).toBe("fresh");
+    await asUpgrade();
+    expect(await kindOf()).toBe("upgrade");
+  });
+
+  it("fresh deploy with the shipped CONTACTS_SNAPSHOT_ONLY=\"0\": entries imported flagged but OFF (a fresh deploy never auto-enables)", async () => {
+    await h.setEnv({ CONTACTS_SNAPSHOT_ONLY: "0", DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person" }) });
+    await expectRefused(await direct({ to: OTHER, body: "x" }), 403, "recipient_not_on_allowlist");
+    expect(await prefOf(OTHER)).toEqual({ enabled: 0, migrated: 1 });
+    expect(await sentTo()).toEqual([]);
+  });
   const prefOf = (e164: string) => runInDurableObject(h.relay, (_i: Relay, state: DurableObjectState) => state.storage.sql.exec("SELECT p.enabled, p.migrated FROM contacts c JOIN contact_prefs p ON p.person_key=c.e164_sha WHERE c.e164=?", e164).toArray()[0]);
   it.each([undefined, "1", "yes"])("CONTACTS_SNAPSHOT_ONLY=%j (entries were not textable): imported flagged but OFF", async (v) => {
     await h.setEnv({ CONTACTS_SNAPSHOT_ONLY: v as unknown as string, DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person" }) });
@@ -542,7 +562,8 @@ describe("DIRECT_ALLOWLIST (deprecated): imported once as flagged legacy", () =>
     expect(await prefOf(OTHER)).toEqual({ enabled: 0, migrated: 1 });
   });
 
-  it("CONTACTS_SNAPSHOT_ONLY=\"0\" (old default, entries were textable): imported ON and flagged, so the bot keeps working", async () => {
+  it("legacy migration with CONTACTS_SNAPSHOT_ONLY=\"0\" (old default, entries were textable): imported ON and flagged, so the bot keeps working", async () => {
+    await asUpgrade();
     await h.setEnv({ CONTACTS_SNAPSHOT_ONLY: "0", DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person" }) });
     expect(await (await direct({ to: OTHER, body: "x" })).json()).toMatchObject({ state: "sent", to: "Other Person" });
     expect(await sentTo()).toEqual([OTHER]);
@@ -550,6 +571,7 @@ describe("DIRECT_ALLOWLIST (deprecated): imported once as flagged legacy", () =>
   });
 
   it("runs once: a later edit to the secret adds no one", async () => {
+    await asUpgrade();
     await h.setEnv({ CONTACTS_SNAPSHOT_ONLY: "0", DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person" }) });
     expect((await direct({ to: OTHER, body: "x" })).status).toBe(200);
     await h.setEnv({ DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person", [STRANGER]: "Late Add" }) });

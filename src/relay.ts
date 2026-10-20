@@ -66,6 +66,9 @@ const json = (status: number, body: unknown) =>
 /** A SQL text column, or "" for anything else (NULL, a number, a blob). */
 const textOf = (v: unknown): string => (typeof v === "string" ? v : "");
 
+/** Migrated rows the banner counts and "turn all migrated off" acts on. One predicate so the page and the action can't drift. */
+const MIGRATED_ON = "migrated=1 AND enabled=1 AND gone_ms IS NULL";
+
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 async function tokenEquals(a: string, b: string): Promise<boolean> {
@@ -434,6 +437,9 @@ export class Relay extends DurableObject<Env> {
   migratePrefs() {
     if (this.meta("contacts_prefs_v1") !== null) return;
     this.ctx.storage.transactionSync(() => {
+      // Any earlier state means an older version ran here (an upgrade); none means a fresh deploy.
+      const prior = this.sql.exec("SELECT (SELECT COUNT(*) FROM meta) + (SELECT COUNT(*) FROM contacts) + (SELECT COUNT(*) FROM log) AS c").one()["c"];
+      this.setMeta("deploy_kind", prior === 0 ? "fresh" : "upgrade");
       const nums = this.sql.exec("SELECT DISTINCT e164 FROM contacts").toArray().map((r) => r["e164"] as string);
       for (const n of nums) this.sql.exec("INSERT OR IGNORE INTO contacts_migration(e164,enabled) VALUES(?,1)", n);
       this.setMeta("contacts_prefs_v1", String(this.clock()));
@@ -458,7 +464,8 @@ export class Relay extends DurableObject<Env> {
       this.log("legacy_allowlist_skipped", { detail: "reason=allowlist_malformed" });
       return;
     }
-    const wasOn = this.env.CONTACTS_SNAPSHOT_ONLY === "0";
+    // Only an upgrade had textable DIRECT_ALLOWLIST entries. A fresh deploy never auto-enables anyone.
+    const wasOn = this.meta("deploy_kind") === "upgrade" && this.env.CONTACTS_SNAPSHOT_ONLY === "0";
     const rows: ContactRow[] = entries.map(([e164, name]) => {
       const n = normalizeName(name);
       return { name, name_norm: n, given_norm: "", first_norm: n.split(" ")[0] ?? "", e164, label: "unlabeled" };
@@ -795,8 +802,8 @@ export class Relay extends DurableObject<Env> {
     // copies: each copy gets its own id and log rows; single and group use the one id.
     const ids = targets.map((_, i) => (mode === "copies" && i > 0 ? hex(crypto.getRandomValues(new Uint8Array(16))) : id));
     const labels = targets.map((t) => safeName(t.name));
-    const whoOf = (i: number) => `method=direct via=${via} to_hmac=${targets[i].e164_sha} label=${labels[i]}${mode === "copies" ? ` batch_ref=${id.slice(0, 8)} copy=${i + 1}/${n}` : ""}`;
-    const all = targets.map((t, i) => `to_hmac=${t.e164_sha} label=${labels[i]}`).join(" ");
+    const whoOf = (i: number) => `method=direct via=${via} to_hmac=${targets[i].e164_sha}${mode === "copies" ? ` batch_ref=${id.slice(0, 8)} copy=${i + 1}/${n}` : ""}`;
+    const all = targets.map((t) => `to_hmac=${t.e164_sha}`).join(" ");
     const who = mode === "single" ? whoOf(0) : `method=${mode === "group" ? "group_mms" : "direct"} via=${via} recipients=${n} ${all}`;
     const plan = this.ctx.storage.transactionSync((): DirectPlan => {
       for (const candidate of candidates) {
@@ -1237,7 +1244,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     const synced = new URL(req.url).searchParams.get("synced");
     const html = renderContactsPage({
       csrf, nonce, method: who.method,
-      migratedOn: key ? (this.sql.exec("SELECT COUNT(*) AS c FROM contact_prefs WHERE migrated=1 AND enabled=1 AND gone_ms IS NULL").one()["c"] as number) : 0,
+      migratedOn: key ? (this.sql.exec(`SELECT COUNT(*) AS c FROM contact_prefs WHERE ${MIGRATED_ON}`).one()["c"] as number) : 0,
       sources: [...accts, UPLOAD_SOURCE, LEGACY_SOURCE].filter((a) => a !== LEGACY_SOURCE || this.meta(`acct:${a}:ok_ms`)).map((a) => {
         const ok = this.meta(`acct:${a}:ok_ms`);
         return { name: a, numbers: this.meta(`acct:${a}:numbers`), lastGood: ok ? this.fmtTime(Number(ok)) : null };
@@ -1267,10 +1274,16 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
       key: r.e164_sha, name: safeName(r.name), label: r.label, last4: last4(r.e164), enabled: r.enabled === 1, starred: r.starred === 1,
       migrated: r.migrated === 1, new: since > 0 && (r.first_seen_ms ?? 0) > since, source: r.account, readonly: false,
     }));
+    // ALLOWLIST numbers are always sendable (directList), so they always get a read-only "always on" row, even
+    // when the same number is also a contact: that contact's own switch can't turn them off.
+    const always = this.env.ALLOWLIST ? parseAllowlist(this.env.ALLOWLIST) : new Map<string, string>();
+    rows.forEach((r, i) => {
+      if (always.has(r.e164)) people[i] = { ...people[i], key: null, label: "always on (ALLOWLIST)", enabled: true, starred: false, readonly: true };
+    });
     const have = new Set(rows.map((r) => r.e164));
-    for (const [e164, name] of this.env.ALLOWLIST ? parseAllowlist(this.env.ALLOWLIST) : new Map<string, string>()) {
-      if (have.has(e164)) continue;
-      people.push({ key: null, name: safeName(name), label: "set in secret", last4: last4(e164), enabled: true, starred: false, migrated: false, new: false, source: "ALLOWLIST", readonly: true });
+    for (const [e164, name] of always) {
+      if (have.has(e164)) continue; // shown above as the contact's own read-only row
+      people.push({ key: null, name: safeName(name), label: "always on (ALLOWLIST)", last4: last4(e164), enabled: true, starred: false, migrated: false, new: false, source: "ALLOWLIST", readonly: true });
     }
     return json(200, { people });
   }
@@ -1336,11 +1349,11 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
   private async contactsMigratedOff(req: Request): Promise<Response> {
     const { who, body } = await this.contactsWrite(req, "prefs");
     if (Object.keys(body).some((k) => k !== "csrf" && k !== "confirm_count")) throw new Refuse("unknown_fields");
-    const n = this.sql.exec("SELECT COUNT(*) AS c FROM contact_prefs WHERE migrated=1 AND enabled=1").one()["c"] as number;
+    const n = this.sql.exec(`SELECT COUNT(*) AS c FROM contact_prefs WHERE ${MIGRATED_ON}`).one()["c"] as number;
     if (body["confirm_count"] !== n) throw new Refuse("confirm_count_mismatch", 409);
     const now = this.clock();
     this.ctx.storage.transactionSync(() => {
-      this.sql.exec("UPDATE contact_prefs SET enabled=0, updated_ms=?, by=? WHERE migrated=1 AND enabled=1", now, who.email);
+      this.sql.exec(`UPDATE contact_prefs SET enabled=0, updated_ms=?, by=? WHERE ${MIGRATED_ON}`, now, who.email);
       this.sql.exec("DELETE FROM candidates");
       this.log("contacts_migrated_off", { detail: `updated=${n} method=${who.method} by=${who.email}` });
     });
