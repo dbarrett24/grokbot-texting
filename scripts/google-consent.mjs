@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// LEGACY (google-connect): new deploys connect Google on the Contacts page instead (DEPLOY.md section 9),
+// with the token sealed in the Worker. This script stays for deploys that use GOOGLE_RT_<LABEL> secrets.
 // Run this on your own computer (macOS, Linux or Windows) once per Google account. It prints Google's
 // consent link (read-only contacts scope) and tries to open it in your browser, catches the answer on a 127.0.0.1 loopback port, swaps the code for a refresh token, and pipes
 // that token straight into `npx wrangler secret put GOOGLE_RT_<LABEL>`. The token is never printed and
