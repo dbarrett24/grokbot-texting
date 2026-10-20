@@ -114,3 +114,55 @@ export function isLabel(l: string): boolean {
 }
 export const isClientId = (v: string) => /^[A-Za-z0-9-]{1,120}\.apps\.googleusercontent\.com$/.test(v);
 export const isClientSecret = (v: string) => /^[\x21-\x7e]{10,200}$/.test(v);
+
+// ---- google-connect PR 2: web sign-in (start/callback), state + PKCE, exact scope, revoke ----
+export const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+export const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
+export const GOOGLE_STATE_TTL_MS = 10 * 60_000;
+
+const b64url = (u: Uint8Array) => b64(u).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+/** PKCE S256: 32 random bytes as the verifier (43 chars), SHA-256 of it as the challenge. */
+export async function pkcePair(): Promise<{ verifier: string; challenge: string }> {
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+  return { verifier, challenge };
+}
+
+/** Same parameters as scripts/google-consent.mjs, with a web redirect instead of the loopback port. */
+export function buildAuthUrl(p: { clientId: string; redirectUri: string; state: string; challenge: string }): string {
+  const u = new URL(GOOGLE_AUTH_URL);
+  u.searchParams.set("client_id", p.clientId);
+  u.searchParams.set("redirect_uri", p.redirectUri);
+  u.searchParams.set("response_type", "code");
+  u.searchParams.set("scope", GOOGLE_SCOPE);
+  u.searchParams.set("access_type", "offline");
+  u.searchParams.set("prompt", "consent select_account");
+  u.searchParams.set("state", p.state);
+  u.searchParams.set("code_challenge", p.challenge);
+  u.searchParams.set("code_challenge_method", "S256");
+  return u.toString();
+}
+
+/** The granted scope must be exactly contacts.readonly: nothing more, nothing less. */
+export function scopeIsExact(granted: unknown): boolean {
+  if (typeof granted !== "string") return false;
+  const parts = granted.split(/\s+/).filter(Boolean);
+  return parts.length === 1 && parts[0] === GOOGLE_SCOPE;
+}
+
+/** Token endpoint reply, typed. Values are never logged. */
+export function decodeTokenReply(v: unknown): { refreshToken: string | null; accessToken: string | null; scope: unknown } {
+  if (!isObj(v)) throw new Error("google_token_bad_json");
+  const rt = v["refresh_token"], at = v["access_token"];
+  return { refreshToken: typeof rt === "string" && rt ? rt : null, accessToken: typeof at === "string" && at ? at : null, scope: v["scope"] };
+}
+
+/** Label typed on the page ("work") → stored label ("WORK"). */
+export function parseLabelInput(v: unknown): string {
+  if (typeof v !== "string") throw new Error("google_label_invalid");
+  const l = v.trim().toUpperCase();
+  if (!isLabel(l)) throw new Error("google_label_invalid");
+  return l;
+}
