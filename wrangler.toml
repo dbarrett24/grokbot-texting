@@ -37,8 +37,9 @@ ALLOW_EMAIL_OTP = "1"                     # Normal setting. Cloudflare's Access 
 DISABLED = "0"                            # "1" = kill switch: everything refused
 # ---- Direct send (POST /send): the bot sends with no tap, to people on your list only. ----
 DIRECT_SEND = "1"                         # only exact "1" turns it on; "0" = tap-to-approve only
-CONTACTS_SNAPSHOT_ONLY = "0"              # Only decides the DIRECT_ALLOWLIST secret: "0" = its numbers are also direct.
-                                          # Google sync, the manual upload and the tap ALLOWLIST are ALWAYS on the direct list.
+CONTACTS_SNAPSHOT_ONLY = "0"              # DEPRECATED, kept one release for the upgrade: read once, when the old DIRECT_ALLOWLIST
+                                          # secret is imported as flagged legacy contacts ("0" = they were textable, so they stay on).
+                                          # Who the bot may text is now chosen on https://<APPROVE_HOST>/contacts (everyone starts off).
 RUNAWAY_PAUSE = "0"                       # "1" = more than RUNAWAY_MAX direct sends in 60 min pauses direct send until you
                                           # resume at https://<APPROVE_HOST>/direct. Unset counts as ON; only exact "0" turns it off.
 RUNAWAY_MAX = "10"
@@ -90,5 +91,5 @@ CAP_START_DATE = "REPLACE_WITH_START_DATE_YYYY-MM-DD"   # invalid = the cap stay
 # OWNER_NUMBER (your own number; needed for sms-mode notices, and always when GROUP_MMS = "1") and/or NTFY_URL + NTFY_TOKEN (ntfy mode),
 # LOG_HASH_KEY (required for direct send, >= 32 chars): HMAC key for number and body hashes,
 # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_RT_<LABEL> per account (scripts/google-consent.mjs),
-# DIRECT_ALLOWLIST (optional; used only when CONTACTS_SNAPSHOT_ONLY = "0")
+# DIRECT_ALLOWLIST (DEPRECATED: imported once as flagged legacy contacts, then ignored; delete it after review)
 # DEVICE_TOKEN (DELIVERY = mac or shortcut only; 32+ chars, different from REQUEST_TOKEN, e.g. `openssl rand -hex 32`)

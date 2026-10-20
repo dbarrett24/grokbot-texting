@@ -122,7 +122,7 @@ npm test && npm run typecheck
    CAP_START_DATE = "YYYY-MM-DD"                 # today; only used if you turn on tap-to-approve
    GOOGLE_ACCOUNTS = "primary"                   # one label per Google account, e.g. "primary,work"
    ```
-3. Leave the rest as shipped: `DIRECT_SEND = "1"`, `ALLOW_EMAIL_OTP = "1"`, `REQUIRED_AMR = "otp"`, `NOTIFY_MODE = "sms"`, `CONTACTS_SNAPSHOT_ONLY = "0"`, `RUNAWAY_PAUSE = "0"`, `GROUP_MMS = "0"`, `DISABLED = "0"`, `workers_dev = false`.
+3. Leave the rest as shipped: `DIRECT_SEND = "1"`, `ALLOW_EMAIL_OTP = "1"`, `REQUIRED_AMR = "otp"`, `NOTIFY_MODE = "sms"`, `RUNAWAY_PAUSE = "0"`, `GROUP_MMS = "0"`, `DISABLED = "0"`, `workers_dev = false`.
 
 **TIMEZONE** has no default. If it's missing or misspelled, the relay refuses everything with `timezone_not_configured` or `timezone_invalid` until you fix it.
 
@@ -205,9 +205,10 @@ Read-only access to your contacts' names and numbers. Emails, notes and addresse
    - It stores the access straight into the secret `GOOGLE_RT_PRIMARY`; it is never shown or saved to a file.
    - It refuses if Google granted anything other than read-only contacts.
    - "no refresh token": remove the app at https://myaccount.google.com/permissions and run it again.
-6. Load the contacts now: open `https://<APPROVE_HOST>/direct` and press **Sync contacts now**. After that, a daily sync runs on its own. A failed sync keeps the last good list and texts you once.
+6. Load the contacts now: open `https://<APPROVE_HOST>/contacts` and press **Sync now**. After that, a daily sync runs on its own. A failed sync keeps the last good list and texts you once.
+7. **HUMAN STEP:** on the same page, turn on the people you want the bot to text (see "Contacts page" below). Everyone starts **off**.
 
-**Check:** the result reads `{"updated":["PRIMARY"],"failed":[]}`, and `/direct` shows a number count for each label.
+**Check:** the page says "Sync finished", and its Health panel shows a number count and a "last good" time for each label. (`/direct` also has a **Sync contacts now** button that answers `{"updated":["PRIMARY"],"failed":[]}`.)
 
 | `failed` reason | Fix |
 |---|---|
@@ -217,6 +218,29 @@ Read-only access to your contacts' names and numbers. Emails, notes and addresse
 | `google_people_status_403` | People API not enabled (step 2) |
 | `google_token_status_400` | Access expired (Testing mode) or revoked. Publish the app, then redo step 5 |
 | `empty_result` | No contacts with a phone number in that account |
+
+The same codes show in the Contacts page's Health panel with this fix text.
+
+### Contacts page (who the bot may text)
+`https://<APPROVE_HOST>/contacts`, behind Access like the rest of that host. It lists everyone from Google sync, the manual upload and the old `DIRECT_ALLOWLIST`, with name, label and **only the last 4 digits**. The bot can text a person only when they are switched **on** here, or listed in the `ALLOWLIST` secret (shown read-only, "set in secret").
+
+- **New people start off.** That includes a new number added to someone who is already on: each number is its own switch.
+- **Turning someone on** asks "Text Riley at •••• 0142?" so you check the last 4 first. **Enable all shown** acts on the current search and filter, and asks with a count.
+- **Star** the people you text most: they sort first and get a **Starred** filter. A star never turns anyone on.
+- **Sync now** pulls Google right away; the daily sync keeps running. The Health panel shows each source's count, the last sync time and the last error with its fix.
+- **Resolve preview** shows what the bot would match for a name ("one", "ambiguous" with each last 4, or "no match" with the reason, such as "exists but is off"). It never sends.
+- Numbers like `555-0100`…`555-0199`, and 555 followed by `1234`, are documentation examples, and the page refuses to turn them on.
+- **Upgrading an existing relay:** everyone who could be texted before the update stays on and is flagged as migrated. A banner says how many; **Review migrated** filters to them, and **Turn all migrated off** switches them all off at once. Nothing is turned on by the upgrade that wasn't textable before.
+- **`DIRECT_ALLOWLIST` is deprecated.** On the first request after the update its entries are imported once as the `ALLOWLIST_LEGACY` source and flagged (on if `CONTACTS_SNAPSHOT_ONLY` was `"0"`, the old default; off otherwise). After that the secret is ignored. Review them on the page, then delete it: `npx wrangler secret delete DIRECT_ALLOWLIST`. `CONTACTS_SNAPSHOT_ONLY` is only read by that one-time import; leave it as shipped for this release.
+- The page only reads from Google (`contacts.readonly`) and stores everything in your own Worker. It loads nothing from other sites. The bot's token gets 404 for every `/contacts` path on `<API_HOST>`, so the bot can never turn anyone on.
+
+| You see | Fix |
+|---|---|
+| `recipient_not_on_allowlist` or `no_match` for someone in your contacts | They're probably off. Open `/contacts`, search the name, check the last 4 and turn them on; the preview confirms. |
+| "this looks like a documentation example" | That number is a 555-01xx (or 555 + 1234) example, not a real person. Fix the contact in Google, then **Sync now**. |
+| "LOG_HASH_KEY is missing or short" on the page | Run setup steps `keys` then `secrets` (section 6). |
+| `bad_csrf` | The page was open more than 15 minutes. Reload it. |
+| A banner about migrated people | Expected after the upgrade. Review them, or press **Turn all migrated off**. |
 
 ## 10. Test text to yourself
 Your own number is on the list through `ALLOWLIST` (your own contact card usually isn't in the sync).

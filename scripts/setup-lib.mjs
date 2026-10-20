@@ -605,6 +605,23 @@ const steps = {
     out("google", r.status === 0 ? "ok" : "fail", { label, log: ".relay-local/logs/google.log" });
   },
 
+  /**
+   * After google: open the Contacts page so the owner turns on the people the bot may text (everyone starts
+   * off). Prints the link, tries to open it, and answers needs_human until the owner says they're done (--done).
+   */
+  async contacts() {
+    const s = /** @type {Record<string, unknown> | null} */ (settingsOrFail("contacts")); if (!s) return;
+    const url = `https://${String(s["appHost"])}/contacts`;
+    if (DRY) return out("contacts", "dry_run", { url, would_open: "browser" });
+    if (args.includes("--done")) return out("contacts", "ok", { url, next: "smoke" });
+    console.log(`Open your Contacts page and turn on the people the bot may text (everyone starts off): ${url}`);
+    // Same openers as scripts/google-consent.mjs (kept inline: setup-lib is copied on its own in the offline tests).
+    const r = process.platform === "darwin" ? spawnSync("open", [url], { stdio: "ignore" })
+      : process.platform === "win32" ? spawnSync("cmd", ["/d", "/s", "/c", `start "" "${url}"`], { windowsVerbatimArguments: true, stdio: "ignore" })
+      : spawnSync("xdg-open", [url], { stdio: "ignore" });
+    out("contacts", "needs_human", { url, opened: r.status === 0 ? "yes" : "no", reason: "turn_on_people_then_rerun_with_--done" });
+  },
+
   async smoke() {
     const s = settingsOrFail("smoke"); if (!s) return;
     if (DRY) {

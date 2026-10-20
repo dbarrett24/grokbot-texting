@@ -3,6 +3,9 @@ import type { Env } from "./env";
 import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, importHmacKey } from "./e2e";
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
+import {
+  CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
+} from "./contacts";
 import { E164, Refuse, hasLink, localDate, maskNumber, parseAllowlist, parseCount, parseSwitch, parseTapConfig, parseTimezone, sendCap, validateRequestBody, validateTapText, type TapConfig } from "./rules";
 import {
   insideHours, matchName, parseRequiredLimit, minuteOfDay, normalizeName, parseHours, parseNotifyEach, parseOptionalLimit, parseSnapshot,
@@ -59,6 +62,9 @@ interface Row {
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+
+/** A SQL text column, or "" for anything else (NULL, a number, a blob). */
+const textOf = (v: unknown): string => (typeof v === "string" ? v : "");
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
@@ -132,6 +138,21 @@ export class Relay extends DurableObject<Env> {
       recipient TEXT, text TEXT, state TEXT, lease TEXT, claimed_ms INTEGER, done_ms INTEGER, who TEXT, sha TEXT)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS log(seq INTEGER PRIMARY KEY AUTOINCREMENT, ms INTEGER,
       event TEXT, request_id TEXT, recipient TEXT, sha256 TEXT, detail TEXT)`);
+    // Contacts page. contact_prefs: one row per number, keyed by HMAC(LOG_HASH_KEY, number) (= e164_sha), so a
+    // re-sync, rename or source change can't flip anyone on. enabled defaults to 0 (off). gone_ms = number left
+    // every source; the row is kept 30 days so a quick re-add gets its old state back.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS contact_prefs(person_key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0,
+      starred INTEGER NOT NULL DEFAULT 0, updated_ms INTEGER, by TEXT, migrated INTEGER NOT NULL DEFAULT 0, first_seen_ms INTEGER, gone_ms INTEGER)`);
+    // Numbers to switch on (enabled=1) or flag (enabled=0) once a hash key is available. Filled by the upgrade migration.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS contacts_migration(e164 TEXT PRIMARY KEY, enabled INTEGER NOT NULL)`);
+    // Contacts page CSRF: per page load, reusable for 15 minutes, bound to the Access identity.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS page_csrf(token TEXT PRIMARY KEY, email TEXT, expires_ms INTEGER)`);
+    try {
+      this.sql.exec("ALTER TABLE contacts ADD COLUMN account TEXT");
+    } catch {
+      // already there
+    }
+    this.migratePrefs();
     // Daily purge so retention holds even with no traffic.
     ctx.blockConcurrencyWhile(async () => {
       if ((await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now() + 86_400_000);
@@ -247,6 +268,11 @@ export class Relay extends DurableObject<Env> {
       const reqHost = (this.env.REQUEST_HOST || "").toLowerCase();
       const apprHost = (this.env.APPROVE_HOST || "").toLowerCase();
       if (!reqHost || !apprHost || reqHost === apprHost) throw new Refuse("hosts_not_configured", 503);
+      if (isContactsPath(path)) {
+        // Owner-only: every /contacts* path exists on APPROVE_HOST (behind Access) and nowhere else.
+        if (host !== apprHost) return json(404, { error: "not_found" });
+        return await this.contactsRoute(req, path);
+      }
       if (host === reqHost) {
         // Request API host: never serves approve or log routes.
         if (req.method === "POST" && path === "/request") return await this.createRequest(req);
@@ -263,7 +289,6 @@ export class Relay extends DurableObject<Env> {
         if (m && req.method === "GET") return await this.approvePage(req, m[1]);
         if (m && req.method === "POST") return await this.decide(req, m[1]);
         if (req.method === "GET" && path === "/log") return await this.showLog(req);
-        if (req.method === "POST" && path === "/contacts") return await this.uploadContacts(req);
         if (req.method === "GET" && path === "/direct") return await this.directPage(req);
         if (req.method === "POST" && path === "/direct/resume") return await this.resumeDirect(req);
         if (req.method === "POST" && path === "/direct/sync") return await this.syncNow(req);
@@ -402,30 +427,107 @@ export class Relay extends DurableObject<Env> {
     return key ? `hmac:${await this.bodyHash(key, text)}` : sha256Hex(text);
   }
   /**
-   * Fill contact e164_sha with the current key's HMAC. Loads store NULL and clear hash_key_fp, and a key
-   * rotation changes the fingerprint, so this runs once per load or rotation, never per request.
+   * Upgrade migration, once per deploy ("enable once, flag"): everyone currently on the direct list stays on
+   * and is flagged for review. A fresh deploy has no contacts, so it enables no one. Synchronous, in one
+   * transaction, from the constructor; the numbers get their pref rows when a hash key is next available.
    */
-  private async ensureContactHashes(key: CryptoKey) {
-    const fp = await hmacHex(key, "fingerprint");
-    if (this.meta("hash_key_fp") === fp) return;
-    const nums = this.sql.exec("SELECT DISTINCT e164 FROM contact_sources").toArray().map((r) => r.e164 as string);
-    const hashes = await Promise.all(nums.map((n) => this.numHash(key, n)));
+  migratePrefs() {
+    if (this.meta("contacts_prefs_v1") !== null) return;
     this.ctx.storage.transactionSync(() => {
-      nums.forEach((n, i) => this.sql.exec("UPDATE contact_sources SET e164_sha=? WHERE e164=?", hashes[i], n));
-      this.rebuildContacts(); // also retires candidates drawn under the old key
-      this.setMeta("hash_key_fp", fp);
+      const nums = this.sql.exec("SELECT DISTINCT e164 FROM contacts").toArray().map((r) => r["e164"] as string);
+      for (const n of nums) this.sql.exec("INSERT OR IGNORE INTO contacts_migration(e164,enabled) VALUES(?,1)", n);
+      this.setMeta("contacts_prefs_v1", String(this.clock()));
+      this.setMeta("hash_key_fp", null);
+      this.log("contacts_migrated", { detail: `count=${nums.length}` });
     });
   }
 
   /**
+   * DIRECT_ALLOWLIST is deprecated: imported ONCE as the ALLOWLIST_LEGACY source, flagged. Entries that were
+   * textable (CONTACTS_SNAPSHOT_ONLY exactly "0", the old template default) stay on; others are flagged off.
+   * Later edits to the secret are ignored (logged); delete it after review.
+   */
+  private importLegacyAllowlist() {
+    const raw = this.env.DIRECT_ALLOWLIST;
+    if (this.meta("legacy_allowlist_v1") !== null) return;
+    if (!raw) return;
+    let entries: [string, string][];
+    try {
+      entries = [...parseAllowlist(raw)];
+    } catch {
+      this.log("legacy_allowlist_skipped", { detail: "reason=allowlist_malformed" });
+      return;
+    }
+    const wasOn = this.env.CONTACTS_SNAPSHOT_ONLY === "0";
+    const rows: ContactRow[] = entries.map(([e164, name]) => {
+      const n = normalizeName(name);
+      return { name, name_norm: n, given_norm: "", first_norm: n.split(" ")[0] ?? "", e164, label: "unlabeled" };
+    });
+    this.ctx.storage.transactionSync(() => {
+      this.replaceSource(LEGACY_SOURCE, rows, this.clock());
+      for (const r of rows) this.sql.exec("INSERT OR REPLACE INTO contacts_migration(e164,enabled) VALUES(?,?)", r.e164, wasOn ? 1 : 0);
+      this.setMeta("legacy_allowlist_v1", String(this.clock()));
+      this.log("legacy_allowlist_imported", { detail: `count=${rows.length} enabled=${wasOn ? rows.length : 0}` });
+      this.rebuildContacts();
+    });
+  }
+
+  /**
+   * Fill contact e164_sha with the current key's HMAC. Loads store NULL and clear hash_key_fp, and a key
+   * rotation changes the fingerprint, so this runs once per load or rotation, never per request.
+   */
+  private async ensureContactHashes(key: CryptoKey) {
+    this.importLegacyAllowlist();
+    const fp = await hmacHex(key, "fingerprint");
+    if (this.meta("hash_key_fp") === fp) return;
+    const prevFp = this.meta("prefs_key_fp");
+    const old = this.sql.exec("SELECT DISTINCT e164, e164_sha FROM contact_sources").toArray() as { e164: string; e164_sha: string | null }[];
+    const nums = [...new Set(old.map((r) => r.e164))];
+    const hashes = await Promise.all(nums.map((n) => this.numHash(key, n)));
+    const fresh = new Map(nums.map((n, i) => [n, hashes[i]]));
+    // Key rotation: every stored sha (and so every person_key) was made with the previous key.
+    const rotated = prevFp !== null && prevFp !== fp;
+    const remap: [string, string][] = [];
+    for (const r of old) {
+      const to = fresh.get(r.e164);
+      if (r.e164_sha !== null && to !== undefined && r.e164_sha !== to) remap.push([r.e164_sha, to]);
+    }
+    const pending = this.sql.exec("SELECT e164, enabled FROM contacts_migration").toArray() as { e164: string; enabled: number }[];
+    const pendingKeys = await Promise.all(pending.map((p) => this.numHash(key, p.e164)));
+    const now = this.clock();
+    this.ctx.storage.transactionSync(() => {
+      nums.forEach((n, i) => this.sql.exec("UPDATE contact_sources SET e164_sha=? WHERE e164=?", hashes[i], n));
+      if (rotated) for (const [from, to] of remap) this.sql.exec("UPDATE contact_prefs SET person_key=? WHERE person_key=?", to, from);
+      this.rebuildContacts(); // also retires candidates drawn under the old key
+      pending.forEach((p, i) =>
+        this.sql.exec(
+          "INSERT INTO contact_prefs(person_key,enabled,starred,migrated,first_seen_ms,updated_ms,by) VALUES(?,?,0,1,?,?,'migration') ON CONFLICT(person_key) DO UPDATE SET enabled=excluded.enabled, migrated=1",
+          pendingKeys[i], p.enabled, now, now,
+        ),
+      );
+      this.sql.exec("DELETE FROM contacts_migration");
+      this.syncPrefRows(now);
+      this.setMeta("hash_key_fp", fp);
+      this.setMeta("prefs_key_fp", fp);
+    });
+  }
+
+  /** A pref row for every number on the merged list (new ones OFF); numbers that left every source age out after 30 days. */
+  private syncPrefRows(now: number) {
+    for (const r of this.sql.exec("SELECT DISTINCT e164_sha FROM contacts WHERE e164_sha IS NOT NULL").toArray())
+      this.sql.exec("INSERT INTO contact_prefs(person_key,enabled,starred,migrated,first_seen_ms) VALUES(?,0,0,0,?) ON CONFLICT(person_key) DO UPDATE SET gone_ms=NULL", r["e164_sha"] as string, now);
+    this.sql.exec("UPDATE contact_prefs SET gone_ms=? WHERE gone_ms IS NULL AND person_key NOT IN (SELECT e164_sha FROM contacts WHERE e164_sha IS NOT NULL)", now);
+    this.sql.exec("DELETE FROM contact_prefs WHERE gone_ms IS NOT NULL AND gone_ms < ?", now - GONE_KEEP_MS);
+  }
+
+  /**
    * Who /send may text: the union, deduped by E.164 in this order (first wins the name):
-   *   1. contacts (Google sync + manual upload)
-   *   2. the DIRECT_ALLOWLIST secret, only when CONTACTS_SNAPSHOT_ONLY is exactly "0"
-   *   3. the tap ALLOWLIST (always: anyone the owner can approve by tap can also be sent to directly)
+   *   1. contacts the owner switched ON on the Contacts page (Google sync, upload, imported DIRECT_ALLOWLIST)
+   *   2. the tap ALLOWLIST (always: anyone the owner can approve by tap can also be sent to directly)
    */
   private async directList(key: CryptoKey): Promise<(ContactRow & { e164_sha: string })[]> {
     await this.ensureContactHashes(key);
-    const rows = this.sql.exec("SELECT name,name_norm,given_norm,first_norm,e164,e164_sha,label FROM contacts").toArray() as unknown as (ContactRow & { e164_sha: string })[];
+    const rows = this.sql.exec("SELECT c.name,c.name_norm,c.given_norm,c.first_norm,c.e164,c.e164_sha,c.label FROM contacts c JOIN contact_prefs p ON p.person_key=c.e164_sha WHERE p.enabled=1").toArray() as unknown as (ContactRow & { e164_sha: string })[];
     const have = new Set(rows.map((r) => r.e164));
     const add = async (raw: string | undefined) => {
       if (!raw) return; // unset = empty; malformed JSON still refuses (allowlist_malformed)
@@ -436,7 +538,6 @@ export class Relay extends DurableObject<Env> {
         rows.push({ name, name_norm: n, given_norm: "", first_norm: n.split(" ")[0] ?? "", e164, e164_sha: await this.numHash(key, e164), label: "unlabeled" });
       }
     };
-    if (!switchOnUnlessZero(this.env.CONTACTS_SNAPSHOT_ONLY)) await add(this.env.DIRECT_ALLOWLIST);
     await add(this.env.ALLOWLIST);
     return rows;
   }
@@ -863,11 +964,13 @@ export class Relay extends DurableObject<Env> {
 
   /** Replace one source's last good list. */
   private replaceSource(account: string, rows: ContactRow[], now: number) {
+    // Keep each known number's current hash: on a later key rotation it's what maps the old person_key to the new.
+    const known = new Map((this.sql.exec("SELECT e164, e164_sha FROM contact_sources WHERE e164_sha IS NOT NULL").toArray() as { e164: string; e164_sha: string }[]).map((r) => [r.e164, r.e164_sha]));
     this.sql.exec("DELETE FROM contact_sources WHERE account=?", account);
     rows.forEach((r) =>
       this.sql.exec(
         "INSERT INTO contact_sources(account,name,name_norm,given_norm,first_norm,e164,e164_sha,label) VALUES(?,?,?,?,?,?,?,?)",
-        account, r.name, r.name_norm, r.given_norm, r.first_norm, r.e164, null, r.label,
+        account, r.name, r.name_norm, r.given_norm, r.first_norm, r.e164, known.get(r.e164) ?? null, r.label,
       ),
     );
     this.setMeta(`acct:${account}:ok_ms`, String(now));
@@ -882,15 +985,16 @@ export class Relay extends DurableObject<Env> {
    * Outstanding candidate ids are retired, since the list they were drawn from changed.
    */
   private rebuildContacts() {
-    const order = [...parseAccounts(this.env.GOOGLE_ACCOUNTS).valid, UPLOAD_SOURCE];
+    const order = [...parseAccounts(this.env.GOOGLE_ACCOUNTS).valid, UPLOAD_SOURCE, LEGACY_SOURCE];
     this.sql.exec("DELETE FROM contacts");
+    this.setMeta("hash_key_fp", null); // pref rows follow the new list on the next read
     this.sql.exec("DELETE FROM candidates");
     const seen = new Set<string>();
     for (const acct of order) {
       for (const r of this.sql.exec("SELECT name,name_norm,given_norm,first_norm,e164,e164_sha,label FROM contact_sources WHERE account=? ORDER BY rowid", acct).toArray() as any[]) {
         if (seen.has(r.e164)) continue;
         seen.add(r.e164);
-        this.sql.exec("INSERT INTO contacts(name,name_norm,given_norm,first_norm,e164,e164_sha,label) VALUES(?,?,?,?,?,?,?)", r.name, r.name_norm, r.given_norm, r.first_norm, r.e164, r.e164_sha, r.label);
+        this.sql.exec("INSERT INTO contacts(name,name_norm,given_norm,first_norm,e164,e164_sha,label,account) VALUES(?,?,?,?,?,?,?,?)", r.name, r.name_norm, r.given_norm, r.first_norm, r.e164, r.e164_sha, r.label, acct);
       }
     }
     const numbers = seen.size;
@@ -943,7 +1047,7 @@ export class Relay extends DurableObject<Env> {
       }
     }
     // A label removed from GOOGLE_ACCOUNTS: its stored list is deleted, not just left out of the merge.
-    const keep = new Set([...valid, UPLOAD_SOURCE]);
+    const keep = new Set([...valid, UPLOAD_SOURCE, LEGACY_SOURCE]);
     const gone = (this.sql.exec("SELECT DISTINCT account FROM contact_sources").toArray().map((r) => r.account as string)).filter((a) => !keep.has(a));
     this.ctx.storage.transactionSync(() => {
       for (const a of gone) {
@@ -1017,6 +1121,7 @@ export class Relay extends DurableObject<Env> {
     const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Direct send</title>
 <body style="font:16px system-ui;max-width:32em;margin:1em auto;padding:0 1em">
 <h2>Direct send</h2>
+<p><a href="/contacts">Contacts page</a>: choose who the bot may text.</p>
 <p><b>DIRECT_SEND:</b> ${switchOnlyIfOne(this.env.DIRECT_SEND) ? "on" : "off"} · <b>runaway guard:</b> ${switchOnUnlessZero(this.env.RUNAWAY_PAUSE) ? "on" : "off"}</p>
 <p><b>State:</b> ${paused ? `PAUSED since ${esc(this.fmtTime(pausedMs))}. Direct requests are refused.` : "running"}</p>
 <p><b>Direct sends in the last hour:</b> ${lastHour}</p>
@@ -1031,28 +1136,33 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
   }
 
   /** Access + same Origin (required) + the single-use CSRF token from GET /direct. */
-  private async directForm(req: Request, route: "resume" | "sync") {
+  private async directForm(req: Request, route: "resume" | "sync"): Promise<{ who: Owner; fromContacts: boolean }> {
     const who = await this.requireOwner(req, route);
     this.sameOrigin(req, false);
     const form = await req.formData();
+    if (route === "sync" && form.get("from") === "contacts") {
+      this.checkPageCsrf(form.get("csrf"), who); // the Contacts page's token (Access-bound, 15 min)
+      return { who, fromContacts: true };
+    }
     const want = this.meta("direct_csrf");
     if (!want || form.get("csrf") !== want) throw new Refuse("bad_csrf", 403);
     this.setMeta("direct_csrf", null); // single use
-    return who;
+    return { who, fromContacts: false };
   }
 
   /** POST /direct/sync (approve host only, same checks as resume): pull every Google account now. */
   private async syncNow(req: Request): Promise<Response> {
-    const who = await this.directForm(req, "sync");
+    const { who, fromContacts } = await this.directForm(req, "sync");
     this.log("contacts_sync_requested", { detail: `method=${who.method} by=${who.email}` });
     // The owner is looking at the result, so no alert text for a failure here (it's still logged).
     const { updated, failed } = await this.syncContacts({ alert: false });
+    if (fromContacts) return new Response(null, { status: 303, headers: { location: `/contacts?synced=${failed.length ? "partial" : "ok"}`, "cache-control": "no-store" } });
     return json(200, { updated, failed });
   }
 
   /** POST /direct/resume (approve host, Access + Origin + CSRF from GET /direct). */
   private async resumeDirect(req: Request): Promise<Response> {
-    const who = await this.directForm(req, "resume");
+    const { who } = await this.directForm(req, "resume");
     if (this.meta("direct_paused") !== "1") throw new Refuse("not_paused", 409);
     const now = this.clock();
     this.setMeta("direct_paused", null);
@@ -1061,8 +1171,205 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     return json(200, { state: "running" });
   }
 
+  // ---------- Contacts page (APPROVE_HOST only; fetch() 404s every /contacts* path elsewhere) ----------
+  private async contactsRoute(req: Request, path: string): Promise<Response> {
+    if (req.method === "POST" && path === "/contacts") return await this.uploadContacts(req);
+    if (req.method === "GET" && path === "/contacts") return await this.contactsPage(req);
+    if (req.method === "GET" && path === "/contacts/list") return await this.contactsList(req);
+    if (req.method === "POST" && path === "/contacts/prefs") return await this.contactsPrefs(req);
+    if (req.method === "POST" && path === "/contacts/enable-all") return await this.contactsEnableAll(req);
+    if (req.method === "POST" && path === "/contacts/migrated-off") return await this.contactsMigratedOff(req);
+    if (req.method === "POST" && path === "/contacts/preview") return await this.contactsPreview(req);
+    return json(404, { error: "not_found" });
+  }
+
+  /** Mint a page token: reusable for 15 minutes, only by the Access identity that loaded the page. */
+  private mintPageCsrf(who: Owner, now: number): string {
+    this.sql.exec("DELETE FROM page_csrf WHERE expires_ms <= ?", now);
+    const t = hex(crypto.getRandomValues(new Uint8Array(16)));
+    this.sql.exec("INSERT INTO page_csrf(token,email,expires_ms) VALUES(?,?,?)", t, who.email.toLowerCase(), now + CSRF_TTL_MS);
+    return t;
+  }
+  private checkPageCsrf(token: unknown, who: Owner) {
+    const row = typeof token === "string" && /^[a-f0-9]{32}$/.test(token) ? (this.sql.exec("SELECT email, expires_ms FROM page_csrf WHERE token=?", token).toArray()[0] as { email: string; expires_ms: number } | undefined) : undefined;
+    if (!row || row.email !== who.email.toLowerCase() || row.expires_ms <= this.clock()) throw new Refuse("bad_csrf", 403);
+  }
+
+  /** Access + same Origin (required) + JSON + page CSRF. Every contacts write goes through here. */
+  private async contactsWrite(req: Request, route: "prefs" | "preview"): Promise<{ who: Owner; body: Record<string, unknown>; key: CryptoKey }> {
+    const who = await this.requireOwner(req, route);
+    this.sameOrigin(req, false);
+    if ((req.headers.get("content-type") || "").split(";")[0]?.trim().toLowerCase() !== "application/json") throw new Refuse("contacts_must_be_json", 415);
+    let raw: unknown;
+    try {
+      raw = await req.json();
+    } catch {
+      throw new Refuse("body_not_json");
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Refuse("body_must_be_object");
+    const body = raw as Record<string, unknown>;
+    this.checkPageCsrf(body["csrf"], who);
+    return { who, body, key: await this.contactsKey() };
+  }
+  private async contactsKey(): Promise<CryptoKey> {
+    const key = await this.hashKey();
+    if (!key) {
+      console.error("CONFIG_ERROR reason=log_hash_key_missing_or_short");
+      throw new Refuse("config_invalid", 503);
+    }
+    await this.ensureContactHashes(key);
+    return key;
+  }
+
+  /** GET /contacts: the page. Numbers never appear in the HTML; the list loads from /contacts/list (last 4 only). */
+  private async contactsPage(req: Request): Promise<Response> {
+    const who = await this.requireOwner(req, "contacts_page");
+    const now = this.clock();
+    const key = await this.hashKey();
+    if (key) await this.ensureContactHashes(key);
+    this.setMeta("contacts_prev_visit_ms", this.meta("contacts_last_visit_ms") ?? "0");
+    this.setMeta("contacts_last_visit_ms", String(now));
+    const csrf = this.mintPageCsrf(who, now);
+    const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const accts = parseAccounts(this.env.GOOGLE_ACCOUNTS).valid;
+    const lastErr = this.sql.exec("SELECT ms, detail FROM log WHERE event IN ('contacts_sync','contacts_sync_failed','contacts_snapshot') ORDER BY seq DESC LIMIT 1").toArray()[0] as { ms: number; detail: string } | undefined;
+    const errCodeOf = lastErr?.detail?.match(/reason=([a-zA-Z0-9_]+)/)?.[1];
+    const synced = new URL(req.url).searchParams.get("synced");
+    const html = renderContactsPage({
+      csrf, nonce, method: who.method,
+      migratedOn: key ? (this.sql.exec("SELECT COUNT(*) AS c FROM contact_prefs WHERE migrated=1 AND enabled=1 AND gone_ms IS NULL").one()["c"] as number) : 0,
+      sources: [...accts, UPLOAD_SOURCE, LEGACY_SOURCE].filter((a) => a !== LEGACY_SOURCE || this.meta(`acct:${a}:ok_ms`)).map((a) => {
+        const ok = this.meta(`acct:${a}:ok_ms`);
+        return { name: a, numbers: this.meta(`acct:${a}:numbers`), lastGood: ok ? this.fmtTime(Number(ok)) : null };
+      }),
+      lastError: errCodeOf && lastErr ? { code: errCodeOf, when: this.fmtTime(lastErr.ms) } : null,
+      canSync: accts.length > 0,
+      toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors: see Health" : null,
+      hashKeyMissing: !key,
+    });
+    return new Response(html, {
+      headers: {
+        "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "same-origin", // not no-referrer: Chrome then sends Origin: null on the Sync now form
+        "content-security-policy": `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'`,
+      },
+    });
+  }
+
+  /** GET /contacts/list: [{key,name,label,last4,enabled,starred,migrated,new,source}]. Never more than the last 4 digits. */
+  private async contactsList(req: Request): Promise<Response> {
+    await this.requireOwner(req, "contacts_page");
+    await this.contactsKey();
+    const since = Number(this.meta("contacts_prev_visit_ms") ?? "0");
+    const rows = this.sql.exec(
+      "SELECT c.name, c.label, c.e164, c.e164_sha, c.account, p.enabled, p.starred, p.migrated, p.first_seen_ms FROM contacts c JOIN contact_prefs p ON p.person_key=c.e164_sha ORDER BY p.starred DESC, c.name",
+    ).toArray() as { name: string; label: string; e164: string; e164_sha: string; account: string; enabled: number; starred: number; migrated: number; first_seen_ms: number }[];
+    const people: Record<string, unknown>[] = rows.map((r) => ({
+      key: r.e164_sha, name: safeName(r.name), label: r.label, last4: last4(r.e164), enabled: r.enabled === 1, starred: r.starred === 1,
+      migrated: r.migrated === 1, new: since > 0 && (r.first_seen_ms ?? 0) > since, source: r.account, readonly: false,
+    }));
+    const have = new Set(rows.map((r) => r.e164));
+    for (const [e164, name] of this.env.ALLOWLIST ? parseAllowlist(this.env.ALLOWLIST) : new Map<string, string>()) {
+      if (have.has(e164)) continue;
+      people.push({ key: null, name: safeName(name), label: "set in secret", last4: last4(e164), enabled: true, starred: false, migrated: false, new: false, source: "ALLOWLIST", readonly: true });
+    }
+    return json(200, { people });
+  }
+
+  private numberOf(personKey: string): string | null {
+    const r = this.sql.exec("SELECT e164 FROM contacts WHERE e164_sha=? LIMIT 1", personKey).toArray()[0];
+    return r ? (r["e164"] as string) : null;
+  }
+
+  /** POST /contacts/prefs: per-person on/off and star. Switching someone on refuses documentation-example numbers. */
+  private async contactsPrefs(req: Request): Promise<Response> {
+    const { who, body } = await this.contactsWrite(req, "prefs");
+    const changes = parsePrefsBody(body);
+    for (const c of changes) {
+      const e164 = this.numberOf(c.key);
+      if (!e164) throw new Refuse("contact_unknown", 404);
+      if (c.enabled === true && isExampleNumber(e164)) {
+        const r = new Refuse("example_number", 422);
+        r.extra = { message: "this looks like a documentation example" };
+        throw r;
+      }
+    }
+    const now = this.clock();
+    const n = { enabled: 0, disabled: 0, starred: 0, unstarred: 0 };
+    this.ctx.storage.transactionSync(() => {
+      for (const c of changes) {
+        if (c.enabled !== undefined) {
+          this.sql.exec("UPDATE contact_prefs SET enabled=?, migrated=0, updated_ms=?, by=? WHERE person_key=?", c.enabled ? 1 : 0, now, who.email, c.key);
+          n[c.enabled ? "enabled" : "disabled"]++;
+        }
+        if (c.starred !== undefined) {
+          this.sql.exec("UPDATE contact_prefs SET starred=?, updated_ms=?, by=? WHERE person_key=?", c.starred ? 1 : 0, now, who.email, c.key);
+          n[c.starred ? "starred" : "unstarred"]++;
+        }
+      }
+      this.sql.exec("DELETE FROM candidates"); // the sendable set may have changed
+      this.log("contacts_prefs", { detail: `updated=${changes.length} enabled=${n.enabled} disabled=${n.disabled} starred=${n.starred} unstarred=${n.unstarred} method=${who.method} by=${who.email}` });
+    });
+    return json(200, { updated: changes.length });
+  }
+
+  /** POST /contacts/enable-all: the keys the page showed, and the count the owner confirmed. Example numbers are skipped. */
+  private async contactsEnableAll(req: Request): Promise<Response> {
+    const { who, body } = await this.contactsWrite(req, "prefs");
+    const { keys, confirm } = parseEnableAllBody(body);
+    if (confirm !== keys.length) throw new Refuse("confirm_count_mismatch", 409);
+    const ok: string[] = [];
+    for (const k of keys) {
+      const e164 = this.numberOf(k);
+      if (e164 === null) throw new Refuse("contact_unknown", 404);
+      if (!isExampleNumber(e164)) ok.push(k);
+    }
+    const now = this.clock();
+    this.ctx.storage.transactionSync(() => {
+      for (const k of ok) this.sql.exec("UPDATE contact_prefs SET enabled=1, migrated=0, updated_ms=?, by=? WHERE person_key=?", now, who.email, k);
+      this.sql.exec("DELETE FROM candidates");
+      this.log("contacts_enable_all", { detail: `updated=${ok.length} skipped_example=${keys.length - ok.length} method=${who.method} by=${who.email}` });
+    });
+    return json(200, { updated: ok.length, skipped_example: keys.length - ok.length });
+  }
+
+  /** POST /contacts/migrated-off: turn off everyone the upgrade left on. confirm_count = how many the page showed. */
+  private async contactsMigratedOff(req: Request): Promise<Response> {
+    const { who, body } = await this.contactsWrite(req, "prefs");
+    if (Object.keys(body).some((k) => k !== "csrf" && k !== "confirm_count")) throw new Refuse("unknown_fields");
+    const n = this.sql.exec("SELECT COUNT(*) AS c FROM contact_prefs WHERE migrated=1 AND enabled=1").one()["c"] as number;
+    if (body["confirm_count"] !== n) throw new Refuse("confirm_count_mismatch", 409);
+    const now = this.clock();
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec("UPDATE contact_prefs SET enabled=0, updated_ms=?, by=? WHERE migrated=1 AND enabled=1", now, who.email);
+      this.sql.exec("DELETE FROM candidates");
+      this.log("contacts_migrated_off", { detail: `updated=${n} method=${who.method} by=${who.email}` });
+    });
+    return json(200, { updated: n });
+  }
+
+  /**
+   * POST /contacts/preview: what the bot's /send resolve would match, over the sendable list. Never sends,
+   * never stores candidates, never counts toward the bot's lookup limit.
+   */
+  private async contactsPreview(req: Request): Promise<Response> {
+    const { who, body, key } = await this.contactsWrite(req, "preview");
+    if (Object.keys(body).some((k) => k !== "csrf" && k !== "name")) throw new Refuse("unknown_fields");
+    const name = body["name"];
+    if (typeof name !== "string" || name.length > 200) throw new Refuse("to_name_invalid");
+    const list = await this.directList(key);
+    const hits = matchName(list, name);
+    const state: "one" | "ambiguous" | "no_match" = hits.length === 0 ? "no_match" : hits.length === 1 ? "one" : "ambiguous";
+    let reason: string | null = null;
+    if (state === "no_match") {
+      const all = this.sql.exec("SELECT name_norm, given_norm, first_norm FROM contacts").toArray().map((r) => ({ name_norm: textOf(r["name_norm"]), given_norm: textOf(r["given_norm"]), first_norm: textOf(r["first_norm"]) }));
+      reason = matchName(all, name).length ? `${safeName(name)} exists but is off` : `no contact named ${safeName(name)}`;
+    }
+    this.log("contacts_preview", { detail: `state=${state} matches=${hits.length} method=${who.method}` });
+    return json(200, { state, matches: hits.map((r) => ({ name: safeName(r.name), label: r.label, last4: last4(r.e164) })), reason });
+  }
+
   // ---------- Access side (the owner) ----------
-  private async requireOwner(req: Request, route: "page" | "decide" | "log" | "contacts" | "direct" | "resume" | "sync") {
+  private async requireOwner(req: Request, route: "page" | "decide" | "log" | "contacts" | "direct" | "resume" | "sync" | "contacts_page" | "prefs" | "preview"): Promise<Owner> {
     // Token split: the bot's request token must never work here, so refuse any Authorization header.
     if (req.headers.get("Authorization")) throw new Error("access_bearer_not_allowed");
     const who = await verifyAccess(
@@ -1080,7 +1387,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     // Bypass use is logged on every Access-protected route; route= says whether it was a page view, a decision or a log read.
     if (who.method === "email_otp") this.log("approve_via_email_otp", { detail: `method=email_otp route=${route}` });
     if (who.method === "email_otp_or_policy") this.log("approve_via_email_otp_or_policy", { detail: `method=email_otp_or_policy route=${route}` });
-    return who;
+    return ownerFromAccess(who);
   }
 
   private async approvePage(req: Request, id: string): Promise<Response> {
