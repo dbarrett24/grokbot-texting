@@ -12,7 +12,7 @@
     "typecheck:strict-next": "node scripts/ci/tsc-ratchet.mjs tsc-strict-next-baseline.json tsconfig.strict-next.json tsconfig.node.strict-next.json",
     "typecheck:scripts": "node scripts/ci/tsc-ratchet.mjs tsc-scripts-baseline.json tsconfig.scripts.json",
     "verify": "node scripts/verify.mjs",
-    "check:env-docs": "node scripts/ci/check-env-docs.mjs",
+    "check:env-docs": "node scripts/ci/check-env-docs.mjs --strict",
     "check:ancestors": "node scripts/ci/check-ancestors.mjs",
     "check:pii": "node scripts/ci/pii-scan.mjs",
     "check:numbers": "node scripts/check-example-numbers.mjs"

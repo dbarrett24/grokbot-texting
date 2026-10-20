@@ -48,7 +48,8 @@ GROUP_MMS = "0"                           # "1" = /send may send ONE group MMS (
                                           # Needs a valid OWNER_NUMBER (else group sends refuse: config_invalid) and
                                           # SMS Gateway v1.74.0+. Live-test first (README "Group MMS"). Garbage = direct_config_invalid.
                                           # Android only: with DELIVERY = "mac"/"shortcut", group:true is refused (409 group_mms_unsupported_delivery).
-GOOGLE_ACCOUNTS = ""                      # e.g. "primary" or "primary,work"; first listed wins name conflicts; each needs GOOGLE_RT_<LABEL>
+GOOGLE_ACCOUNTS = ""                      # LEGACY: leave "". Connect Google on https://<APPROVE_HOST>/contacts instead (DEPLOY.md section 9).
+                                          # Old deploys: "primary,work" with a GOOGLE_RT_<LABEL> secret each; listed labels win name conflicts
 
 # ---- Opt-in switches, OFF when unset. A garbage value refuses sends (config_invalid / direct_config_invalid). ----
 # BLOCK_LINKS = "1"                       # refuse links in message text (tap and direct). Contact names are always link-checked.
@@ -91,6 +92,7 @@ CAP_START_DATE = "REPLACE_WITH_START_DATE_YYYY-MM-DD"   # invalid = the cap stay
 # GATEWAY_PINNED_FINGERPRINT + GATEWAY_KEY_VERSION (device-key mode),
 # OWNER_NUMBER (your own number; needed for sms-mode notices, and always when GROUP_MMS = "1") and/or NTFY_URL + NTFY_TOKEN (ntfy mode),
 # LOG_HASH_KEY (required for direct send, >= 32 chars): HMAC key for number and body hashes,
-# GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_RT_<LABEL> per account (scripts/google-consent.mjs),
+# GOOGLE_TOKEN_KEY (32 random bytes, e.g. `openssl rand -base64 32`; seals Google sign-ins stored by the Worker; GOOGLE_TOKEN_KEY_OLD only while rotating),
+# legacy fallback: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_RT_<LABEL> per account (scripts/google-consent.mjs),
 # DIRECT_ALLOWLIST (DEPRECATED: imported once as flagged legacy contacts, then ignored; delete it after review)
 # DEVICE_TOKEN (DELIVERY = mac or shortcut only; 32+ chars, different from REQUEST_TOKEN, e.g. `openssl rand -hex 32`)
