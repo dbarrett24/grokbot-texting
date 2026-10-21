@@ -17,6 +17,9 @@ describe("Harbor look", () => {
     expect([...HARBOR_CSS.matchAll(/url\(([^)]*)\)/g)].map((m) => m[1])).toEqual([HARBOR_FONT_PATH]);
     expect(HARBOR_CSS_NO_FONT).not.toMatch(/@font-face|url\(/);
     expect(HARBOR_CSS).not.toContain("/*");
+    // Backdrop on a fixed layer: never background-attachment:fixed (ignored on iOS Safari, repaints on scroll).
+    expect(HARBOR_CSS).not.toContain("background-attachment");
+    expect(HARBOR_CSS).toContain('html::before{content:"";position:fixed;inset:0;z-index:-1;background:var(--h-backdrop)');
     expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(6_000);
   });
 
