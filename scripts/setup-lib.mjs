@@ -195,17 +195,62 @@ export const DEFAULT_GATEWAY_MODE = "passphrase";
  *   "device_key" chosen with `config --gateway-mode device-key` (needs a phone that publishes a device key)
  *   "passphrase" chosen with `config --gateway-mode passphrase`, or the default once gateway-check has run
  *   "unknown"    no choice and gateway-check hasn't run: nothing gateway-related is made or sent yet
- * An older setup that pinned by hand (a stored pin, nothing recorded) stays device_key until changed with config.
+ * device_key is ONLY ever an explicit choice. A stored pin with no recorded choice (e.g. pinned by hand) does not
+ * switch the mode: it is the passphrase default, and staleHint() tells the owner to opt in or drop the pin.
  */
 export function gatewayMode(s, m) {
   if (s.delivery === "mac") return "none";
   if (s.gatewayMode === "device_key" || s.gatewayMode === "passphrase") return s.gatewayMode;
-  // A working pinned setup (e.g. from before this mode existed) is never flipped by the new default.
-  if (m.has("GATEWAY_PINNED_FINGERPRINT")) return "device_key";
-  if (s.deviceKey === undefined) return "unknown";
+  if (s.deviceKey === undefined && !m.has("GATEWAY_PINNED_FINGERPRINT")) return "unknown";
   return DEFAULT_GATEWAY_MODE;
 }
 const PIN_NAMES = ["GATEWAY_PINNED_FINGERPRINT", "GATEWAY_KEY_VERSION"];
+/** A local pin that the mode doesn't use (no explicit device_key choice): a hint, never a mode switch. */
+export const STALE_PIN_HINT = "stale_pin_ignored:config_--gateway-mode_device-key_to_use_it,or_config_--gateway-mode_passphrase_to_drop_it";
+/** @param {unknown} s settings @param {unknown} m secrets map @returns {{ stale_pin?: string }} */
+export function staleHint(s, m) {
+  const o = /** @type {{ delivery?: unknown, gatewayMode?: unknown }} */ (s && typeof s === "object" ? s : {});
+  return o.delivery !== "mac" && !o.gatewayMode && m instanceof Map && m.has("GATEWAY_PINNED_FINGERPRINT") ? { stale_pin: STALE_PIN_HINT } : {};
+}
+/**
+ * The Worker lists both modes' secrets (a passphrase AND a pin): the relay's choice then depends on GATEWAY_MODE alone.
+ * @param {unknown} listed secret names from `secret list`
+ */
+export function bothModesListed(listed) {
+  return Array.isArray(listed) && listed.includes("GATEWAY_PASSPHRASE") && PIN_NAMES.some((k) => listed.includes(k));
+}
+/** @param {string} step @param {unknown} mode @param {unknown} listed @param {Record<string, string>} [extra] */
+function warnBoth(step, mode, listed, extra = {}) {
+  if (!Array.isArray(listed) || !bothModesListed(listed)) return;
+  const names = ["GATEWAY_PASSPHRASE", ...PIN_NAMES].filter((k) => listed.includes(k)).join(",");
+  out(step, "warn", { reason: "worker_has_passphrase_and_pin", gateway_mode: String(mode), listed: names, ...extra });
+}
+/** @param {unknown} v */
+const idText = (v) => (typeof v === "string" || typeof v === "number" ? String(v) : "");
+/** @typedef {{ id?: unknown, name?: unknown, publicKey?: unknown, keyVersion?: unknown }} ListedDevice */
+/**
+ * The device gateway-check works with. A stored GATEWAY_DEVICE_ID is never overwritten: the listing is filtered by
+ * it, and a missing id fails with device_id_changed. With no stored id the listing must hold exactly one device.
+ * @param {unknown} devs the gateway's device listing @param {unknown} storedId
+ * @returns {{ device: ListedDevice, reason?: undefined } | { device?: undefined, reason: string }}
+ */
+export function pickDevice(devs, storedId) {
+  if (!Array.isArray(devs) || devs.length === 0) return { reason: "no_device_yet" };
+  /** @type {ListedDevice[]} */
+  const list = devs.map((x) => (x && typeof x === "object" ? /** @type {ListedDevice} */ (x) : {}));
+  if (storedId !== undefined) {
+    const d = list.find((x) => idText(x.id) !== "" && idText(x.id) === idText(storedId));
+    return d ? { device: d } : { reason: "device_id_changed" };
+  }
+  if (list.length > 1) return { reason: "more_than_one_device" };
+  return { device: /** @type {ListedDevice} */ (list[0]) };
+}
+/** The confirm-fingerprint text: which device (id and name) and the groups to compare. @param {unknown} fpIn @param {unknown} deviceId @param {unknown} deviceName */
+export function confirmText(fpIn, deviceId, deviceName) {
+  const fp = idText(fpIn);
+  const g = fp.split(":");
+  return `Device: ${idText(deviceName) || "(no name listed)"}\nDevice id: ${idText(deviceId) || "(unknown)"}\n\n${g.slice(0, 2).join("  ")}   ...   ${g.slice(-2).join("  ")}\n\nCheck this is your phone, then compare the first two and last two groups against the app:\nSettings, Device, Device Key, Key fingerprint.\n\nFull value (no need to read it all):\n${fp}`;
+}
 export function requiredSecrets(s, m) {
   const base = ["REQUEST_TOKEN", "LOG_HASH_KEY", "ACCESS_AUD", "APPROVER_EMAIL", "OWNER_NUMBER", "ALLOWLIST"];
   const mode = gatewayMode(s, m);
@@ -472,9 +517,13 @@ const steps = {
       const why = String(e?.message || "");
       return out("gateway-check", "fail", why === "wrong_username_or_password" ? { reason: why } : why.startsWith("gateway_http_") ? { reason: "gateway_http", http: why.slice(13) } : { reason: "no_connection" });
     }
-    if (!Array.isArray(devs) || devs.length === 0) return out("gateway-check", "fail", { reason: "no_device_yet", hint: "phone_app_online" });
-    if (devs.length > 1) return out("gateway-check", "fail", { reason: "more_than_one_device", devices: devs.length });
-    const d = devs[0];
+    const pick = pickDevice(devs, m.get("GATEWAY_DEVICE_ID"));
+    if (pick.reason === "no_device_yet") return out("gateway-check", "fail", { reason: "no_device_yet", hint: "phone_app_online" });
+    if (pick.reason === "more_than_one_device") return out("gateway-check", "fail", { reason: "more_than_one_device", devices: Array.isArray(devs) ? devs.length : 0, hint: "ask_GATEWAY_DEVICE_ID_is_not_guessed" });
+    // Never overwrite the stored id: a different listing is a new phone (or a swapped server), not a silent re-pin.
+    if (pick.reason === "device_id_changed") return out("gateway-check", "fail", { reason: "device_id_changed", devices: Array.isArray(devs) ? devs.length : 0, hint: "stop_and_check_the_phone;to_switch_phones_remove_GATEWAY_DEVICE_ID_from_secrets.env_then_rerun" });
+    const d = pick.device;
+    if (!d) return out("gateway-check", "fail", { reason: pick.reason });
     m.set("GATEWAY_DEVICE_ID", String(d.id));
     const s = loadSettings();
     const hasKey = typeof d.publicKey === "string" && !!d.publicKey;
@@ -490,21 +539,22 @@ const steps = {
       // Device-key mode (opt-in). The fingerprint is computed here; nobody types or pastes it.
       const fp = fingerprintOf(d.publicKey), ver = String(d.keyVersion);
       if (m.get("GATEWAY_PINNED_FINGERPRINT") === fp && m.get("GATEWAY_KEY_VERSION") === ver) {
-        m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION");
+        m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION"); m.delete("PENDING_DEVICE_ID"); m.delete("PENDING_DEVICE_NAME");
         next = "none_already_pinned";
       } else {
         // Held as pending until the owner confirms it by eye; a rotated key never replaces the pin unconfirmed.
         m.set("PENDING_FINGERPRINT", fp); m.set("PENDING_KEY_VERSION", ver);
+        m.set("PENDING_DEVICE_ID", String(d.id)); m.set("PENDING_DEVICE_NAME", typeof d.name === "string" ? d.name.slice(0, 80) : "");
         next = "confirm-fingerprint";
       }
     } else {
-      m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION");
+      m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION"); m.delete("PENDING_DEVICE_ID"); m.delete("PENDING_DEVICE_NAME");
       // Passphrase mode (the default): the app decrypts this format by prefix even when it has a device key.
       next = m.has("GATEWAY_PASSPHRASE") ? "none_passphrase_stored" : "keys_then_show_GATEWAY_PASSPHRASE(or_ask_GATEWAY_PASSPHRASE_if_the_app_has_one)";
     }
     if (!DRY) { saveSecrets(m); saveSettings(s); } // a dry run changes nothing on disk
     out("gateway-check", DRY ? "dry_run" : "ok", { devices: 1, device_key: hasKey ? "yes" : "no", next });
-    out("gateway_mode", DRY ? "dry_run" : "ok", { reason: mode, ...(mode === "passphrase" && hasKey && !s.gatewayMode ? { hint: "default_while_app_v1.77.0-1.77.4_device_key_decrypt_bug;opt_in:config_--gateway-mode_device-key" } : {}) });
+    out("gateway_mode", DRY ? "dry_run" : "ok", { reason: mode, ...(mode === "passphrase" && hasKey && !s.gatewayMode ? { hint: "default_while_app_v1.77.0-1.77.4_device_key_decrypt_bug;opt_in:config_--gateway-mode_device-key" } : {}), ...staleHint(s, m) });
   },
 
   async "confirm-fingerprint"() {
@@ -512,16 +562,15 @@ const steps = {
     if (gatewayMode(loadSettings(), m) !== "device_key") return out("confirm-fingerprint", "skip", { reason: `gateway_mode_${gatewayMode(loadSettings(), m)}`, hint: "opt_in:config_--gateway-mode_device-key" });
     if (!m.has("PENDING_FINGERPRINT")) return out("confirm-fingerprint", "skip", { reason: m.has("GATEWAY_PINNED_FINGERPRINT") ? "already_pinned" : "no_device_key" });
     const fp = m.get("PENDING_FINGERPRINT");
-    const g = fp.split(":");
-    // Big and short: the first two and last two groups (64 bits) are what the owner compares. Full value below.
-    const show = `${g.slice(0, 2).join("  ")}   ...   ${g.slice(-2).join("  ")}\n\nCheck these first two and last two groups against the app:\nSettings, Device, Device Key, Key fingerprint.\n\nFull value (no need to read it all):\n${fp}`;
+    // Which phone (id and name), then the first two and last two groups (64 bits) to compare. Full value below.
+    const show = confirmText(fp, m.get("PENDING_DEVICE_ID") ?? m.get("GATEWAY_DEVICE_ID"), m.get("PENDING_DEVICE_NAME"));
     const r = dialog({ prompt: "Does this match the Key fingerprint in the SMS Gateway app?", show, buttons: ["No, different", "Yes, it matches"] });
     if (r.error) return out("confirm-fingerprint", "fail", { reason: r.error });
     if (r.value !== "Yes, it matches") return out("confirm-fingerprint", "fail", { reason: "fingerprint_mismatch", hint: "stop_and_ask_for_help" });
     const rotated = m.has("GATEWAY_PINNED_FINGERPRINT");
     m.set("GATEWAY_PINNED_FINGERPRINT", fp);
     m.set("GATEWAY_KEY_VERSION", m.get("PENDING_KEY_VERSION") ?? m.get("GATEWAY_KEY_VERSION"));
-    m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION");
+    m.delete("PENDING_FINGERPRINT"); m.delete("PENDING_KEY_VERSION"); m.delete("PENDING_DEVICE_ID"); m.delete("PENDING_DEVICE_NAME");
     // The local passphrase is kept (never sent in device-key mode) so switching back doesn't need re-entry in the app.
     const s = loadSettings();
     s.deviceKey = true;
@@ -579,17 +628,20 @@ const steps = {
       const listed = owned && owned.worker === s.worker ? listedSecrets("secrets") : null;
       const stale = staleFor(mode);
       const wouldRemove = listed ? stale.filter((k) => listed.includes(k)).join(",") || "none" : stale.length ? stale.map((k) => `${k}_if_set`).join(",") : "";
-      return out("secrets", "dry_run", { gateway_mode: mode, would_set: Object.keys(payload).length, names: Object.keys(payload).join(","), would_remove: wouldRemove, ...showReminder(s, m) });
+      out("secrets", "dry_run", { gateway_mode: mode, would_set: Object.keys(payload).length, names: Object.keys(payload).join(","), would_remove: wouldRemove, ...showReminder(s, m), ...staleHint(s, m) });
+      return warnBoth("worker_secrets", mode, listed, { fix: "secrets_removes_the_other_mode" });
     }
     const acct = account("secrets"); if (!acct) return;
     if (!isClaimed(s, acct)) return out("secrets", "fail", { reason: "run_claim_first" });
     const r = wrangler(["secret", "bulk"], { input: JSON.stringify(payload), step: "secrets" });
     if (r.status !== 0) return out("secrets", "fail", { log: ".relay-local/logs/secrets.log" });
     const names = listedSecrets("secrets") || [];
+    warnBoth("worker_secrets", mode, names, { fix: "secrets_removes_the_other_mode" }); // found before the clean-up below
     // The other mode's secrets stay on the Worker until removed (bulk never deletes); delete only what's listed.
     const removed = removeListed("secrets", names, staleFor(mode));
     const absent = Object.keys(payload).filter((k) => !names.includes(k));
-    out("secrets", absent.length || removed === "failed" ? "fail" : "ok", { gateway_mode: mode, set: Object.keys(payload).length, absent: absent.join(","), removed: removed || "none", ...showReminder(s, m) });
+    out("secrets", absent.length || removed === "failed" ? "fail" : "ok", { gateway_mode: mode, set: Object.keys(payload).length, absent: absent.join(","), removed: removed || "none", ...showReminder(s, m), ...staleHint(s, m) });
+    if (removed !== "failed") warnBoth("worker_secrets", mode, listedSecrets("secrets"), { fix: "delete_the_other_mode_secret_by_hand" }); // still both after the clean-up
   },
 
   async google() {
@@ -692,7 +744,10 @@ const steps = {
     const m = loadSecrets();
     const s = loadSettings();
     const { missing } = s.worker ? buildPayload(s, m) : { missing: ["config"] };
-    out("status", "ok", { worker: s.worker || "none", delivery: s.delivery || "none", gateway_mode: gatewayMode(s, m), have: [...m.keys()].join(","), missing: missing.join(",") || "none", claimed: s.worker && isClaimed(s) ? "yes" : "no", ...showReminder(s, m) });
+    out("status", "ok", { worker: s.worker || "none", delivery: s.delivery || "none", gateway_mode: gatewayMode(s, m), have: [...m.keys()].join(","), missing: missing.join(",") || "none", claimed: s.worker && isClaimed(s) ? "yes" : "no", ...showReminder(s, m), ...staleHint(s, m) });
+    // Deployed from here: a read-only `secret list` (names only) checks the Worker doesn't hold both modes' secrets.
+    const owned = s.worker ? readJson(ownedPath(s)) : null;
+    if (owned && owned.worker === s.worker && !DRY) warnBoth("worker_secrets", gatewayMode(s, m), listedSecrets("status"), { fix: "run_secrets_to_remove_the_other_mode" });
   },
 };
 

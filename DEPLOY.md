@@ -62,7 +62,7 @@ Commands are written for zsh (the macOS default); bash equivalents are given whe
    read -r "U?SMS Gateway username: "; read -rs "P?password (hidden): "; echo
    curl -s -u "$U:$P" https://api.sms-gate.app/3rdparty/v1/devices; echo; unset P
    ```
-   (In bash, use `read -r -p "username: " U; read -rs -p "password: " P`.) Note your phone's `id` from the output, and whether it shows a `publicKey` and a `keyVersion`.
+   (In bash, use `read -r -p "username: " U; read -rs -p "password: " P`.) Find **your** phone in the output by its `name` and note its `id`, and whether that entry shows a `publicKey` and a `keyVersion`. Never take the first entry of the list on trust, and don't pin a key by hand: `gateway-check` stores the id once and from then on only reads the entry with that `id` (it fails with `device_id_changed` if that phone is gone), and `confirm-fingerprint` shows the device id and name next to the fingerprint.
 9. **Run `gateway-check`** (`scripts/setup-mac.sh <step>` on a Mac, `scripts\setup-windows.ps1 <step>` on Windows; run `ask GATEWAY_USER` and `ask GATEWAY_PASS` first). It reads your phone's listing and prints `RELAY_STATUS step=gateway_mode result=ok reason=passphrase` (the default, step 7) or `reason=device_key` if you opted in. In passphrase mode you're done here.
    - **Device-key mode only (opt-in): then `confirm-fingerprint`.** The relay refuses to send until the device key is pinned, so a server that swapped it can't read your texts. https://docs.sms-gate.app/privacy/encryption/ ("Trust model and key verification")
    - `gateway-check` reads `publicKey` and `keyVersion`, computes the fingerprint and holds it until you confirm. You never copy the fingerprint or the key version anywhere.
@@ -109,6 +109,8 @@ npm test && npm run typecheck
 ```
 
 **Check:** every test passes and the typecheck is clean. If anything fails, stop and don't deploy.
+
+**Upgrading later:** from the same folder, `git pull`, then `npm install --legacy-peer-deps` (a new version can change the dependencies, and the old `node_modules` won't match), then `npm test && npm run typecheck` before you deploy again.
 
 ## 5. Edit wrangler.toml (no secrets go in this file)
 1. Uncomment `routes` and put in your two hostnames (`custom_domain = true` stays).

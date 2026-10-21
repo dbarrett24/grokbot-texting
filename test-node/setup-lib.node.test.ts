@@ -70,8 +70,8 @@ describe("secrets payload", () => {
     expect(missing).toEqual([]);
     expect(payload.GATEWAY_PASSPHRASE).toBeUndefined();
     expect(payload.GATEWAY_MODE).toBe("device_key");
-    // no choice made: an existing pin stays device_key (vet N1); without one the default is passphrase
-    expect(buildPayload({ ...BASE, deviceKey: true }, m).payload.GATEWAY_MODE).toBe("device_key");
+    // no choice made: a stored pin never selects device_key (EL B1); the default is passphrase either way
+    expect(buildPayload({ ...BASE, deviceKey: true }, m).payload.GATEWAY_MODE).toBe("passphrase");
     m.delete("GATEWAY_PINNED_FINGERPRINT"); m.delete("GATEWAY_KEY_VERSION");
     const d = buildPayload({ ...BASE, deviceKey: true }, m).payload;
     expect(d.GATEWAY_MODE).toBe("passphrase");
