@@ -38,6 +38,15 @@ html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-bac
 /* Optional leaf layer (src/harbor-leaves.ts): fixed between the backdrop (-3) and the glass (-1), thickest at the
    edges and masked away toward the centre so the card stays readable. */
 .hl-leaves{position:fixed;inset:0;width:100%;height:100%;z-index:-2;pointer-events:none;-webkit-mask-image:radial-gradient(ellipse at center,transparent 28%,#000 78%);mask-image:radial-gradient(ellipse at center,transparent 28%,#000 78%)}
+/* @photo: photo leaf backdrops (/contacts only; see src/harbor.ts). The photos bake in their own blue gradient, so
+   they are blended (soft-light) over the Harbor backdrop instead of covering it: the gradient and the gold and blue
+   glows stay visible underneath and the leaves read as texture. The smaller file is used on narrow screens. */
+.hl-photo{position:fixed;inset:0;z-index:-2;pointer-events:none;background-position:center;background-size:cover;mix-blend-mode:soft-light;--hl-scrim:linear-gradient(transparent,transparent)}
+.hl-photo-corners{background-image:var(--hl-scrim),url(/harbor/leaves/corners-1024.webp)}
+.hl-photo-vines{background-image:var(--hl-scrim),url(/harbor/leaves/vines-1024.webp)}
+.hl-photo-scatter{background-image:var(--hl-scrim),url(/harbor/leaves/scatter-1024.webp)}
+@media (max-width:40em){.hl-photo-corners{background-image:var(--hl-scrim),url(/harbor/leaves/corners-640.webp)}.hl-photo-vines{background-image:var(--hl-scrim),url(/harbor/leaves/vines-640.webp)}.hl-photo-scatter{background-image:var(--hl-scrim),url(/harbor/leaves/scatter-640.webp)}}
+/* @end photo */
 body{font:16px/1.5 var(--h-sans);color:var(--h-text);max-width:40em;margin:1.5em auto;padding:1em 1.4em 1.4em;box-sizing:border-box;position:relative}
 /* The glass is a layer behind body, not on body: backdrop-filter on body would make it the containing block for
    position:fixed children (the /contacts toast would sit at the end of the long card instead of the viewport). */
