@@ -35,6 +35,9 @@
 /* The backdrop is a fixed layer behind everything (not background-attachment:fixed, which iOS Safari ignores and which
    repaints on scroll), so the glow never ends at the fold and the card scrolls over a still background. */
 html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-backdrop);pointer-events:none}
+/* Optional leaf layer (src/harbor-leaves.ts): fixed between the backdrop (-3) and the glass (-1), thickest at the
+   edges and masked away toward the centre so the card stays readable. */
+.hl-leaves{position:fixed;inset:0;width:100%;height:100%;z-index:-2;pointer-events:none;-webkit-mask-image:radial-gradient(ellipse at center,transparent 28%,#000 78%);mask-image:radial-gradient(ellipse at center,transparent 28%,#000 78%)}
 body{font:16px/1.5 var(--h-sans);color:var(--h-text);max-width:40em;margin:1.5em auto;padding:1em 1.4em 1.4em;box-sizing:border-box;position:relative}
 /* The glass is a layer behind body, not on body: backdrop-filter on body would make it the containing block for
    position:fixed children (the /contacts toast would sit at the end of the long card instead of the viewport). */
@@ -57,4 +60,4 @@ ul#list{list-style:none;padding:0;margin:0}#list li{display:flex;align-items:cen
 .star[aria-pressed=true]{color:var(--h-focus)}.sw{min-width:4.2em}.sw[aria-checked=true]{background:var(--h-success);color:var(--h-cta-ink);border-color:var(--h-success)}.ro{font-size:.85em}
 #toast{position:fixed;left:50%;bottom:1em;transform:translateX(-50%);background:var(--h-solid);color:var(--h-text);border:1px solid var(--h-border);box-shadow:var(--h-glow);padding:.5em 1em;border-radius:var(--h-button-radius);display:none}
 form.inl{display:inline;margin-left:.4em}#google{border-top:1px solid var(--h-border);margin-top:1em}#google h2{font-size:1.2em}#gconnect input{flex:1;width:auto}
-@media (max-width:30em){body{margin:.5em;padding:.8em 1em 1em}}
+@media (max-width:30em){body{margin:.5em;padding:.8em 1em 1em}.hl-leaves{opacity:.3}}

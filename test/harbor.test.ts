@@ -59,3 +59,22 @@ describe("Harbor look", () => {
     expect(csp).toBe(`default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com; base-uri 'none'`);
   });
 });
+
+describe("Harbor leaf mockups (?leaves=)", () => {
+  it("default is none; each option is inline SVG on every page with the CSP unchanged; unknown values ignored", async () => {
+    const plain = await (await get(`${BASE}/direct`)).text();
+    expect(plain).not.toContain("<svg class=hl-leaves");
+    for (const o of ["corners", "vines", "scatter"]) {
+      const r = await get(`${BASE}/direct?leaves=${o}`);
+      const html = await r.text();
+      expect(html).toContain("<svg class=hl-leaves aria-hidden=true");
+      expect(/<svg class=hl-leaves[\s\S]*?<\/svg>\n/.exec(html)?.[0]).not.toMatch(/href="(?!#)/); // only in-document <use> refs
+      expect(r.headers.get("content-security-policy")).toBe(STRICT_CSP);
+      const c = await get(`${BASE}/contacts?leaves=${o}`);
+      const ch = await c.text();
+      expect(ch).toContain("<svg class=hl-leaves");
+      expect(new TextEncoder().encode(ch).length).toBeLessThan(25_000);
+    }
+    expect(await (await get(`${BASE}/direct?leaves=__proto__`)).text()).not.toContain("<svg class=hl-leaves");
+  });
+});
