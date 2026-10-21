@@ -1,0 +1,60 @@
+/* Everyday Harbor look for the Worker's pages (/contacts, /direct, /approve/*). Plain CSS, inlined into each page's
+   existing <style> so the CSP is unchanged. Values come from @evolve.ui/theme-system (block below). */
+/* @generated harbor-tokens: do not edit by hand; run node scripts/harbor-tokens.mjs */
+:root{
+--h-text:#eef2f6;
+--h-muted:#b9c5d3;
+--h-success:#b4c15a;
+--h-critical:#f7a29d;
+--h-link:#8ec5e8;
+--h-focus:#e3b341;
+--h-border:#56708f;
+--h-warning-bg:#462e0e;
+--h-warning-border:#ba7a25;
+--h-cta-ink:#0b1626;
+--h-solid:#12223a;
+--h-backdrop:radial-gradient(circle at 18% 12%, rgba(91, 155, 216, 0.34), transparent 38%), radial-gradient(circle at 85% 80%, rgba(227, 179, 65, 0.3), transparent 42%), radial-gradient(circle at 70% 20%, rgba(163, 176, 78, 0.18), transparent 36%), #0b1626;
+--h-surface:linear-gradient(160deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0) 45%), rgba(14, 28, 48, 0.42);
+--h-surface-filter:blur(18px) saturate(180%);
+--h-surface-shadow:inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 20px 60px rgba(0, 0, 0, 0.45);
+--h-hover-fill:linear-gradient(160deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0) 45%), rgba(46, 107, 166, 0.3);
+--h-cta-fill:linear-gradient(135deg, #f2cf7a, #e3b341 55%, #d9963e);
+--h-cta-fill-hover:linear-gradient(180deg, #f2cf7a, #e3b341 40%, #d9963e);
+--h-glow:0 0 24px rgba(46, 107, 166, 0.55);
+--h-surface-radius:18px;
+--h-button-radius:8px;
+--h-input-radius:6px;
+--h-serif:'Source Serif 4 Harbor', Georgia, serif;
+--h-sans:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+/* @end harbor-tokens */
+/* @font-face: only where the CSP allows same-origin fonts (/contacts); stripped elsewhere, which fall back to Georgia. */
+@font-face{font-family:'Source Serif 4 Harbor';src:url(/harbor/source-serif-4-latin-600.woff2) format('woff2');font-weight:600;font-display:swap;unicode-range:U+0000-00FF,U+2000-206F,U+20AC,U+2122,U+2212}
+/* @end font-face */
+:root{color-scheme:dark;background:var(--h-solid)}
+/* The backdrop is a fixed layer behind everything (not background-attachment:fixed, which iOS Safari ignores and which
+   repaints on scroll), so the glow never ends at the fold and the card scrolls over a still background. */
+html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-backdrop);pointer-events:none}
+body{font:16px/1.5 var(--h-sans);color:var(--h-text);max-width:40em;margin:1.5em auto;padding:1em 1.4em 1.4em;box-sizing:border-box;position:relative}
+/* The glass is a layer behind body, not on body: backdrop-filter on body would make it the containing block for
+   position:fixed children (the /contacts toast would sit at the end of the long card instead of the viewport). */
+body::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:var(--h-surface-radius);background:var(--h-surface);-webkit-backdrop-filter:var(--h-surface-filter);backdrop-filter:var(--h-surface-filter);box-shadow:var(--h-surface-shadow)}
+h1,h2{font-family:var(--h-serif);font-weight:600;letter-spacing:.2px;margin:.4em 0 .5em}h1{font-size:1.6em}h2{font-size:1.3em}
+a{color:var(--h-link)}a:hover{color:var(--h-text)}code{font-size:.9em}small,.ro{color:var(--h-muted)}.warn{color:var(--h-critical)}
+:focus-visible{outline:2px solid var(--h-focus);outline-offset:2px}
+button{font:inherit;font-weight:600;color:var(--h-text);padding:.4em .8em;border-radius:var(--h-button-radius);border:1px solid var(--h-border);background:var(--h-solid);cursor:pointer}
+button:hover:not(:disabled){background:var(--h-hover-fill);box-shadow:var(--h-glow)}button:disabled{opacity:.55;cursor:not-allowed}
+button[value=approve],#sync,form[action="/direct/resume"] button{background:var(--h-cta-fill);color:var(--h-cta-ink);border-color:transparent}
+button[value=approve]:hover,#sync:hover,form[action="/direct/resume"] button:hover{background:var(--h-cta-fill-hover);color:var(--h-cta-ink)}
+input[type=search],input[type=text],input[type=password]{font:inherit;color:var(--h-text);background:var(--h-solid);border:1px solid var(--h-border);border-radius:var(--h-input-radius);padding:.4em .55em;width:100%;box-sizing:border-box}
+pre{white-space:pre-wrap;border:1px solid var(--h-border);border-radius:var(--h-input-radius);background:var(--h-solid);padding:.75em;font:inherit}
+details{margin:.8em 0}summary{cursor:pointer;font-weight:600}
+/* /contacts page parts (same selectors as before; no markup change) */
+body:has(#list){max-width:44em}.banner{background:var(--h-warning-bg);border:1px solid var(--h-warning-border);padding:.6em .8em;border-radius:var(--h-input-radius)}
+.bar{display:flex;flex-wrap:wrap;gap:.4em;margin:.6em 0;align-items:center}.bar button[aria-pressed=true]{background:var(--h-text);color:var(--h-cta-ink);border-color:var(--h-text)}
+ul#list{list-style:none;padding:0;margin:0}#list li{display:flex;align-items:center;gap:.5em;padding:.55em 0;border-bottom:1px solid var(--h-border)}
+.who{flex:1;min-width:0}.who small{display:block}.star{border:none;background:none;font-size:1.4em;padding:0 .2em;color:var(--h-muted)}.star:hover:not(:disabled){background:none;box-shadow:none;color:var(--h-text)}
+.star[aria-pressed=true]{color:var(--h-focus)}.sw{min-width:4.2em}.sw[aria-checked=true]{background:var(--h-success);color:var(--h-cta-ink);border-color:var(--h-success)}.ro{font-size:.85em}
+#toast{position:fixed;left:50%;bottom:1em;transform:translateX(-50%);background:var(--h-solid);color:var(--h-text);border:1px solid var(--h-border);box-shadow:var(--h-glow);padding:.5em 1em;border-radius:var(--h-button-radius);display:none}
+form.inl{display:inline;margin-left:.4em}#google{border-top:1px solid var(--h-border);margin-top:1em}#google h2{font-size:1.2em}#gconnect input{flex:1;width:auto}
+@media (max-width:30em){body{margin:.5em;padding:.8em 1em 1em}}
