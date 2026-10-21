@@ -14,7 +14,7 @@ describe("Harbor look", () => {
     expect(HARBOR_CSS).toContain("--h-cta-fill:linear-gradient(135deg,");
     expect(HARBOR_CSS).toContain("rgba(91, 155, 216, 0.34)");
     expect(HARBOR_CSS).not.toContain("0.38)");
-    expect([...HARBOR_CSS.matchAll(/url\(([^)]*)\)/g)].map((m) => m[1])).toEqual([HARBOR_FONT_PATH]);
+    expect([...HARBOR_CSS.matchAll(/url\(([^)]*)\)/g)].map((m) => m[1]).filter((u) => !u?.startsWith("/harbor/leaves/"))).toEqual([HARBOR_FONT_PATH]);
     expect(HARBOR_CSS_NO_FONT).not.toMatch(/@font-face|url\(/);
     expect(HARBOR_CSS).not.toContain("/*");
     // Backdrop on a fixed layer: never background-attachment:fixed (ignored on iOS Safari, repaints on scroll).
@@ -76,5 +76,32 @@ describe("Harbor leaf mockups (?leaves=)", () => {
       expect(new TextEncoder().encode(ch).length).toBeLessThan(25_000);
     }
     expect(await (await get(`${BASE}/direct?leaves=__proto__`)).text()).not.toContain("<svg class=hl-leaves");
+  });
+});
+
+describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
+  it("/contacts gets the photo layer; /direct falls back to the SVG option; CSPs unchanged", async () => {
+    for (const o of ["corners", "vines", "scatter"]) {
+      const c = await get(`${BASE}/contacts?leaves=photo-${o}`);
+      expect(await c.text()).toContain(`<div class="hl-photo hl-photo-${o}" aria-hidden=true></div>`);
+      const d = await get(`${BASE}/direct?leaves=photo-${o}`);
+      const html = await d.text();
+      expect(html).not.toContain("hl-photo-");
+      expect(html).toContain("<svg class=hl-leaves");
+      expect(d.headers.get("content-security-policy")).toBe(STRICT_CSP);
+    }
+  });
+
+  it("serves the WebP files from the approve host only; unknown names 404", async () => {
+    for (const n of ["corners-1024", "corners-640", "vines-1024", "vines-640", "scatter-1024", "scatter-640"]) {
+      const r = await get(`${BASE}/harbor/leaves/${n}.webp`);
+      expect(r.status).toBe(200);
+      expect(r.headers.get("content-type")).toBe("image/webp");
+      const b = new Uint8Array(await r.arrayBuffer());
+      expect(new TextDecoder().decode(b.slice(8, 12))).toBe("WEBP");
+      expect(b.length).toBeLessThan(25_000);
+    }
+    expect((await get(`${BASE}/harbor/leaves/nope-1024.webp`)).status).toBe(404);
+    expect((await h.relay.fetch(`${API}/harbor/leaves/corners-1024.webp`)).status).toBe(404);
   });
 });

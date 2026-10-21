@@ -18,7 +18,7 @@ fallthrough = false
 
 [[rules]]
 type = "Data"
-globs = ["**/*.woff2"]
+globs = ["**/*.woff2", "**/*.webp"]
 fallthrough = false
 
 [[durable_objects.bindings]]
