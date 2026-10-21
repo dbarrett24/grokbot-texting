@@ -3,6 +3,7 @@ import type { Env } from "./env";
 import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, importHmacKey } from "./e2e";
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
+import { HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH, harborFont } from "./harbor";
 import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, isClientId, isClientSecret, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
   CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, projectNumberOf, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
@@ -297,6 +298,7 @@ export class Relay extends DurableObject<Env> {
         const m = path.match(/^\/approve\/([a-f0-9]{32})$/);
         if (m && req.method === "GET") return await this.approvePage(req, m[1]);
         if (m && req.method === "POST") return await this.decide(req, m[1]);
+        if (req.method === "GET" && path === HARBOR_FONT_PATH) return harborFont(); // static OFL font for /contacts headings
         if (req.method === "GET" && path === "/log") return await this.showLog(req);
         if (req.method === "GET" && path === "/direct") return await this.directPage(req);
         if (req.method === "POST" && path === "/direct/resume") return await this.resumeDirect(req);
@@ -1416,7 +1418,8 @@ export class Relay extends DurableObject<Env> {
     const lastHour = this.sql.exec("SELECT COUNT(*) AS c FROM direct_sends WHERE ms > ?", now - HOUR).one().c as number;
     const snapAt = this.meta("snapshot_uploaded_ms");
     const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Direct send</title>
-<body style="font:16px system-ui;max-width:32em;margin:1em auto;padding:0 1em">
+<style>${HARBOR_CSS_NO_FONT}</style>
+<body>
 <h2>Direct send</h2>
 <p><a href="/contacts">Contacts page</a>: choose who the bot may text.</p>
 <p><b>DIRECT_SEND:</b> ${switchOnlyIfOne(this.env.DIRECT_SEND) ? "on" : "off"} · <b>runaway guard:</b> ${switchOnUnlessZero(this.env.RUNAWAY_PAUSE) ? "on" : "off"}</p>
@@ -1427,7 +1430,7 @@ ${this.devicePageLine()}
 <p><b>Direct list:</b> ${snapAt ? `${esc(this.meta("snapshot_numbers") ?? "?")} numbers under ${esc(this.meta("snapshot_names") ?? "?")} distinct names, rebuilt ${esc(this.fmtTime(Number(snapAt)))}` : "empty"}</p>
 <ul>${[...this.googleLabels(), UPLOAD_SOURCE].map((a) => { const ok = this.meta(`acct:${a}:ok_ms`); return `<li>${esc(a)}: ${ok ? `${esc(this.meta(`acct:${a}:numbers`) ?? "?")} numbers${this.meta(`acct:${a}:dropped`) ? ` (${esc(this.meta(`acct:${a}:dropped`)!)} fax/pager dropped)` : ""}, last good ${esc(this.fmtTime(Number(ok)))}` : "never loaded"}</li>`; }).join("")}</ul>
 ${this.googleLabels().length ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${csrf}"><button>Sync contacts now</button></form>` : "<p>No Google accounts configured (GOOGLE_ACCOUNTS).</p>"}
-${paused ? `<form method=post action="/direct/resume"><input type=hidden name=csrf value="${csrf}"><button style="font-size:1.2em">Resume direct send</button></form>` : ""}
+${paused ? `<form method=post action="/direct/resume"><input type=hidden name=csrf value="${csrf}"><button>Resume direct send</button></form>` : ""}
 </body>`;
     return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" } });
   }
@@ -1716,14 +1719,15 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     const mins = Math.max(0, Math.ceil((r.expires_ms - this.clock()) / 60000));
     // Everything shown comes from the relay's stored row, never from the query string or the bot.
     const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Approve text</title>
-<body style="font:16px system-ui;max-width:32em;margin:1em auto;padding:0 1em">
+<style>${HARBOR_CSS_NO_FONT}</style>
+<body>
 <h2>Send this text?</h2>
 <p><b>To:</b> ${esc((r.via === "contacts" ? r.to_label : allow.get(r.recipient)) || "not on allowlist")} (${esc(maskNumber(r.recipient))})</p>
-<pre style="white-space:pre-wrap;border:1px solid #888;padding:.75em">${esc(r.text)}</pre>
+<pre>${esc(r.text)}</pre>
 <p><small>ref ${r.id.slice(0, 8)} · sha256 ${r.sha256.slice(0, 12)} · ${open ? `expires in ${mins} min` : `state: ${expired && r.state === "pending" ? "expired" : r.state}`}</small></p>
 ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
-<button name=action value=approve style="font-size:1.2em">Approve and send</button>
-<button name=action value=deny style="font-size:1.2em">Deny</button></form>` : ""}
+<button name=action value=approve>Approve and send</button>
+<button name=action value=deny>Deny</button></form>` : ""}
 </body>`;
     this.log("approve_page_viewed", { request_id: id });
     return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" } });
