@@ -10,3 +10,21 @@
 Setup: `npm ci` (Node 20+). For the PII scan locally, set `PII_TERMS_FILE` to a term list kept **outside** the repo
 (ask the maintainer); without it the term scan is skipped and only the phone-number scan runs.
 For agents, the verification skill is `.agents/skills/verify-sms-relay/SKILL.md`.
+
+## Local contacts walk (`npm run walk`)
+
+Clicks through `/contacts` locally with fake data, no Cloudflare account and no secrets:
+
+```
+npm install
+npm run walk        # prints "walk: ready in N ms -> http://127.0.0.1:8787/contacts" once the page is usable
+```
+
+- The config, `walk.local.toml` (git-ignored), is written fresh from `wrangler.toml` on every run by
+  `scripts/walk-config.mjs`. Do not hand-copy a walk config: one without the `[[rules]]` blocks (CSS as Text,
+  `.woff2`/`.webp` as Data) prints "Ready" and then fails the build with 20 errors, so `/contacts` never loads.
+  `test-node/walk.node.test.ts` fails if the generated rules ever differ from `wrangler.toml`.
+- It listens on `127.0.0.1`, uses a fresh `.walk-state-<time>` persist dir, stops on any build error, and only prints
+  the URL after `/contacts` (200, HTML) and two harbor assets have answered, so the first page view is already warm.
+- `tools/walk/entry.ts` signs its own Access token for a fake `.invalid` team domain. It refuses to run unless
+  `WALK_LOCAL = "1"`; never deploy it.
