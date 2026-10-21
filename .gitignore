@@ -4,3 +4,5 @@ node_modules
 *.tgz
 .env*
 .relay-local/
+walk.local.toml
+.walk-state-*/

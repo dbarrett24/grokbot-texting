@@ -5,5 +5,5 @@
     "noFallthroughCasesInSwitch": true, "noImplicitReturns": true, "allowUnreachableCode": false, "allowUnusedLabels": false, "isolatedModules": true,
     "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "tools/walk"]
 }
