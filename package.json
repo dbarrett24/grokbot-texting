@@ -16,7 +16,9 @@
     "check:ancestors": "node scripts/ci/check-ancestors.mjs",
     "check:pii": "node scripts/ci/pii-scan.mjs",
     "check:numbers": "node scripts/check-example-numbers.mjs",
-    "harbor:tokens": "node scripts/harbor-tokens.mjs"
+    "harbor:tokens": "node scripts/harbor-tokens.mjs",
+    "walk": "node scripts/walk.mjs",
+    "walk:config": "node scripts/walk-config.mjs"
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.4",

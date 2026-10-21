@@ -247,6 +247,10 @@ const M = [
   ["entry_import_contacts_uses_helper", "scripts/import-contacts.mjs", 'if (mainKind(import.meta.url) === "main") main(process.argv);', 'if (import.meta.url === "file://" + process.argv[1]) main(process.argv);'],
   ["entry_google_consent_uses_helper", "scripts/google-consent.mjs", 'if (mainKind(import.meta.url) === "main") main()', 'if (import.meta.url === "file://" + process.argv[1]) main()'],
   ["entry_mac_helper_uses_helper", "mac/relay-device.mjs", 'if (mainKind(import.meta.url) === "main") {', 'if (import.meta.url === "file://" + process.argv[1]) {'],
+  ["walk_guard_needs_walk_local", "tools/walk/guard.ts", 'return env.WALK_LOCAL === "1" && ', 'return '],
+  ["walk_guard_needs_invalid_domain", "tools/walk/guard.ts", '&& /^https:\\/\\/[a-z0-9-]+\\.invalid\\/?$/.test(env.ACCESS_TEAM_DOMAIN || "")', '&& true'],
+  ["walk_config_requires_rules", "scripts/walk-config.mjs", 'if (!blocks.some((b) => b.name === "rules")) throw', 'if (false) throw'],
+  ["walk_stops_on_build_errors", "scripts/walk.mjs", 'if (errs) throw new Error', 'if (false) throw new Error'],
   ["entry_install_copies_helper", "mac/install.sh", 'cp "$HERE/../scripts/is-main.mjs" "$DEST/is-main.mjs"', "true"],
   // device-key setup mode (setup-device-key-mode): one derived mode, Worker pin push, fix hints; OAEP parameters
   ["devkey_keys_no_passphrase", "scripts/setup-lib.mjs", 'mode === "passphrase" ? ["GATEWAY_PASSPHRASE"] : []', 'mode !== "none" ? ["GATEWAY_PASSPHRASE"] : []'],
