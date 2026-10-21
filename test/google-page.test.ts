@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { API, BASE, harness, type Harness } from "./helpers";
 import { fakeGoogle, inRelay, must, sql as sqlOf, type FakeGoogle } from "./google-fixture";
-import { GCP_LINKS, GCP_PROJECT_LINKS, projectNumberOf, withProject } from "../src/contacts";
+import { GCP_LINKS, GCP_PROJECT_LINKS, GOOGLE_ERROR_FIX, SYNC_FIX, TOKEN_KEY_MISSING_FIX, googleErrorFix, projectNumberOf, syncFix, withProject } from "../src/contacts";
 import { GOOGLE_SCOPE } from "../src/google";
 
 const KEY = "ab".repeat(32); // obviously fake
@@ -195,5 +195,24 @@ describe("EL review fixes (deep links land in the right project; disconnect left
     expect((await page()).html).toMatch(/1 of 2 stored Google sign-ins are still on the old GOOGLE_TOKEN_KEY/); // the page load re-sealed the client
     await inRelay(h, (i) => i.googleRefreshToken("WORK"));
     expect((await page()).html).toContain("All 2 stored Google sign-ins are on the current GOOGLE_TOKEN_KEY.");
+  });
+});
+
+describe("GOOGLE_TOKEN_KEY error messages", () => {
+  it("google_token_key_invalid has its own fix line pointing to DEPLOY.md section 14", () => {
+    expect(GOOGLE_ERROR_FIX["google_token_key_invalid"]).toMatch(/GOOGLE_TOKEN_KEY is malformed/);
+    expect(GOOGLE_ERROR_FIX["google_token_key_invalid"]).toMatch(/DEPLOY\.md section 14/);
+    expect(googleErrorFix("google_token_key_invalid")).toBe(GOOGLE_ERROR_FIX["google_token_key_invalid"]);
+  });
+  it("google_token_key_missing reads the same on /contacts and in sync results", () => {
+    expect(GOOGLE_ERROR_FIX["google_token_key_missing"]).toBe(TOKEN_KEY_MISSING_FIX);
+    expect(SYNC_FIX["google_token_key_missing"]).toBe(TOKEN_KEY_MISSING_FIX);
+    expect(syncFix("google_token_key_missing")).toBe(googleErrorFix("google_token_key_missing"));
+  });
+  it("the page shows the malformed-key fix for ?google_error=google_token_key_invalid", async () => {
+    const html = (await page("?google_error=google_token_key_invalid")).html;
+    expect(html).toContain("GOOGLE_TOKEN_KEY is malformed");
+    expect(html).toContain("DEPLOY.md section 14");
+    expect(html).not.toContain("Google sign-in failed. Try again.");
   });
 });
