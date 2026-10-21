@@ -34,9 +34,11 @@
 :root{color-scheme:dark;background:var(--h-solid)}
 /* The backdrop is a fixed layer behind everything (not background-attachment:fixed, which iOS Safari ignores and which
    repaints on scroll), so the glow never ends at the fold and the card scrolls over a still background. */
-html::before{content:"";position:fixed;inset:0;z-index:-1;background:var(--h-backdrop);pointer-events:none}
-body{font:16px/1.5 var(--h-sans);color:var(--h-text);max-width:40em;margin:1.5em auto;padding:1em 1.4em 1.4em;box-sizing:border-box;
-background:var(--h-surface);-webkit-backdrop-filter:var(--h-surface-filter);backdrop-filter:var(--h-surface-filter);box-shadow:var(--h-surface-shadow);border-radius:var(--h-surface-radius)}
+html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-backdrop);pointer-events:none}
+body{font:16px/1.5 var(--h-sans);color:var(--h-text);max-width:40em;margin:1.5em auto;padding:1em 1.4em 1.4em;box-sizing:border-box;position:relative}
+/* The glass is a layer behind body, not on body: backdrop-filter on body would make it the containing block for
+   position:fixed children (the /contacts toast would sit at the end of the long card instead of the viewport). */
+body::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:var(--h-surface-radius);background:var(--h-surface);-webkit-backdrop-filter:var(--h-surface-filter);backdrop-filter:var(--h-surface-filter);box-shadow:var(--h-surface-shadow)}
 h1,h2{font-family:var(--h-serif);font-weight:600;letter-spacing:.2px;margin:.4em 0 .5em}h1{font-size:1.6em}h2{font-size:1.3em}
 a{color:var(--h-link)}a:hover{color:var(--h-text)}code{font-size:.9em}small,.ro{color:var(--h-muted)}.warn{color:var(--h-critical)}
 :focus-visible{outline:2px solid var(--h-focus);outline-offset:2px}
