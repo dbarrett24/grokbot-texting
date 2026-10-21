@@ -3,7 +3,7 @@ import type { Env } from "./env";
 import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, importHmacKey } from "./e2e";
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
-import { HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH, harborFont } from "./harbor";
+import { HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH, harborFont, harborPhoto, leavesFor, HARBOR_PHOTO_PREFIX, pickerFor, setBackground } from "./harbor";
 import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, isClientId, isClientSecret, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
   CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, projectNumberOf, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
@@ -299,6 +299,8 @@ export class Relay extends DurableObject<Env> {
         if (m && req.method === "GET") return await this.approvePage(req, m[1]);
         if (m && req.method === "POST") return await this.decide(req, m[1]);
         if (req.method === "GET" && path === HARBOR_FONT_PATH) return harborFont(); // static OFL font for /contacts headings
+        if (req.method === "POST" && path === "/harbor/background") return await setBackground(req); // cosmetic cookie only
+        if (req.method === "GET" && path.startsWith(HARBOR_PHOTO_PREFIX)) return harborPhoto(path) ?? json(404, { error: "not_found" });
         if (req.method === "GET" && path === "/log") return await this.showLog(req);
         if (req.method === "GET" && path === "/direct") return await this.directPage(req);
         if (req.method === "POST" && path === "/direct/resume") return await this.resumeDirect(req);
@@ -1419,7 +1421,8 @@ export class Relay extends DurableObject<Env> {
     const snapAt = this.meta("snapshot_uploaded_ms");
     const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Direct send</title>
 <style>${HARBOR_CSS_NO_FONT}</style>
-<body>
+<body>${leavesFor(req)}
+${pickerFor(req, "/direct")}
 <h2>Direct send</h2>
 <p><a href="/contacts">Contacts page</a>: choose who the bot may text.</p>
 <p><b>DIRECT_SEND:</b> ${switchOnlyIfOne(this.env.DIRECT_SEND) ? "on" : "off"} · <b>runaway guard:</b> ${switchOnUnlessZero(this.env.RUNAWAY_PAUSE) ? "on" : "off"}</p>
@@ -1544,7 +1547,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     const connected = q.get("connected"), disconnected = q.get("disconnected");
     const label = (v: string | null) => (v && /^[A-Z0-9_]{1,32}$/.test(v) ? v : null);
     const html = renderContactsPage({
-      csrf, nonce, method: who.method,
+      csrf, nonce, method: who.method, leaves: leavesFor(req, true) + pickerFor(req, "/contacts", true), // /contacts CSP (default-src 'self') allows same-origin images
       migratedOn: key ? (this.sql.exec(`SELECT COUNT(*) AS c FROM contact_prefs WHERE ${MIGRATED_ON}`).one()["c"] as number) : 0,
       sources: [...accts, UPLOAD_SOURCE, LEGACY_SOURCE].filter((a) => a !== LEGACY_SOURCE || this.meta(`acct:${a}:ok_ms`)).map((a) => {
         const ok = this.meta(`acct:${a}:ok_ms`);
@@ -1720,7 +1723,8 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     // Everything shown comes from the relay's stored row, never from the query string or the bot.
     const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Approve text</title>
 <style>${HARBOR_CSS_NO_FONT}</style>
-<body>
+<body>${leavesFor(req)}
+${pickerFor(req, `/approve/${id}`)}
 <h2>Send this text?</h2>
 <p><b>To:</b> ${esc((r.via === "contacts" ? r.to_label : allow.get(r.recipient)) || "not on allowlist")} (${esc(maskNumber(r.recipient))})</p>
 <pre>${esc(r.text)}</pre>

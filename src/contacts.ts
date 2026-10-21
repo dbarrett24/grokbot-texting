@@ -148,6 +148,8 @@ const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ESC[c] ?? c);
 
 export interface PageModel {
+  /** Harbor leaf layer markup (inline SVG) or "". */
+  leaves?: string;
   csrf: string;
   nonce: string;
   migratedOn: number;
@@ -206,7 +208,7 @@ export function renderContactsPage(m: PageModel): string {
 <style nonce="${m.nonce}">
 ${HARBOR_CSS}
 </style>
-<h1>Contacts</h1>
+${m.leaves ?? ""}<h1>Contacts</h1>
 <p>The bot can text only people switched <b>on</b> here (plus ALLOWLIST). New people start off. Read-only Google access; nothing here writes to Google.</p>
 ${m.hashKeyMissing ? `<p class=warn>LOG_HASH_KEY is missing or short, so the list can't be shown. Run setup step keys, then secrets.</p>` : ""}
 ${m.migratedOn > 0 ? `<div class=banner id=banner role=status><b>${m.migratedOn}</b> people were reachable before this update and are still on. Review them. <button id=review>Review migrated</button> <button id=migoff>Turn all migrated off</button></div>` : ""}
