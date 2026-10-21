@@ -2,6 +2,7 @@
 // every write takes an `Owner`, and only Relay.requireOwner (Access JWT verified) can make one.
 import type { SignInMethod } from "./access";
 import { Refuse } from "./rules";
+import { HARBOR_CSS } from "./harbor";
 
 declare const OWNER_BRAND: unique symbol;
 /** Proof that Access verified the owner for this request. Not constructible outside requireOwner (type-level). */
@@ -199,16 +200,7 @@ export function renderContactsPage(m: PageModel): string {
   const err = m.lastError ? `<p class=warn>Last sync error: <code>${esc(m.lastError.code)}</code> (${esc(m.lastError.when)}). ${esc(syncFix(m.lastError.code))}</p>` : "";
   return `<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Contacts</title>
 <style nonce="${m.nonce}">
-body{font:16px system-ui,sans-serif;max-width:40em;margin:0 auto;padding:.5em 1em}h1{font-size:1.4em}
-.banner{background:#fff3cd;border:1px solid #e0c060;padding:.6em;border-radius:6px}.warn{color:#8a1c1c}
-.bar{display:flex;flex-wrap:wrap;gap:.4em;margin:.6em 0}.bar button[aria-pressed=true]{background:#234;color:#fff}
-button{font:inherit;padding:.35em .7em;border-radius:6px;border:1px solid #888;background:#f4f4f4;cursor:pointer}
-ul#list{list-style:none;padding:0;margin:0}#list li{display:flex;align-items:center;gap:.5em;padding:.5em 0;border-bottom:1px solid #ddd}
-.who{flex:1;min-width:0}.who small{color:#555;display:block}.star{border:none;background:none;font-size:1.4em;padding:0 .2em}
-.star[aria-pressed=true]{color:#c90}.sw{min-width:4.2em}.sw[aria-checked=true]{background:#1a7f37;color:#fff}.ro{color:#555;font-size:.85em}
-#toast{position:fixed;left:50%;bottom:1em;transform:translateX(-50%);background:#222;color:#fff;padding:.5em 1em;border-radius:6px;display:none}
-input[type=search],input[type=text],input[type=password]{font:inherit;padding:.35em;width:100%;box-sizing:border-box}details{margin:.8em 0}
-form.inl{display:inline;margin-left:.4em}#google{border-top:1px solid #ccc;margin-top:1em}#google h2{font-size:1.15em}#gconnect input{flex:1;width:auto}
+${HARBOR_CSS}
 </style>
 <h1>Contacts</h1>
 <p>The bot can text only people switched <b>on</b> here (plus ALLOWLIST). New people start off. Read-only Google access; nothing here writes to Google.</p>

@@ -10,6 +10,17 @@ workers_dev = false   # served only on your two custom hostnames
 #   { pattern = "app.example.com", custom_domain = true },    # APPROVE_HOST
 # ]
 
+# Page look (src/harbor.ts): the Harbor CSS is bundled as text, the Source Serif 4 font as bytes.
+[[rules]]
+type = "Text"
+globs = ["**/*.css"]
+fallthrough = false
+
+[[rules]]
+type = "Data"
+globs = ["**/*.woff2"]
+fallthrough = false
+
 [[durable_objects.bindings]]
 name = "RELAY"
 class_name = "Relay"
