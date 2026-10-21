@@ -46,7 +46,14 @@ html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-bac
 .hl-photo-vines{background-image:var(--hl-scrim),url(/harbor/leaves/vines-1024.webp)}
 .hl-photo-scatter{background-image:var(--hl-scrim),url(/harbor/leaves/scatter-1024.webp)}
 @media (max-width:40em){.hl-photo-corners{background-image:var(--hl-scrim),url(/harbor/leaves/corners-640.webp)}.hl-photo-vines{background-image:var(--hl-scrim),url(/harbor/leaves/vines-640.webp)}.hl-photo-scatter{background-image:var(--hl-scrim),url(/harbor/leaves/scatter-640.webp)}}
+.hb-th.hb-th-photo-corners{background:url(/harbor/leaves/corners-96.webp) center/cover}.hb-th.hb-th-photo-vines{background:url(/harbor/leaves/vines-96.webp) center/cover}.hb-th.hb-th-photo-scatter{background:url(/harbor/leaves/scatter-96.webp) center/cover}
 /* @end photo */
+/* Background picker (no JS): fixed top right, a native radio group inside <details>. */
+.hb-pick{position:fixed;top:.6em;right:.6em;z-index:5;max-width:calc(100vw - 1.2em)}.hb-pick summary{list-style:none;padding:.35em .7em;border-radius:var(--h-button-radius);border:1px solid var(--h-border);background:var(--h-solid);font-size:.85em}
+.hb-pick summary::-webkit-details-marker{display:none}.hb-pick[open] summary{margin-left:auto;width:max-content}.hb-pick form{margin-top:.4em;padding:.6em;background:var(--h-solid);border:1px solid var(--h-border);border-radius:var(--h-input-radius);box-shadow:var(--h-glow)}
+.hb-pick fieldset{border:0;margin:0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:.4em}.hb-pick legend{font-weight:600;margin-bottom:.3em}
+.hb-opt{display:flex;align-items:center;gap:.4em;font-size:.8em;padding:.25em;border-radius:6px;cursor:pointer}.hb-opt:has(:checked){outline:2px solid var(--h-focus)}.hb-opt input{margin:0}
+.hb-th{display:block;flex:none;width:64px;height:36px;border-radius:4px;background:var(--h-backdrop);overflow:hidden}.hb-th svg{display:block}.hb-pick button{margin-top:.5em;width:100%}
 body{font:16px/1.5 var(--h-sans);color:var(--h-text);max-width:40em;margin:1.5em auto;padding:1em 1.4em 1.4em;box-sizing:border-box;position:relative}
 /* The glass is a layer behind body, not on body: backdrop-filter on body would make it the containing block for
    position:fixed children (the /contacts toast would sit at the end of the long card instead of the viewport). */
@@ -69,4 +76,4 @@ ul#list{list-style:none;padding:0;margin:0}#list li{display:flex;align-items:cen
 .star[aria-pressed=true]{color:var(--h-focus)}.sw{min-width:4.2em}.sw[aria-checked=true]{background:var(--h-success);color:var(--h-cta-ink);border-color:var(--h-success)}.ro{font-size:.85em}
 #toast{position:fixed;left:50%;bottom:1em;transform:translateX(-50%);background:var(--h-solid);color:var(--h-text);border:1px solid var(--h-border);box-shadow:var(--h-glow);padding:.5em 1em;border-radius:var(--h-button-radius);display:none}
 form.inl{display:inline;margin-left:.4em}#google{border-top:1px solid var(--h-border);margin-top:1em}#google h2{font-size:1.2em}#gconnect input{flex:1;width:auto}
-@media (max-width:30em){body{margin:.5em;padding:.8em 1em 1em}.hl-leaves{opacity:.3}}
+@media (max-width:30em){body{margin:3em .5em .5em;padding:.8em 1em 1em}.hl-leaves{opacity:.3}}

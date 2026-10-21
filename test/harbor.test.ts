@@ -20,7 +20,7 @@ describe("Harbor look", () => {
     // Backdrop on a fixed layer: never background-attachment:fixed (ignored on iOS Safari, repaints on scroll).
     expect(HARBOR_CSS).not.toContain("background-attachment");
     expect(HARBOR_CSS).toContain('html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-backdrop)');
-    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(6_000);
+    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(8_000); // 6 KB before the leaf + picker mockups
   });
 
   it("font: served by the Worker on the approve host only, as woff2", async () => {
@@ -73,7 +73,7 @@ describe("Harbor leaf mockups (?leaves=)", () => {
       const c = await get(`${BASE}/contacts?leaves=${o}`);
       const ch = await c.text();
       expect(ch).toContain("<svg class=hl-leaves");
-      expect(new TextEncoder().encode(ch).length).toBeLessThan(25_000);
+      expect(new TextEncoder().encode(ch).length).toBeLessThan(27_000); // mockup: leaves + picker; the default page keeps the 25 KB cap
     }
     expect(await (await get(`${BASE}/direct?leaves=__proto__`)).text()).not.toContain("<svg class=hl-leaves");
   });
@@ -103,5 +103,33 @@ describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
     }
     expect((await get(`${BASE}/harbor/leaves/nope-1024.webp`)).status).toBe(404);
     expect((await h.relay.fetch(`${API}/harbor/leaves/corners-1024.webp`)).status).toBe(404);
+  });
+});
+
+describe("Background picker (no JS, cookie)", () => {
+  const pick = async (leaves: string, back: string, origin = BASE) =>
+    h.relay.fetch(`${BASE}/harbor/background`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", Origin: origin, "Cf-Access-Jwt-Assertion": await h.jwt() }, body: new URLSearchParams({ leaves, back }).toString(), redirect: "manual" });
+  it("every page has the radio group; the post sets a cookie and the page then renders that background server-side", async () => {
+    for (const p of ["/direct", "/contacts"]) {
+      const html = await (await get(`${BASE}${p}`)).text();
+      expect(html).toContain('<details class=hb-pick><summary>Background</summary><form method=post action="/harbor/background"><fieldset><legend>Page background</legend>');
+      expect((html.match(/type=radio name=leaves/g) ?? []).length).toBe(7);
+    }
+    const r = await pick("vines", "/direct");
+    expect(r.status).toBe(303);
+    expect(r.headers.get("location")).toBe("/direct");
+    const cookie = r.headers.get("set-cookie") ?? "";
+    expect(cookie).toMatch(/^hb_bg=vines; Path=\/; Max-Age=31536000; Secure; HttpOnly; SameSite=Lax$/);
+    const d = await h.relay.fetch(`${BASE}/direct`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt(), cookie: "hb_bg=vines" } });
+    const html = await d.text();
+    expect(html).toContain("<svg class=hl-leaves");
+    expect(html).toContain('value="vines" checked');
+    expect(d.headers.get("content-security-policy")).toBe(STRICT_CSP);
+  });
+  it("refuses other origins, unknown options and off-site back paths", async () => {
+    expect((await pick("vines", "/direct", "https://evil.example")).status).toBe(403);
+    expect((await pick("lava", "/direct")).status).toBe(400);
+    expect((await pick("vines", "https://evil.example/")).status).toBe(400);
+    expect((await pick("vines", "//evil.example")).status).toBe(400);
   });
 });
