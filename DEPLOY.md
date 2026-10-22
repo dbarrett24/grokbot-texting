@@ -138,6 +138,8 @@ Leave the rest as shipped: `DIRECT_SEND = "1"`, `ALLOW_EMAIL_OTP = "1"`, `REQUIR
 
 **Check:** `npm run check` prints `check-wrangler: OK`, and `grep -nE '^[^#]*(REPLACE|example\.com)' .relay-local/wrangler.toml` prints nothing once your real hosts are in.
 
+Every switch, default, and secret is listed in [SETTINGS.md](SETTINGS.md).
+
 ## 6. Sign in to Cloudflare and store the secrets
 Each `secret put` asks for its value at a hidden prompt. Type or paste it there, nowhere else.
 
@@ -188,7 +190,7 @@ curl -si -X POST https://<API_HOST>/send -H "Authorization: Bearer wrong" \
 ## 9. Google Contacts (who the bot may text)
 Read-only access to your contacts' names and numbers. Emails, notes and addresses are never stored. Everything happens on `https://<APPROVE_HOST>/contacts`, in the **Google accounts** panel. No terminal and no `wrangler secret put` per account.
 
-You use **your own** Google Cloud project and your own Worker. There is no shared database. The standard web OAuth client (`….apps.googleusercontent.com`) is created in the console; `gcloud` cannot create it (README, "Google Cloud client", cites Google's workforce OAuth page). The Contacts page does not ask for the client id or secret.
+You use **your own** Google Cloud project and your own Worker. There is no shared database. The standard web OAuth client (`….apps.googleusercontent.com`) is created in the console; `gcloud` cannot create it ([SETTINGS.md](SETTINGS.md#google-cloud-client), "Google Cloud client", cites Google's workforce OAuth page). The Contacts page does not ask for the client id or secret.
 
 1. **HUMAN STEP:** Create a project named `contacts-relay`: https://console.cloud.google.com/projectcreate
 2. Enable the People API: https://console.cloud.google.com/flows/enableapi?apiid=people.googleapis.com (if that page errors, https://console.cloud.google.com/apis/library/people.googleapis.com and press Enable).
@@ -306,12 +308,12 @@ unset RT CID
 **Check:** the bot's section 10 test passes: it reads the test back, waits for your yes, sends it, and the text arrives.
 
 ## 12. Optional switches
-Each one is a `[vars]` line in `.relay-local/wrangler.toml`, followed by `npx wrangler deploy -c .relay-local/wrangler.toml`.
+Each one is a `[vars]` line in `.relay-local/wrangler.toml`, followed by `npx wrangler deploy -c .relay-local/wrangler.toml`. The complete tables (required settings, defaults, secrets, iPhone delivery, and tap limits) are in [SETTINGS.md](SETTINGS.md).
 
 | Want | Set | Effect |
 |---|---|---|
 | **Tap-to-approve** | `DIRECT_SEND = "0"` | The bot can no longer send directly. It files a request (`POST /request`) by contact name or by number, you get a text, and you approve on your phone after the PIN and passkey. By name, anyone on your list can be chosen (needs `LOG_HASH_KEY`); by number, only `ALLOWLIST` numbers. Limits below. |
-| **Group MMS** | `GROUP_MMS = "1"` | Lets the bot send one group text (a shared thread) to 2–3 people instead of separate copies. Needs `OWNER_NUMBER` set (section 6) and app v1.74.0+, with mobile data on. Live-test first: one group to two numbers you control, then check each phone shows one thread and a reply reaches everyone (README "Group MMS"). Android (SMS Gateway) only: with `DELIVERY = "mac"` or `"shortcut"` (SETUP-iphone.md) every group send is refused with 409 `group_mms_unsupported_delivery`, and nothing is sent. |
+| **Group MMS** | `GROUP_MMS = "1"` | Lets the bot send one group text (a shared thread) to 2–3 people instead of separate copies. Needs `OWNER_NUMBER` set (section 6) and app v1.74.0+, with mobile data on. Live-test first: one group to two numbers you control, then check each phone shows one thread and a reply reaches everyone ([SETTINGS.md](SETTINGS.md#group-mms-group-true-behind-group_mms-default-off)). Android (SMS Gateway) only: with `DELIVERY = "mac"` or `"shortcut"` (SETUP-iphone.md) every group send is refused with 409 `group_mms_unsupported_delivery`, and nothing is sent. |
 | **Daily cap** | `DIRECT_DAILY_CAP = "25"` (any whole number) | Sends past the cap that day (in `TIMEZONE`) are refused with `direct_daily_cap_reached`. |
 | **Link block** | `BLOCK_LINKS = "1"` | Texts containing a link (URL, domain, IP address, including disguised ones) are refused with `links_not_allowed`, on both flows. |
 | Per-minute cap | `DIRECT_PER_MINUTE_MAX = "5"` | Limits bursts. |
