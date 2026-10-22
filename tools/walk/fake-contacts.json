@@ -1,0 +1,8 @@
+{
+  "generated_at": "2026-10-01T12:00:00Z",
+  "contacts": [
+    { "name": "Walk Riley", "given": "Riley", "numbers": [{ "e164": "+447700900101", "label": "mobile" }] },
+    { "name": "Walk Sam", "given": "Sam", "numbers": [{ "e164": "+447700900102", "label": "mobile" }, { "e164": "+447700900103", "label": "work" }] },
+    { "name": "Walk Example", "numbers": [{ "e164": "+15555550104", "label": "home" }] }
+  ]
+}
