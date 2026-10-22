@@ -6,3 +6,4 @@ node_modules
 .relay-local/
 walk.local.toml
 .walk-state-*/
+.relay-live/

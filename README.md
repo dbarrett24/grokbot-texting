@@ -7,7 +7,7 @@ bot --(token)--> your Cloudflare Worker --(encrypted)--> SMS Gateway cloud --> y
 you --(email PIN + passkey)--> your private status page (contacts sync, log, approvals)
 ```
 
-Setup takes about 90 minutes and is written step by step in **[DEPLOY.md](DEPLOY.md)**.
+Setup takes about 90 minutes. Follow the numbered steps in **[docs/SETUP.md](docs/SETUP.md)** (stable anchors `step-1` through `step-8`). [DEPLOY.md](DEPLOY.md) is the same install in section form; the Worker's on-page fix text cites those section numbers.
 
 **iPhone?** Set `DELIVERY = "mac"` and an always-on Mac with Messages sends the texts from your number, or `DELIVERY = "shortcut"` for a best-effort iPhone-only path. See **[SETUP-iphone.md](SETUP-iphone.md)**, which also lists what those paths can't do.
 

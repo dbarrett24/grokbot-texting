@@ -130,6 +130,20 @@ describe("raw number", () => {
     expect(await sentTo()).toEqual([TWO]);
   });
 
+  it("an ALLOWLIST entry matches its saved label, and a fuller name is no_match", async () => {
+    // TWO is on the allow list only (not a contact). The saved JSON string is the name; given_norm stays empty.
+    await h.setEnv({ ALLOWLIST: JSON.stringify({ [TWO]: "Example Owner", [FRIEND]: "Test Friend" }) });
+    const fuller = await direct({ to_name: "Example Owner Person", resolve: true });
+    expect(fuller.status).toBe(200);
+    expect(await fuller.json()).toEqual({ state: "no_match", candidates: [] });
+    const exact = await direct({ to_name: "Example Owner", resolve: true });
+    expect(exact.status).toBe(200);
+    const body = (await exact.json()) as { state: string; candidates: { label: string }[] };
+    expect(body.state).toBe("one");
+    expect(body.candidates.map((c) => c.label)).toEqual(["Example Owner (unlabeled)"]);
+    expect(h.calls).toHaveLength(0);
+  });
+
   it("on neither list → refused, nothing sent or queued, refusal logged with the hash", async () => {
     const r = await direct({ to: STRANGER, body: "hello" });
     expect(r.status).toBe(403);

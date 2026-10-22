@@ -379,6 +379,10 @@ const M = [
   ["gc3_key_status", "src/relay.ts", "keyStatus: { total: ks.total, onOld: ks.onOld },", "keyStatus: { total: ks.total, onOld: 0 },"],
   ["gc3_connected_date", "src/relay.ts", "connected: ms === undefined ? null : this.fmtTime(ms)", "connected: null"],
   ["gc3_disconnect_confirm", "src/contacts.ts", 'class=inl data-confirm="Stop syncing', 'class=inl data-x="Stop syncing'],
+  // Local wrangler config: harbor CSS/font/photos fail the build (20 errors) when either [[rules]] block is missing.
+  ["wrangler_text_rule", "scripts/check-wrangler-assets.mjs", "if (textGap !== null) problems.push(textGap);", ""],
+  ["wrangler_data_rule", "scripts/check-wrangler-assets.mjs", "if (dataGap !== null) problems.push(dataGap);", ""],
+  ["wrangler_main_resolves", "scripts/check-wrangler-assets.mjs", "if (mainErr !== null) problems.push(mainErr);", ""],
 ];
 
 // Pattern pre-check (also `npm test`): every mutant's pattern must occur exactly once in its file, because

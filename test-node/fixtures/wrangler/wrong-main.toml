@@ -1,0 +1,14 @@
+# Fixture: rules are right, main points at another source file.
+name = "sms-relay"
+main = "../../../src/relay.ts"
+compatibility_date = "2026-10-01"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.css"]
+fallthrough = false
+
+[[rules]]
+type = "Data"
+globs = ["**/*.woff2", "**/*.webp"]
+fallthrough = false
