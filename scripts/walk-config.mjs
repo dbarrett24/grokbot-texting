@@ -36,6 +36,8 @@ export const WALK_VARS = {
   GATEWAY_PASS: "WALK-ONLY-pass",
   GATEWAY_DEVICE_ID: "walk-device",
   GATEWAY_PASSPHRASE: "WALK-ONLY-passphrase-0123456789abcdef",
+  // Fake 32-byte key so Connect Google can seal the fake sign-in locally (tools/walk/fake-google.ts). Not a secret.
+  GOOGLE_TOKEN_KEY: "ab".repeat(32),
 };
 
 /** Split TOML text into [[array-table]] blocks: [{ name, text }]. Top-level keys and [tables] are ignored. */
