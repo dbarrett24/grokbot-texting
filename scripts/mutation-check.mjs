@@ -28,11 +28,11 @@ const M = [
   ["candidate_single_use", "src/relay.ts", 'this.sql.exec("UPDATE candidates SET used=1 WHERE grp=?", grp);', ""],
   ["candidate_siblings", "src/relay.ts", '"UPDATE candidates SET used=1 WHERE grp=?", grp', '"UPDATE candidates SET used=1 WHERE id=?", candidate'],
   ["candidate_cap", "src/relay.ts", 'if (live + hits.length > MAX_LIVE_CANDIDATES) throw new Refuse("too_many_candidates", 429);', ""],
-  ["candidate_expiry", "src/relay.ts", "if (now >= c.expires_ms) throw", "if (false) throw"],
+  ["candidate_expiry", "src/relay.ts", 'if (now >= c.expires_ms) throw new Refuse("candidate_expired", 410);', 'if (false) throw new Refuse("candidate_expired", 410);'],
   ["runaway_threshold", "src/relay.ts", "if (recent + n > cfg.runawayMax) {", "if (recent + n > cfg.runawayMax + 1) {"],
   ["runaway_persisted", "src/relay.ts", 'if (this.meta("direct_paused") === "1") return', 'if (false) return'],
   ["resume_csrf", "src/relay.ts", 'if (!want || form.get("csrf") !== want) throw new Refuse("bad_csrf", 403);', 'if (!want) throw new Refuse("bad_csrf", 403);'],
-  ["resume_origin", "src/relay.ts", "this.sameOrigin(req, false);", ""],
+  ["resume_origin", "src/relay.ts", 'this.sameOrigin(req, false);\n    const form = await formOf(req);\n    if (route === "sync"', 'const form = await formOf(req);\n    if (route === "sync"'],
   ["daily_cap", "src/relay.ts", "+ n > cfg.daily)", "+ n > cfg.daily + 1)"],
   ["per_minute", "src/relay.ts", "+ n > cfg.perMinute)", "+ n > cfg.perMinute + 1)"],
   ["hours_window", "src/relay.ts", "if (cfg.hours && !insideHours(", "if (false && !insideHours("],
@@ -40,7 +40,7 @@ const M = [
   ["direct_log_no_number", "src/relay.ts", "detail: `${whoOf(i)} gateway_id=${d.gid}`", "detail: `${whoOf(i)} to=${t.e164} gateway_id=${d.gid}`"],
   ["response_no_number", "src/direct.ts", '|| /\\d{4,}/.test(name) || hasLink(name)', '|| false || hasLink(name)'],
   ["approve_page_masked", "src/relay.ts", "(${esc(maskNumber(r.recipient))})", "(${esc(r.recipient)})"],
-  ["upload_requires_json", "src/relay.ts", 'throw new Refuse("contacts_must_be_json", 415);', "{}"],
+  ["upload_requires_json", "src/relay.ts", '.split(";")[0].trim().toLowerCase() !== "application/json") throw new Refuse("contacts_must_be_json", 415);', '.split(";")[0].trim().toLowerCase() !== "application/json") {}'],
   ["upload_empty_keeps_old", "src/relay.ts", 'if (!snap.rows.length) throw new Refuse("contacts_snapshot_invalid_empty", 400);', ""],
   ["upload_unknown_fields", "src/direct.ts", 'if (Object.keys(o).some((k) => k !== "name" && k !== "given" && k !== "numbers")) bad("unknown_field");', ""],
   // contacts sync
@@ -55,7 +55,7 @@ const M = [
   ["hmac_body_plain_sha", "src/relay.ts", "return hmacHex(key, `body:${text}`);", "return sha256Hex(text);"],
   ["tap_log_hmac", "src/relay.ts", "return key ? `hmac:${await this.bodyHash(key, text)}` : sha256Hex(text);", "return sha256Hex(text);"],
   ["rehash_on_rotation", "src/relay.ts", 'if (this.meta("hash_key_fp") === fp) return;', 'if (this.meta("hash_key_fp") !== null) return;'],
-  ["sync_route_checks", "src/relay.ts", 'const who = await this.directForm(req, "sync");', 'const who = await this.requireOwner(req, "sync");'],
+  ["sync_route_checks", "src/relay.ts", 'const { who, fromContacts } = await this.directForm(req, "sync");', 'const who = await this.requireOwner(req, "sync"); const fromContacts = false;'],
   ["sync_now_no_alert", "src/relay.ts", "await this.syncContacts({ alert: false });", "await this.syncContacts();"],
   ["alarm_disabled_purge_only", "src/relay.ts", 'if (this.env.DISABLED === "1") return; // Kill switch: retention only.', 'if (false) return; // Kill switch: retention only.'],
   ["resolve_never_sends", "src/relay.ts", "if (hits.length > 1 || resolve) {", "if (hits.length > 1) {"],
@@ -69,7 +69,7 @@ const M = [
   ["snapshot_label_no_fax", "src/direct.ts", ' || FAX_OR_PAGER.test(p.label.replace(/ /g, ""))) bad("label");', ') bad("label");'],
   ["removed_label_purged", "src/relay.ts", 'this.sql.exec("DELETE FROM contact_sources WHERE account=?", a);', ""],
   ["lookup_rate_limit", "src/relay.ts", "if (n + units > max) {", "if (false) {"],
-  ["lookup_rate_no_log", "src/relay.ts", "r.silent = true;", ""],
+  ["lookup_rate_no_log", "src/relay.ts", 'const r = new Refuse("lookup_rate", 429);\n        r.silent = true;', 'const r = new Refuse("lookup_rate", 429);'],
   ["lookup_rate_buckets", "src/relay.ts", 'const kind = st.authed ? "auth" : "unauth";', 'const kind = "auth";'],
   ["gateway_bad_json", "src/relay.ts", 'return jsonOr(r, "gateway_bad_json");', "return r.json();"],
   ["error_codes_only", "src/relay.ts", 'return /^[a-z][a-z0-9_]{0,79}$/.test(m) ? m : "unexpected_error";', 'return m || "error";'],
@@ -275,8 +275,8 @@ const M = [
   ["vet_n5_keys_flags_unshown", "scripts/setup-lib.mjs", 'if (made.includes("GATEWAY_PASSPHRASE")) { s.passphraseNotShown = true; saveSettings(s); }', ""],
   ["vet_n5_show_clears", "scripts/setup-lib.mjs", 'if (!r.error && name === "GATEWAY_PASSPHRASE") clearShowReminder();', ""],
   ["vet_n5_ask_clears", "scripts/setup-lib.mjs", 'if (name === "GATEWAY_PASSPHRASE") clearShowReminder();', ""],
-  ["vet_n5_status_reminds", "scripts/setup-lib.mjs", 'claimed: s.worker && isClaimed(s) ? "yes" : "no", ...showReminder(s, m) });', 'claimed: s.worker && isClaimed(s) ? "yes" : "no" });'],
-  ["vet_n5_secrets_reminds", "scripts/setup-lib.mjs", 'would_remove: wouldRemove, ...showReminder(s, m) });', "would_remove: wouldRemove });"],
+  ["vet_n5_status_reminds", "scripts/setup-lib.mjs", 'claimed: s.worker && isClaimed(s) ? "yes" : "no", ...showReminder(s, m), ...staleHint(s, m) });', 'claimed: s.worker && isClaimed(s) ? "yes" : "no", ...staleHint(s, m) });'],
+  ["vet_n5_secrets_reminds", "scripts/setup-lib.mjs", 'would_remove: wouldRemove, ...showReminder(s, m), ...staleHint(s, m) });', "would_remove: wouldRemove, ...staleHint(s, m) });"],
   ["devkey_diag_no_pin", "scripts/setup-lib.mjs", 'if (gatewayMode(s, m) !== "device_key" || !pin || !ver) return "device_key_present_but_no_pin";', ""],
   ["devkey_fix_hint_printed", "scripts/setup-lib.mjs", "{ reason: code, fix: GATEWAY_FIX[code] }", "{ reason: code }"],
   ["devkey_dialog_short_groups", "scripts/setup-lib.mjs", '${g.slice(0, 2).join("  ")}   ...   ${g.slice(-2).join("  ")}', "${fp}"],
@@ -351,7 +351,7 @@ const M = [
   ["gc2_pkce_s256", "src/google.ts", 'const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));', "const challenge = verifier;"],
   ["gc2_pkce_verifier_sent", "src/relay.ts", "code_verifier: st.verifier", 'code_verifier: ""'],
   ["gc2_form_csrf", "src/relay.ts", 'this.checkPageCsrf(form.get("csrf"), who);\n    return { who, form };', "return { who, form };"],
-  ["gc2_form_origin", "src/relay.ts", 'this.sameOrigin(req, false);\n    const form = await req.formData();\n    this.checkPageCsrf', "const form = await req.formData();\n    this.checkPageCsrf"],
+  ["gc2_form_origin", "src/relay.ts", 'this.sameOrigin(req, false);\n    const form = await formOf(req);\n    this.checkPageCsrf', "const form = await formOf(req);\n    this.checkPageCsrf"],
   ["gc2_host_404", "src/relay.ts", 'if (host !== apprHost) return json(404, { error: "not_found" });', ""],
   ["gc2_start_needs_key", "src/relay.ts", "await this.requireTokenKey(); // nowhere to keep", "// nowhere to keep"],
   ["gc2_no_refresh_token", "src/relay.ts", 'if (!refreshToken) throw new Refuse("google_no_refresh_token");', ""],
@@ -368,7 +368,7 @@ const M = [
   ["gc3_csp_form_action", "src/relay.ts", "form-action 'self' https://accounts.google.com; base-uri 'none'", "form-action 'self'; base-uri 'none'"],
   ["gc3_error_code_only", "src/relay.ts", "googleError: gErr && /^[a-z0-9_]{1,80}$/.test(gErr) ? gErr : null,", "googleError: gErr,"],
   ["gc3_toast_label_only", "src/relay.ts", "const label = (v: string | null) => (v && /^[A-Z0-9_]{1,32}$/.test(v) ? v : null);", "const label = (v: string | null) => v;"],
-  ["gc3_links_noreferrer", "src/contacts.ts", 'target=_blank rel="noopener noreferrer"${GCP_PROJECT_LINKS', 'target=_blank${GCP_PROJECT_LINKS'],
+  ["gc3_links_noreferrer", "src/contacts.ts", 'target=_blank rel="noopener noreferrer"${proj ?', 'target=_blank${proj ?'],
   ["gc3_connect_needs_client", "src/contacts.ts", 'const canConnect = g.tokenKey === "ok" && g.client !== null && g.client !== "unreadable";', "const canConnect = true;"],
   ["gc3_links_use_project", "src/contacts.ts", "const href = proj && g.project ? withProject(L[k], g.project) : L[k];", "const href = L[k];"],
   ["gc3_withproject_sets", "src/contacts.ts", 'u.searchParams.set("project", id);', ""],
@@ -381,6 +381,14 @@ const M = [
   ["gc3_disconnect_confirm", "src/contacts.ts", 'class=inl data-confirm="Stop syncing', 'class=inl data-x="Stop syncing'],
 ];
 
+// Pattern pre-check (also `npm test`): every mutant's pattern must occur exactly once in its file, because
+// String.replace mutates only the first hit. Drift fails here in milliseconds instead of hours into a run.
+const drift = M.flatMap(([name, file, from]) => {
+  const n = readFileSync(file, "utf8").split(from).length - 1;
+  return n === 1 ? [] : [`MUTANT ${name}: pattern found ${n} times in ${file} (need exactly 1)`];
+});
+if (drift.length) { console.log(drift.join("\n")); process.exit(3); }
+if (process.argv[2] === "--patterns") { console.log(`mutation patterns: OK (${M.length} mutants, each pattern found once)`); process.exit(0); }
 const only = process.argv[2];
 const originals = new Map();
 const restore = () => { for (const [f, s] of originals) writeFileSync(f, s); };

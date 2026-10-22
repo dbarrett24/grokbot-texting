@@ -1209,7 +1209,7 @@ export class Relay extends DurableObject<Env> {
   private async googleForm(req: Request): Promise<{ who: Owner; form: FormData }> {
     const who = await this.requireOwner(req, "google");
     this.sameOrigin(req, false);
-    const form = await req.formData();
+    const form = await formOf(req);
     this.checkPageCsrf(form.get("csrf"), who);
     return { who, form };
   }
@@ -1442,7 +1442,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
   private async directForm(req: Request, route: "resume" | "sync"): Promise<{ who: Owner; fromContacts: boolean }> {
     const who = await this.requireOwner(req, route);
     this.sameOrigin(req, false);
-    const form = await req.formData();
+    const form = await formOf(req);
     if (route === "sync" && form.get("from") === "contacts") {
       this.checkPageCsrf(form.get("csrf"), who); // the Contacts page's token (Access-bound, 15 min)
       return { who, fromContacts: true };
@@ -1741,7 +1741,7 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     const who = await this.requireOwner(req, "decide");
     const origin = req.headers.get("Origin");
     if (origin !== new URL(req.url).origin) throw new Refuse("bad_origin", 403);
-    const form = await req.formData();
+    const form = await formOf(req);
     const r = this.get(id);
     if (!r) return json(404, { error: "not_found" });
     if (form.get("csrf") !== r.csrf) throw new Refuse("bad_csrf", 403);
@@ -2270,5 +2270,16 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
   private security(code: string): never {
     this.log("security_event", { detail: code });
     throw new Error(code);
+  }
+}
+
+/** A page form POST body. Anything else (JSON, empty, a broken multipart) is a 415, never a 500. */
+export async function formOf(req: Request): Promise<FormData> {
+  const ct = (req.headers.get("content-type") || "").split(";")[0]?.trim().toLowerCase();
+  if (ct !== "application/x-www-form-urlencoded" && ct !== "multipart/form-data") throw new Refuse("form_required", 415);
+  try {
+    return await req.formData();
+  } catch {
+    throw new Refuse("form_required", 415);
   }
 }

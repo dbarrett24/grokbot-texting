@@ -15,8 +15,8 @@ Setup takes about 90 minutes and is written step by step in **[DEPLOY.md](DEPLOY
 - **Direct send.** You say "text Sam: ...", the bot reads it back, you say yes, and it calls `POST /send`. There is no tap step (`DIRECT_SEND = "1"`).
 - **Only people on your list.** The bot can text people in your Google Contacts (synced read-only, daily), numbers you upload, and numbers you list in the `ALLOWLIST` secret. Anything else is refused. One text can go to up to 3 people as **separate 1:1 copies** (`to_names` / `candidate_ids`). A real group thread (one group MMS) is off unless you turn on `GROUP_MMS`.
 - **No daily cap, and links are allowed.** Both are switches you can turn on (`DIRECT_DAILY_CAP`, `BLOCK_LINKS`).
-- **A private Contacts page** at `https://<APPROVE_HOST>/contacts` behind Cloudflare Access: switch each person on or off for the bot (everyone starts off), star favorites, Sync now, a resolve preview, and sync health. Only the last 4 digits are ever shown. See DEPLOY.md "Contacts page".
-- **A private status page** at `https://<APPROVE_HOST>/direct`: status, per-account contact counts (no numbers), a **Sync contacts now** button, and the log.
+- **A private Contacts page** at `https://<APPROVE_HOST>/contacts` behind Cloudflare Access: switch each person on or off for the bot (everyone starts off), star favorites, a resolve preview, and sync health. Its **Sync now** button appears once a Google account is connected; until then the page shows Connect Google instead. Only the last 4 digits are ever shown. See DEPLOY.md "Contacts page".
+- **A private status page** at `https://<APPROVE_HOST>/direct`: status, per-account contact counts (no numbers), a **Sync contacts now** button (shown when Google accounts are configured), and the log.
 - **Tap-to-approve** is still built in. Set `DIRECT_SEND = "0"` and the bot can only file requests (`POST /request`, by number or by contact name) that you approve on your phone.
 - **Nothing readable in the log.** Numbers are HMACs or masked to the last 4 digits, and the message text is never logged.
 

@@ -105,6 +105,20 @@ describe("POST /contacts/google/client (paste form)", () => {
     expect(loc(await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET }))).toBe("/contacts?google_error=google_token_key_missing");
     expect(await sql("SELECT * FROM google_client")).toEqual([]);
   });
+
+  it.each([
+    ["the client set as GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET secrets", false, { GOOGLE_TOKEN_KEY: "", GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: CLIENT_SECRET }],
+    ["a pasted client still readable via GOOGLE_TOKEN_KEY_OLD", true, { GOOGLE_TOKEN_KEY: "", GOOGLE_TOKEN_KEY_OLD: KEY }],
+  ])("Connect Google with %s but no GOOGLE_TOKEN_KEY: refused before Google (nowhere to keep the token), no sign-in started", async (_what, paste, env) => {
+    let csrf = csrfOf((await page()).html);
+    if (paste) await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET });
+    await h.setEnv(env);
+    csrf = csrfOf((await page()).html);
+    const start = await post("/contacts/google/start", { csrf, label: "work" });
+    expect(start.status).toBe(303);
+    expect(loc(start)).toBe("/contacts?google_error=google_token_key_missing");
+    expect(await sql("SELECT * FROM google_oauth_state")).toEqual([]);
+  });
 });
 
 describe("accounts panel + Connect Google end to end", () => {
@@ -214,5 +228,26 @@ describe("GOOGLE_TOKEN_KEY error messages", () => {
     expect(html).toContain("GOOGLE_TOKEN_KEY is malformed");
     expect(html).toContain("DEPLOY.md section 14");
     expect(html).not.toContain("Google sign-in failed. Try again.");
+  });
+});
+
+describe("Google form routes refuse a body that is not a form", () => {
+  const raw = async (path: string, init: { ct?: string; body?: string }) =>
+    h.relay.fetch(`${BASE}${path}`, {
+      method: "POST", redirect: "manual",
+      headers: { "Cf-Access-Jwt-Assertion": await h.jwt(), Origin: BASE, ...(init.ct ? { "content-type": init.ct } : {}) },
+      body: init.body ?? "",
+    });
+  it("POST /contacts/google/start with no content-type, JSON, or a broken multipart is 415 form_required, not 500", async () => {
+    for (const init of [{}, { ct: "application/json", body: '{"label":"work"}' }, { ct: "multipart/form-data; boundary=x", body: "not multipart" }]) {
+      const r = await raw("/contacts/google/start", init);
+      expect(r.status).toBe(415);
+      expect(await r.json()).toEqual({ error: "form_required" });
+    }
+    expect(await sql("SELECT * FROM google_oauth_state")).toEqual([]);
+  });
+  it("a real form still works", async () => {
+    const r = await post("/contacts/google/start", { csrf: csrfOf((await page()).html), label: "work" });
+    expect(r.status).toBe(303);
   });
 });

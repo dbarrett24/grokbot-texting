@@ -4,6 +4,7 @@
 import type { Env } from "../../src/env";
 export { Relay } from "../../src/relay";
 import { walkAllowed } from "./guard";
+import { walkForward } from "./forward";
 
 const WALK_HOST = "approve.walk.invalid";
 const KID = "walk-local";
@@ -49,14 +50,7 @@ export default {
   async fetch(req: Request, env: Env & { WALK_LOCAL?: string }): Promise<Response> {
     if (!walkAllowed(env)) return new Response("walk entry: local harness only", { status: 503 });
     patchCerts(env);
-    const url = new URL(req.url);
-    url.hostname = WALK_HOST; // 127.0.0.1 / localhost / [::1] all map to the approve host
-    url.port = "";
-    url.protocol = "https:";
-    const headers = new Headers(req.headers);
-    headers.set("Cf-Access-Jwt-Assertion", await walkJwt(env));
-    headers.delete("Authorization");
-    const fwd = new Request(url, { method: req.method, headers, body: req.body, redirect: "manual" });
+    const fwd = walkForward(req, await walkJwt(env), WALK_HOST); // 127.0.0.1 / localhost / [::1] all map to the approve host
     const stub = env.RELAY.get(env.RELAY.idFromName("relay"));
     return stub.fetch(fwd);
   },

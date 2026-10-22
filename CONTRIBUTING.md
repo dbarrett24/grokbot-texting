@@ -27,4 +27,8 @@ npm run walk        # prints "walk: ready in N ms -> http://127.0.0.1:8787/conta
 - It listens on `127.0.0.1`, uses a fresh `.walk-state-<time>` persist dir, stops on any build error, and only prints
   the URL after `/contacts` (200, HTML) and two harbor assets have answered, so the first page view is already warm.
 - `tools/walk/entry.ts` signs its own Access token for a fake `.invalid` team domain. It refuses to run unless
-  `WALK_LOCAL = "1"`; never deploy it.
+  `WALK_LOCAL = "1"`; never deploy it. It maps the page's local Origin (`http://127.0.0.1:<port>`) to the approve
+  host, so on/off, stars and the resolve preview work; any other Origin is still refused.
+- Once the page is usable it loads the fake contacts in `tools/walk/fake-contacts.json` (UK Ofcom drama numbers
+  `+44 7700 900xxx`, which the page lets you switch on, plus one 555-01xx example it refuses). Every run loads
+  the same list. Google sync is not part of the walk.

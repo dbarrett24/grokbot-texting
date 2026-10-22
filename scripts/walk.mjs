@@ -4,8 +4,10 @@
 // 2. starts `wrangler dev --local` on 127.0.0.1 (not "localhost", which may resolve to ::1 first) with a fresh persist dir;
 // 3. fails fast if the build reports errors (wrangler can print "Ready" and then fail the build);
 // 4. waits until GET /contacts is 200 AND a harbor asset is served, which also warms the first request;
-// 5. only then prints the URL. Ctrl-C stops wrangler.
+// 5. loads the fake contacts in tools/walk/fake-contacts.json (same list every run);
+// 6. only then prints the URL. Ctrl-C stops wrangler.
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isMain } from "./is-main.mjs";
@@ -22,6 +24,22 @@ export function buildErrors(text) {
   const m = plain.match(/Build failed with (\d+) error/);
   if (m) return Number(m[1]);
   return (plain.match(/\[ERROR\]/g) || []).length;
+}
+
+/** Fake contacts the walk loads (UK Ofcom drama range +44 7700 900xxx and one 555-01xx example). */
+export const FAKE_CONTACTS = join(ROOT, "tools", "walk", "fake-contacts.json");
+
+/**
+ * Load the fake contacts into the local walk. POST /contacts replaces the whole uploaded list, so running it
+ * again gives the same list; on/off and stars are kept. Returns the Worker's counts. fetchFn is injectable for tests.
+ * @param {string} base @param {{ fetchFn?: (url: string, init?: RequestInit) => Promise<Response>, file?: string }} [opts]
+ */
+export async function seedContacts(base, { fetchFn = fetch, file = FAKE_CONTACTS } = {}) {
+  const body = readFileSync(file, "utf8");
+  const r = await fetchFn(base + "/contacts", { method: "POST", headers: { "content-type": "application/json" }, body });
+  const text = await r.text();
+  if (r.status !== 200) throw new Error(`seeding fake contacts answered ${r.status}: ${text}`);
+  return /** @type {{ contacts: number, numbers: number }} */ (JSON.parse(text));
 }
 
 /** Is a warm-up response good enough to call the page usable? */
@@ -78,6 +96,8 @@ async function main() {
   child.on("exit", (/** @type {number | null} */ code) => process.exit(code ?? 1));
   try {
     await waitUsable(base, { failed: () => errs, timeoutMs: Number(process.env.WALK_TIMEOUT_MS || 90000) });
+    const seeded = await seedContacts(base);
+    console.log(`walk: seeded fake contacts (${seeded.contacts} people, ${seeded.numbers} numbers)`);
   } catch (e) {
     console.error(`\nwalk: NOT usable: ${e instanceof Error ? e.message : String(e)}`);
     stop();
