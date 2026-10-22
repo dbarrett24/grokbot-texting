@@ -1,0 +1,4 @@
+# Fixture: main is right, both [[rules]] blocks are absent.
+name = "sms-relay"
+main = "../../../src/index.ts"
+compatibility_date = "2026-10-01"
