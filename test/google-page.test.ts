@@ -105,6 +105,20 @@ describe("POST /contacts/google/client (paste form)", () => {
     expect(loc(await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET }))).toBe("/contacts?google_error=google_token_key_missing");
     expect(await sql("SELECT * FROM google_client")).toEqual([]);
   });
+
+  it.each([
+    ["the client set as GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET secrets", false, { GOOGLE_TOKEN_KEY: "", GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: CLIENT_SECRET }],
+    ["a pasted client still readable via GOOGLE_TOKEN_KEY_OLD", true, { GOOGLE_TOKEN_KEY: "", GOOGLE_TOKEN_KEY_OLD: KEY }],
+  ])("Connect Google with %s but no GOOGLE_TOKEN_KEY: refused before Google (nowhere to keep the token), no sign-in started", async (_what, paste, env) => {
+    let csrf = csrfOf((await page()).html);
+    if (paste) await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET });
+    await h.setEnv(env);
+    csrf = csrfOf((await page()).html);
+    const start = await post("/contacts/google/start", { csrf, label: "work" });
+    expect(start.status).toBe(303);
+    expect(loc(start)).toBe("/contacts?google_error=google_token_key_missing");
+    expect(await sql("SELECT * FROM google_oauth_state")).toEqual([]);
+  });
 });
 
 describe("accounts panel + Connect Google end to end", () => {

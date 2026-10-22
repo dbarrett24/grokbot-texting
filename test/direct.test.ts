@@ -570,6 +570,14 @@ describe("DIRECT_ALLOWLIST (deprecated): imported once as flagged legacy", () =>
     expect(await prefOf(OTHER)).toEqual({ enabled: 1, migrated: 1 });
   });
 
+  it.each([undefined, "1", "yes"])("upgrade with CONTACTS_SNAPSHOT_ONLY=%j (entries were not textable): imported flagged but OFF, never auto-enabled", async (v) => {
+    await asUpgrade();
+    await h.setEnv({ CONTACTS_SNAPSHOT_ONLY: v as unknown as string, DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person" }) });
+    await expectRefused(await direct({ to: OTHER, body: "x" }), 403, "recipient_not_on_allowlist");
+    expect(await prefOf(OTHER)).toEqual({ enabled: 0, migrated: 1 });
+    expect(await sentTo()).toEqual([]);
+  });
+
   it("runs once: a later edit to the secret adds no one", async () => {
     await asUpgrade();
     await h.setEnv({ CONTACTS_SNAPSHOT_ONLY: "0", DIRECT_ALLOWLIST: JSON.stringify({ [OTHER]: "Other Person" }) });
