@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 // @ts-ignore plain .mjs scripts
 import { arrayTables, buildWalkConfig, WALK_VARS } from "../scripts/walk-config.mjs";
 // @ts-ignore plain .mjs scripts
-import { buildErrors, warmOk, waitUsable, WARM_PATHS } from "../scripts/walk.mjs";
+import { buildErrors, warmOk, waitUsable, WARM_PATHS, seedContacts, FAKE_CONTACTS } from "../scripts/walk.mjs";
 
 import { walkAllowed } from "../tools/walk/guard";
 
@@ -70,5 +70,35 @@ describe("walk entry guard", () => {
     expect(walkAllowed({ ACCESS_TEAM_DOMAIN: "https://walk-team.invalid" })).toBe(false);
     expect(walkAllowed({ WALK_LOCAL: "1", ACCESS_TEAM_DOMAIN: "https://team.cloudflareaccess.com" })).toBe(false);
     expect(walkAllowed({ WALK_LOCAL: "1", ACCESS_TEAM_DOMAIN: "https://x.invalid.example.com" })).toBe(false);
+  });
+});
+
+describe("walk seeds fake contacts", () => {
+  it("posts tools/walk/fake-contacts.json to /contacts as JSON and returns the counts", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const bodyOf = (i: RequestInit | undefined) => (typeof i?.body === "string" ? i.body : "");
+    const fetchFn = async (url: string, init?: RequestInit) => { calls.push({ url, init }); return new Response('{"contacts":3,"numbers":4}', { status: 200 }); };
+    expect(await seedContacts("http://127.0.0.1:8787", { fetchFn })).toEqual({ contacts: 3, numbers: 4 });
+    expect(calls[0]?.url).toBe("http://127.0.0.1:8787/contacts");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(new Headers(calls[0]?.init?.headers).get("content-type")).toBe("application/json");
+    expect(JSON.parse(bodyOf(calls[0]?.init))).toEqual(JSON.parse(readFileSync(FAKE_CONTACTS, "utf8")));
+  });
+  it("is the same body every run (idempotent: the upload replaces the whole list)", async () => {
+    const bodies: string[] = [];
+    const fetchFn = async (_u: string, init?: RequestInit) => { bodies.push(typeof init?.body === "string" ? init.body : ""); return new Response('{"contacts":3,"numbers":4}'); };
+    await seedContacts("http://x", { fetchFn });
+    await seedContacts("http://x", { fetchFn });
+    expect(bodies[0]).toBe(bodies[1]);
+  });
+  it("uses fictional numbers only, with at least one the page can switch on", () => {
+    const snap = JSON.parse(readFileSync(FAKE_CONTACTS, "utf8")) as { contacts: { numbers: { e164: string }[] }[] };
+    const nums = snap.contacts.flatMap((c) => c.numbers.map((n) => n.e164));
+    for (const n of nums) expect(n).toMatch(/^(\+447700900\d{3}|\+1\d{3}55501\d\d)$/);
+    expect(nums.some((n) => n.startsWith("+447700900"))).toBe(true);
+  });
+  it("fails loudly when the Worker refuses the list", async () => {
+    const fetchFn = async () => new Response('{"error":"contacts_snapshot_invalid_empty"}', { status: 400 });
+    await expect(seedContacts("http://x", { fetchFn })).rejects.toThrow(/answered 400/);
   });
 });
