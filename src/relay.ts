@@ -1547,15 +1547,11 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     const connected = q.get("connected"), disconnected = q.get("disconnected");
     const label = (v: string | null) => (v && /^[A-Z0-9_]{1,32}$/.test(v) ? v : null);
     const html = renderContactsPage({
-      csrf, nonce, method: who.method, leaves: leavesFor(req, true) + pickerFor(req, "/contacts", true), // /contacts CSP (default-src 'self') allows same-origin images
+      csrf, nonce, leaves: leavesFor(req, true) + pickerFor(req, "/contacts", true), // /contacts CSP (default-src 'self') allows same-origin images
       migratedOn: key ? (this.sql.exec(`SELECT COUNT(*) AS c FROM contact_prefs WHERE ${MIGRATED_ON}`).one()["c"] as number) : 0,
-      sources: [...accts, UPLOAD_SOURCE, LEGACY_SOURCE].filter((a) => a !== LEGACY_SOURCE || this.meta(`acct:${a}:ok_ms`)).map((a) => {
-        const ok = this.meta(`acct:${a}:ok_ms`);
-        return { name: a, numbers: this.meta(`acct:${a}:numbers`), lastGood: ok ? this.fmtTime(Number(ok)) : null };
-      }),
       lastError: errCodeOf && lastErr ? { code: errCodeOf, when: this.fmtTime(lastErr.ms) } : null,
       canSync: accts.length > 0,
-      toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors: see Health"
+      toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors"
         : label(connected) ? `Connected ${label(connected)}. Press Sync now to load its contacts.`
         : label(disconnected) ? `Disconnected ${label(disconnected)}${q.get("revoke") === "failed" ? " (Google didn't confirm the revoke: remove it at myaccount.google.com/connections)" : ""}`
         : q.get("google_client") === "saved" ? "Google client saved" : null,

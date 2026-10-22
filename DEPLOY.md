@@ -188,34 +188,33 @@ curl -si -X POST https://<API_HOST>/send -H "Authorization: Bearer wrong" \
 ## 9. Google Contacts (who the bot may text)
 Read-only access to your contacts' names and numbers. Emails, notes and addresses are never stored. Everything happens on `https://<APPROVE_HOST>/contacts`, in the **Google accounts** panel. No terminal and no `wrangler secret put` per account.
 
-You use **your own** Google Cloud project, so your contacts only ever go to your Worker. Google has no API for creating this kind of client, so the first part is about 5 minutes of clicking. The page's **Set up Google** checklist links to each console page. Type your project ID once, and the links open inside that project.
+You use **your own** Google Cloud project, so your contacts only ever go to your Worker. Google has no API for creating this kind of client, so the first part is a few minutes of clicking. The page's **Set up Google** list has the four steps sync needs (project, People API, branding plus the OAuth client, paste). Type your project ID once, and those links open inside that project. Publishing the app (Audience) is not on the page: Testing mode still syncs, and tokens then expire after 7 days.
 
 1. **HUMAN STEP:** Create a project (for example `contacts-relay`): https://console.cloud.google.com/projectcreate. Type its project ID into the checklist. Without it, each console link opens whichever project you used last; the page blocks those links until a project ID is typed. After you save a client, the page uses the project number from the Client ID.
 2. Enable the People API: the checklist's link (`https://console.cloud.google.com/flows/enableapi?apiid=people.googleapis.com&project=<id>`). If that page errors, use the library page `https://console.cloud.google.com/apis/library/people.googleapis.com?project=<id>` and press Enable.
 3. Branding (`https://console.cloud.google.com/auth/overview/create?project=<id>`; if the project's Google Auth Platform is already set up, this redirects to `/auth/overview`: open Branding from there):
    - User type: **External**. Give it an app name (for example `Contacts relay`) and your email.
-4. Audience (`https://console.cloud.google.com/auth/audience?project=<id>`): **Publish app (In production)**.
-   - Staying in **Testing** works too if you add each Google account as a test user, but access then expires after **7 days** and sync stops.
+4. Create an OAuth client (the same checklist step as Branding; `https://console.cloud.google.com/auth/clients/create?project=<id>`): Application type **Web application**. Under **Authorized redirect URIs**, add exactly the address the checklist shows (with a Copy button): `https://<APPROVE_HOST>/contacts/google/callback`. No trailing slash.
+   - Optional, not on the page: Audience (`https://console.cloud.google.com/auth/audience?project=<id>`), **Publish app (In production)**. Staying in **Testing** works if you add each Google account as a test user, but access then expires after **7 days** and sync stops.
    - A published but unverified app shows "Google hasn't verified this app". That's your own app; click Advanced, then Go to (app name). https://support.google.com/cloud/answer/15549945
    - A work or school Google account may have an admin rule that blocks unverified apps.
-5. Create an OAuth client (`https://console.cloud.google.com/auth/clients/create?project=<id>`): Application type **Web application**. Under **Authorized redirect URIs**, add exactly the address the checklist shows (with a Copy button): `https://<APPROVE_HOST>/contacts/google/callback`. No trailing slash.
-6. Google shows the **Client secret only once**. Paste the Client ID and the secret into the checklist's form and press **Save client**. The Worker stores them encrypted (AES-GCM under `GOOGLE_TOKEN_KEY`, section 6); they're never shown again.
-7. **HUMAN STEP:** Type a name for the account (for example `primary` or `work`) and press **Connect Google**. Pick the Google account and allow **read-only contacts** only. Back on the page it shows "Connected PRIMARY". The Worker refuses, and revokes at Google, if anything other than read-only contacts was granted.
+5. Google shows the **Client secret only once**. Paste the Client ID and the secret into the checklist's form and press **Save client**. The Worker stores them encrypted (AES-GCM under `GOOGLE_TOKEN_KEY`, section 6); they're never shown again.
+6. **HUMAN STEP:** Type a name for the account (for example `primary` or `work`) and press **Connect Google**. Pick the Google account and allow **read-only contacts** only. Back on the page it shows "Connected PRIMARY". The Worker refuses, and revokes at Google, if anything other than read-only contacts was granted.
    - "Google sent no long-lived token": remove the app at https://myaccount.google.com/connections, then Connect again.
    - Repeat for each Google account. The first connected account wins when two accounts have the same number. Accounts in `GOOGLE_ACCOUNTS` come first.
-8. Press **Sync now**. After that, a daily sync runs on its own. A failed sync keeps the last good list and texts you once.
-9. **HUMAN STEP:** on the same page, turn on the people you want the bot to text (see "Contacts page" below). Everyone starts **off**.
+7. Press **Sync now**. After that, a daily sync runs on its own. A failed sync keeps the last good list and texts you once. The Contacts page shows the last sync error next to **Sync**.
+8. **HUMAN STEP:** on the same page, turn on the people you want the bot to text (see "Contacts page" below). Everyone starts **off**.
 
 **Reconnect** signs in again for the same name (use it after `google_token_status_400`). **Disconnect** asks first, then revokes the access at Google and deletes the stored sign-in and that account's contacts. If Google doesn't confirm the revoke, it still deletes and tells you; remove it at https://myaccount.google.com/connections. Disconnect also stops the old fallback: an account still listed in `GOOGLE_ACCOUNTS` (with a `GOOGLE_RT_<LABEL>` secret) is no longer synced from the secret. The page then shows a note to remove it from `GOOGLE_ACCOUNTS`, deploy, and run `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_RT_<LABEL>`. Connecting that name again clears this.
 
-**Upgrading a relay that uses `GOOGLE_RT_<LABEL>` secrets:** nothing breaks. Those accounts keep syncing from the secrets and show as "legacy" on the page, and `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` still work. A sign-in or client saved on the page wins over the secret. To move over: add `GOOGLE_TOKEN_KEY` (section 6), add the redirect URI from step 5 to your client (a Desktop client can't take one, so create a Web client), press Reconnect for each account, then delete the old secrets with `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_RT_<LABEL>`. `scripts/google-consent.mjs` (setup step `google`) is **legacy**. It still works for the secret-based setup, but new deploys don't need it.
+**Upgrading a relay that uses `GOOGLE_RT_<LABEL>` secrets:** nothing breaks. Those accounts keep syncing from the secrets and show as "legacy" on the page, and `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` still work. A sign-in or client saved on the page wins over the secret. To move over: add `GOOGLE_TOKEN_KEY` (section 6), add the redirect URI from step 4 to your client (a Desktop client can't take one, so create a Web client), press Reconnect for each account, then delete the old secrets with `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_RT_<LABEL>`. `scripts/google-consent.mjs` (setup step `google`) is **legacy**. It still works for the secret-based setup, but new deploys don't need it.
 
-**Check:** the page says "Sync finished", and its Health panel shows a number count and a "last good" time for each account. (`/direct` also has a **Sync contacts now** button that answers `{"updated":["PRIMARY"],"failed":[]}`.)
+**Check:** the page says "Sync finished". A failed sync shows the error and its fix next to **Sync**. (`/direct` still lists each account's number count and "last good" time, and has a **Sync contacts now** button that answers `{"updated":["PRIMARY"],"failed":[]}`.)
 
 | `failed` reason | Fix |
 |---|---|
 | `missing_secret_GOOGLE_RT_<LABEL>` | A `GOOGLE_ACCOUNTS` label with no secret and no sign-in: press Reconnect for it (or remove it from `GOOGLE_ACCOUNTS`) |
-| `google_client_not_configured` | Steps 5–6: paste the client |
+| `google_client_not_configured` | Step 5: paste the client |
 | `google_token_key_missing` | `GOOGLE_TOKEN_KEY` is unset or isn't the key the sign-in was saved with (section 6, section 14) |
 | `google_token_decrypt_failed` | The stored sign-in can't be read: press Reconnect |
 | `default_country_code_invalid` | Set `DEFAULT_COUNTRY_CODE` (section 5) and deploy |
@@ -223,18 +222,18 @@ You use **your own** Google Cloud project, so your contacts only ever go to your
 | `google_token_status_400` | Access expired (Testing mode) or revoked. Publish the app, then press Reconnect |
 | `empty_result` | No contacts with a phone number in that account |
 
-Sign-in errors come back to the page as a red line with the fix: `google_scope_not_exact`, `google_no_refresh_token`, `google_state_expired` (more than 10 minutes on Google's pages), `google_consent_denied`, `google_token_status_<n>` (usually a redirect URI that doesn't match step 5).
+Sign-in errors come back to the page as a red line with the fix: `google_scope_not_exact`, `google_no_refresh_token`, `google_state_expired` (more than 10 minutes on Google's pages), `google_consent_denied`, `google_token_status_<n>` (usually a redirect URI that doesn't match step 4).
 
-The same codes show in the Contacts page's Health panel with this fix text.
+The same codes show next to **Sync** on the Contacts page, with this fix text.
 
 ### Contacts page (who the bot may text)
-`https://<APPROVE_HOST>/contacts`, behind Access like the rest of that host. It lists everyone from Google sync, the manual upload and the old `DIRECT_ALLOWLIST`, with name, label and **only the last 4 digits**. The bot can text a person only when they are switched **on** here, or listed in the `ALLOWLIST` secret (shown read-only, "always on (ALLOWLIST)").
+`https://<APPROVE_HOST>/contacts`, behind Access like the rest of that host. The title is **GrokBot Texting**. It lists everyone from Google sync, the manual upload and the old `DIRECT_ALLOWLIST`, with name, label and **only the last 4 digits**. The page is the contact list, **Sync**, and the short **Set up Google** list. Per-account counts stay on `/direct`. The bot can text a person only when they are switched **on** here, or listed in the `ALLOWLIST` secret (shown read-only, "always on (ALLOWLIST)").
 
 - **New people start off.** That includes a new number added to someone who is already on: each number is its own switch.
 - **Turning someone on** asks "Text Riley at •••• 0142?" so you check the last 4 first. **Enable all shown** acts on the current search and filter, and asks with a count.
 - **Star** the people you text most: they sort first and get a **Starred** filter. A star never turns anyone on.
-- **Sync now** pulls Google right away; the daily sync keeps running. The Health panel shows each source's count, the last sync time and the last error with its fix.
-- **Resolve preview** shows what the bot would match for a name ("one", "ambiguous" with each last 4, or "no match" with the reason, such as "exists but is off"). It never sends.
+- **Sync now** pulls Google right away; the daily sync keeps running. The last sync error, when there is one, is shown next to **Sync** with its fix. Per-account counts stay on `/direct`.
+- Name lookup (`POST /send` with `resolve`, or `POST /contacts/preview`) still reports "one", "ambiguous", or "no match". The Contacts page does not show a resolve-preview form.
 - Numbers like `555-0100`…`555-0199`, and 555 followed by `1234`, are documentation examples, and the page refuses to turn them on.
 - **Upgrading an existing relay:** everyone who could be texted before the update stays on and is flagged as migrated. A banner says how many; **Review migrated** filters to them, and **Turn all migrated off** switches them all off at once. Nothing is turned on by the upgrade that wasn't textable before.
 - **`DIRECT_ALLOWLIST` is deprecated.** On the first request after the update its entries are imported once as the `ALLOWLIST_LEGACY` source and flagged: on only when this is an upgrade of a Worker that had already run and `CONTACTS_SNAPSHOT_ONLY` was `"0"` (the old default, so they were textable); off otherwise. A fresh deploy never switches anyone on. After that the secret is ignored. Review them on the page, then delete it: `npx wrangler -c .relay-local/wrangler.toml secret delete DIRECT_ALLOWLIST`. `CONTACTS_SNAPSHOT_ONLY` is only read by that one-time import; leave it as shipped for this release.
@@ -242,7 +241,7 @@ The same codes show in the Contacts page's Health panel with this fix text.
 
 | You see | Fix |
 |---|---|
-| `recipient_not_on_allowlist` or `no_match` for someone in your contacts | They're probably off. Open `/contacts`, search the name, check the last 4 and turn them on; the preview confirms. |
+| `recipient_not_on_allowlist` or `no_match` for someone in your contacts | They're probably off. Open `/contacts`, search the name, check the last 4 and turn them on. `POST /send` with `resolve`, or `POST /contacts/preview`, confirms the match. |
 | "this looks like a documentation example" | That number is a 555-01xx (or 555 + 1234) example, not a real person. Fix the contact in Google, then **Sync now**. |
 | "LOG_HASH_KEY is missing or short" on the page | Run setup steps `keys` then `secrets` (section 6). |
 | `bad_csrf` | The page was open more than 15 minutes. Reload it. |

@@ -34,9 +34,10 @@ export function harborFont(): Response {
 // Photo variants (?leaves=photo-corners|photo-vines|photo-scatter): self-served WebP behind a token-coloured scrim.
 // Images need an img source in the CSP. /contacts has one (default-src 'self'); /direct and /approve/* have
 // default-src 'none', which blocks every image (data: URIs too), so there the photo option falls back to the
-// matching SVG option. Pick one at build time with HARBOR_LEAVES_DEFAULT, or preview with ?leaves=.
+// matching SVG option. The picker offers the photos only (the SVG layouts are not choices). The default is the
+// vines photo; pages that cannot load images fall back to the vines SVG. Preview any layout with ?leaves=.
 type PhotoOption = `photo-${LeavesOption}`;
-export const HARBOR_LEAVES_DEFAULT: LeavesOption | PhotoOption | "none" = "none";
+export const HARBOR_LEAVES_DEFAULT: LeavesOption | PhotoOption | "none" = "photo-vines";
 const isLeaves = (v: string | null): v is LeavesOption => v !== null && Object.hasOwn(HARBOR_LEAVES, v);
 const PHOTOS: Record<string, ArrayBuffer> = {
   "corners-1024": cornersL, "corners-640": cornersS, "vines-1024": vinesL, "vines-640": vinesS, "scatter-1024": scatterL, "scatter-640": scatterS, "corners-96": cornersT, "vines-96": vinesT, "scatter-96": scatterT,
@@ -65,7 +66,9 @@ export function leavesFor(req: Request, images = false): string {
 // and 303s back. The page reads the cookie server-side, so the right background is in the first paint (no flash),
 // and it works on /direct and /approve/*, which allow no scripts. form-action 'self' is already in every CSP.
 export const BG_COOKIE = "hb_bg";
-export const BG_OPTIONS = ["none", "corners", "vines", "scatter", "photo-corners", "photo-vines", "photo-scatter"] as const;
+// SVG layouts (corners, vines, scatter) stay in HARBOR_LEAVES for the no-image fallback and ?leaves= preview.
+// They are not picker choices. The three photos are. Labels have no "(photo)" parenthetical.
+export const BG_OPTIONS = ["none", "photo-corners", "photo-vines", "photo-scatter"] as const;
 type BgOption = (typeof BG_OPTIONS)[number];
 const isBg = (v: string | null | undefined): v is BgOption => !!v && (BG_OPTIONS as readonly string[]).includes(v);
 function bgCookie(req: Request): string | null {
@@ -74,8 +77,7 @@ function bgCookie(req: Request): string | null {
 }
 const BACK = /^\/(?:contacts|direct|approve\/[a-f0-9]{32})$/;
 const LABELS: Record<BgOption, string> = {
-  none: "None", corners: "Corners", vines: "Vines", scatter: "Scatter",
-  "photo-corners": "Corners (photo)", "photo-vines": "Vines (photo)", "photo-scatter": "Scatter (photo)",
+  none: "None", "photo-corners": "Corners", "photo-vines": "Vines", "photo-scatter": "Scatter",
 };
 const LEAF = (x: number, y: number, r: number, s: number) => `<path transform="translate(${x},${y}) rotate(${r}) scale(${s})" d="M0,0C5,-5,14,-5,22,0C14,5,5,5,0,0Z"/>`;
 /** Tiny inline thumbnails (no fetch, so they work under default-src 'none'). */
@@ -94,7 +96,7 @@ function thumb(o: BgOption, images: boolean): string {
 export function pickerFor(req: Request, back: string, images = false): string {
   const q = new URL(req.url).searchParams.get("leaves");
   const cur: BgOption = isBg(q) ? q : (bgCookie(req) as BgOption | null) ?? (HARBOR_LEAVES_DEFAULT as BgOption);
-  const opts = BG_OPTIONS.map((o) => `<label class=hb-opt><input type=radio name=leaves value="${o}"${o === cur ? " checked" : ""}>${thumb(o, images)}<span>${LABELS[o]}${o.startsWith("photo-") && !images ? " <small>(photo on Contacts only)</small>" : ""}</span></label>`).join("");
+  const opts = BG_OPTIONS.map((o) => `<label class=hb-opt><input type=radio name=leaves value="${o}"${o === cur ? " checked" : ""}>${thumb(o, images)}<span>${LABELS[o]}</span></label>`).join("");
   return `<details class=hb-pick><summary>Background</summary><form method=post action="/harbor/background"><fieldset><legend>Page background</legend>${opts}</fieldset><input type=hidden name=back value="${BACK.test(back) ? back : "/contacts"}"><button>Apply</button></form></details>`;
 }
 /** POST /harbor/background: same-origin form only; sets the cookie and goes back to the page. */

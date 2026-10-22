@@ -223,6 +223,11 @@ describe("owner-only: guards", () => {
       expect(m[2]).toContain('target=_blank rel="noopener noreferrer"');
     }
     for (const n of [RILEY, SAM, ALEX, EXAMPLE]) expect(html).not.toContain(n.slice(-4));
+    expect(html).toContain("<h1 class=product>GrokBot Texting</h1>");
+    expect(html).toContain("<h2>Contacts</h2>");
+    expect(html).toContain("<h2>Sync</h2>");
+    expect(html).not.toContain("Resolve preview");
+    expect(html).not.toContain("<summary>Health</summary>");
     expect(new TextEncoder().encode(html).length).toBeLessThan(25_000);
   });
 });

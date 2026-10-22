@@ -33,13 +33,15 @@ beforeEach(async () => {
 });
 
 describe("Set up Google checklist", () => {
-  it("lists every deep link (new tab, no referrer), the exact redirect URI, and opens itself when no client is set", async () => {
+  it("lists the setup links sync needs (new tab, no referrer), the exact redirect URI, and opens itself when no client is set", async () => {
     const { html } = await page();
-    for (const url of Object.values(GCP_LINKS)) expect(html).toContain(`href="${url}" target=_blank rel="noopener noreferrer"`);
+    for (const k of ["createProject", "enablePeople", "peopleLibrary", "branding", "createClient"] as const) expect(html).toContain(`href="${GCP_LINKS[k]}" target=_blank rel="noopener noreferrer"`);
+    expect(html).not.toContain(GCP_LINKS.audience);
+    expect(html).not.toContain(`href="${GCP_LINKS.connections}"`);
     expect(html).toContain('<code id=gredir>https://approve.example.test/contacts/google/callback</code>');
     expect(html).toMatch(/<details id=gsetup open>/);
-    for (const k of ["enablePeople", "peopleLibrary", "branding", "audience", "createClient"] as const) expect(html).toContain(`href="${GCP_LINKS[k]}" target=_blank rel="noopener noreferrer" data-gproj`);
-    for (const k of ["createProject", "connections"] as const) expect(html).not.toContain(`href="${GCP_LINKS[k]}" target=_blank rel="noopener noreferrer" data-gproj`);
+    for (const k of ["enablePeople", "peopleLibrary", "branding", "createClient"] as const) expect(html).toContain(`href="${GCP_LINKS[k]}" target=_blank rel="noopener noreferrer" data-gproj`);
+    expect(html).not.toContain(`href="${GCP_LINKS.createProject}" target=_blank rel="noopener noreferrer" data-gproj`);
     expect(html).toMatch(/<button disabled>Connect Google<\/button>/); // no client yet
   });
 
@@ -184,8 +186,10 @@ describe("EL review fixes (deep links land in the right project; disconnect left
   it("with a stored client, links 2-6 are rendered with that project and the field is prefilled; the script reuses withProject and blocks project-less clicks", async () => {
     await inRelay(h, (i) => i.saveGoogleClient("424242-abc123.apps.googleusercontent.com", CLIENT_SECRET));
     const { html } = await page();
-    for (const k of GCP_PROJECT_LINKS) expect(html).toContain(`href="${withProject(GCP_LINKS[k], "424242").replace(/&/g, "&amp;")}"`);
-    for (const k of ["createProject", "connections"] as const) expect(html).toContain(`href="${GCP_LINKS[k]}"`);
+    for (const k of ["enablePeople", "peopleLibrary", "branding", "createClient"] as const) expect(html).toContain(`href="${withProject(GCP_LINKS[k], "424242").replace(/&/g, "&amp;")}"`);
+    expect(html).not.toContain(withProject(GCP_LINKS.audience, "424242"));
+    expect(html).toContain(`href="${GCP_LINKS.createProject}"`);
+    expect(html).not.toContain(`href="${GCP_LINKS.connections}"`);
     expect(html).toContain('value="424242"');
     expect(html).toContain(`const withProject=${withProject.toString()};`);
     expect(html).toContain("Type the project ID first");

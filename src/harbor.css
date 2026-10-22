@@ -59,6 +59,7 @@ body{font:16px/1.5 var(--h-sans);color:var(--h-text);max-width:40em;margin:1.5em
    position:fixed children (the /contacts toast would sit at the end of the long card instead of the viewport). */
 body::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:var(--h-surface-radius);background:var(--h-surface);-webkit-backdrop-filter:var(--h-surface-filter);backdrop-filter:var(--h-surface-filter);box-shadow:var(--h-surface-shadow)}
 h1,h2{font-family:var(--h-serif);font-weight:600;letter-spacing:.2px;margin:.4em 0 .5em}h1{font-size:1.6em}h2{font-size:1.3em}
+h1.product{font-size:2.15em;line-height:1.15;margin:.1em 0 .35em}
 a{color:var(--h-link)}a:hover{color:var(--h-text)}code{font-size:.9em}small,.ro{color:var(--h-muted)}.warn{color:var(--h-critical)}
 :focus-visible{outline:2px solid var(--h-focus);outline-offset:2px}
 button{font:inherit;font-weight:600;color:var(--h-text);padding:.4em .8em;border-radius:var(--h-button-radius);border:1px solid var(--h-border);background:var(--h-solid);cursor:pointer}

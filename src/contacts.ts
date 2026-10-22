@@ -153,8 +153,6 @@ export interface PageModel {
   csrf: string;
   nonce: string;
   migratedOn: number;
-  method: string;
-  sources: { name: string; numbers: string | null; lastGood: string | null }[];
   lastError: { code: string; when: string } | null;
   canSync: boolean;
   toast: string | null;
@@ -184,43 +182,39 @@ ${g.keyStatus.onOld > 0 ? `<p class=warn id=gkeys>${g.keyStatus.onOld} of ${g.ke
 <ul id=gaccts>${rows || "<li>No Google accounts yet.</li>"}</ul>
 <form method=post action="/contacts/google/start" class=bar id=gconnect><input type=hidden name=csrf value="${csrf}"><label for=glabel>Account name</label><input type=text id=glabel name=label required maxlength=32 pattern="[A-Za-z0-9_]+" placeholder="work" autocomplete=off><button${canConnect ? "" : " disabled"}>Connect Google</button></form>
 <p class=ro>${clientLine}</p>
-<details id=gsetup${g.client === null || g.client === "unreadable" ? " open" : ""}><summary>Set up Google (about 5 minutes, once)</summary>
+<details id=gsetup${g.client === null || g.client === "unreadable" ? " open" : ""}><summary>Set up Google</summary>
 <p class=ro>Your own Google Cloud project, so your contacts only ever go to your Worker. Links open in a new tab. Google can only prefill the project; type the rest as shown.</p>
 <ol>
-<li>${a("createProject", "Create a project")}. Name it <code>contacts-relay</code>. Then type its <b>project ID</b> here: steps 2–5 open in that project (otherwise the console opens whichever project you used last). <input type=text id=gproj autocomplete=off spellcheck=false placeholder="contacts-relay-123456" aria-label="Project ID" value="${esc(g.project ?? "")}"></li>
+<li>${a("createProject", "Create a project")}. Name it <code>contacts-relay</code>. Then type its <b>project ID</b> here: the next links open in that project (otherwise the console opens whichever project you used last). <input type=text id=gproj autocomplete=off spellcheck=false placeholder="contacts-relay-123456" aria-label="Project ID" value="${esc(g.project ?? "")}"></li>
 <li>${a("enablePeople", "Enable the People API")} (if that page errors: ${a("peopleLibrary", "People API in the library")}, then Enable).</li>
-<li>${a("branding", "Branding")}: app name <code>Contacts relay</code>, your email, audience <b>External</b>. If this project's Google Auth Platform is already set up, the link lands on the overview page instead: open Branding there.</li>
-<li>${a("audience", "Audience")}: press <b>Publish app</b> (Testing mode tokens expire after 7 days).</li>
-<li>${a("createClient", "Create an OAuth client")}: type <b>Web application</b>, and under Authorized redirect URIs add exactly:<br><code id=gredir>${esc(g.redirectUri)}</code> <button type=button id=gcopy>Copy</button></li>
+<li>${a("branding", "Branding")}: app name <code>Contacts relay</code>, your email, audience <b>External</b>. If this project's Google Auth Platform is already set up, the link lands on the overview page instead: open Branding there. Then ${a("createClient", "create an OAuth client")}: type <b>Web application</b>, and under Authorized redirect URIs add exactly:<br><code id=gredir>${esc(g.redirectUri)}</code> <button type=button id=gcopy>Copy</button></li>
 <li>Google shows the Client secret only once. Paste both here:
 <form method=post action="/contacts/google/client" id=gclient><input type=hidden name=csrf value="${csrf}"><label for=gcid>Client ID</label><input type=text id=gcid name=client_id required autocomplete=off spellcheck=false><label for=gcsec>Client secret</label><input type=password id=gcsec name=client_secret required autocomplete=off><button${g.tokenKey === "ok" ? "" : " disabled"}>Save client</button></form></li>
-<li>Press <b>Connect Google</b> above. On "Google hasn't verified this app": Advanced, then Go to Contacts relay (it's your own app). Tick only the contacts box.</li>
 </ol>
-<p class=ro>No long-lived token from Google? ${a("connections", "Remove the app from your Google account")}, then Connect again.</p>
+<p class=ro>Press <b>Connect Google</b> above. On "Google hasn't verified this app": Advanced, then Go to Contacts relay (it's your own app). Tick only the contacts box. Then press <b>Sync now</b>.</p>
 </details></section>`;
 }
 
 /** Server-rendered shell + one inline module. No framework, no third-party origin, numbers never in HTML. */
 export function renderContactsPage(m: PageModel): string {
-  const src = m.sources.map((s) => `<li>${esc(s.name)}: ${s.lastGood ? `${esc(s.numbers ?? "?")} numbers, last good ${esc(s.lastGood)}` : "never loaded"}</li>`).join("");
   const err = m.lastError ? `<p class=warn>Last sync error: <code>${esc(m.lastError.code)}</code> (${esc(m.lastError.when)}). ${esc(syncFix(m.lastError.code))}</p>` : "";
-  return `<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Contacts</title>
+  return `<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GrokBot Texting</title>
 <style nonce="${m.nonce}">
 ${HARBOR_CSS}
 </style>
-${m.leaves ?? ""}<h1>Contacts</h1>
-<p>The bot can text only people switched <b>on</b> here (plus ALLOWLIST). New people start off. Read-only Google access; nothing here writes to Google.</p>
+${m.leaves ?? ""}<h1 class=product>GrokBot Texting</h1>
+<p>Switch on the people this bot may text. New people start off.</p>
 ${m.hashKeyMissing ? `<p class=warn>LOG_HASH_KEY is missing or short, so the list can't be shown. Run setup step keys, then secrets.</p>` : ""}
 ${m.migratedOn > 0 ? `<div class=banner id=banner role=status><b>${m.migratedOn}</b> people were reachable before this update and are still on. Review them. <button id=review>Review migrated</button> <button id=migoff>Turn all migrated off</button></div>` : ""}
-<form method=post action="/direct/sync" class=bar>${m.canSync ? `<input type=hidden name=csrf value="${m.csrf}"><input type=hidden name=from value=contacts><button id=sync>Sync now</button>` : "<span>No Google accounts yet: use Connect Google below.</span>"}</form>
+<h2>Contacts</h2>
 <label for=q class=ro>Search by name</label><input type=search id=q autocomplete=off>
 <div class=bar role=group aria-label="Filter">${["All", "On", "Off", "Starred", "Migrated", "New"].map((f, i) => `<button data-f="${f}" aria-pressed="${i === 0}">${f === "New" ? "New since last visit" : f}</button>`).join("")}</div>
 <div class=bar><button id=enall>Enable all shown</button><span id=count class=ro></span></div>
 <ul id=list aria-label="People"></ul>
-<details><summary>Resolve preview</summary><p class=ro>Who the bot would match, over people who are on. Never sends.</p>
-<form id=pv><label for=pvq>Name</label><input type=text id=pvq autocomplete=off><button>Preview</button></form><p id=pvout role=status></p></details>
+<h2>Sync</h2>
+<form method=post action="/direct/sync" class=bar>${m.canSync ? `<input type=hidden name=csrf value="${m.csrf}"><input type=hidden name=from value=contacts><button id=sync>Sync now</button>` : "<span>No Google accounts yet: use Connect Google below.</span>"}</form>
+${err}
 ${renderGooglePanel(m.google, m.csrf, m.googleError)}
-<details open><summary>Health</summary><ul>${src}</ul>${err}<p>Signed in with: <code>${esc(m.method)}</code> · <a href="/log">Log</a> · <a href="/direct">Direct send status</a></p></details>
 <div id=toast role=status aria-live=polite></div>
 <script type=module nonce="${m.nonce}">
 const CSRF=${JSON.stringify(m.csrf)};let rows=[],filter="All";const $=(s)=>document.querySelector(s);
@@ -242,8 +236,6 @@ $("#enall").onclick=async()=>{const s=shown().filter(r=>!r.readonly&&!r.enabled)
 try{const j=await post("/contacts/enable-all",{keys:s.map(r=>r.key),confirm_count:s.length});toast("Turned on "+j.updated+(j.skipped_example?" ("+j.skipped_example+" example numbers skipped)":""));await load()}catch(e){toast("Error: "+e.message)}};
 const rv=$("#review");if(rv)rv.onclick=()=>document.querySelector('[data-f="Migrated"]').click();
 const mo=$("#migoff");if(mo)mo.onclick=async()=>{const n=rows.filter(r=>r.migrated&&r.enabled).length;if(!confirm("Turn off all "+n+" migrated people?"))return;try{const j=await post("/contacts/migrated-off",{confirm_count:n});toast("Turned off "+j.updated);$("#banner").remove();await load()}catch(e){toast("Error: "+e.message)}};
-$("#pv").onsubmit=async(ev)=>{ev.preventDefault();try{const j=await post("/contacts/preview",{name:$("#pvq").value});const o=$("#pvout");
-o.textContent=j.state==="no_match"?"No match: "+j.reason:("Bot will match \\u201c"+$("#pvq").value+"\\u201d to "+j.matches.map(m=>m.name+" ("+m.label+") \\u2022\\u2022\\u2022\\u2022 "+m.last4).join(", ")+(j.state==="ambiguous"?" (ambiguous: the bot asks which)":""))}catch(e){toast("Error: "+e.message)}};
 const withProject=${withProject.toString()};
 const gp=$("#gproj");if(gp){const fix=()=>{const id=gp.value.trim();try{localStorage.setItem("gproj",id)}catch{}document.querySelectorAll("a[data-gproj]").forEach(a=>{a.href=withProject(a.dataset.base,id)})};
 try{if(!gp.value)gp.value=localStorage.getItem("gproj")||""}catch{}fix();gp.oninput=fix;

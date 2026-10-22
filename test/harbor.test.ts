@@ -61,9 +61,19 @@ describe("Harbor look", () => {
 });
 
 describe("Harbor leaf mockups (?leaves=)", () => {
-  it("default is none; each option is inline SVG on every page with the CSP unchanged; unknown values ignored", async () => {
-    const plain = await (await get(`${BASE}/direct`)).text();
-    expect(plain).not.toContain("<svg class=hl-leaves");
+  it("default is the vines photo (vines SVG where images are blocked); SVG layouts still render from ?leaves= but are not picker options", async () => {
+    const direct = await get(`${BASE}/direct`);
+    const plain = await direct.text();
+    expect(plain).toContain("<svg class=hl-leaves aria-hidden=true"); // photo-vines falls back to the vines SVG
+    expect(plain).toContain('value="photo-vines" checked');
+    expect(direct.headers.get("content-security-policy")).toBe(STRICT_CSP);
+    const contacts = await (await get(`${BASE}/contacts`)).text();
+    expect(contacts).toContain('<div class="hl-photo hl-photo-vines" aria-hidden=true></div>');
+    expect(contacts).toContain('value="photo-vines" checked');
+    expect(contacts).not.toContain('value="vines"');
+    expect(contacts).not.toContain('value="corners"');
+    expect(contacts).not.toContain('value="scatter"');
+    expect(contacts).not.toContain("(photo)");
     for (const o of ["corners", "vines", "scatter"]) {
       const r = await get(`${BASE}/direct?leaves=${o}`);
       const html = await r.text();
@@ -75,7 +85,9 @@ describe("Harbor leaf mockups (?leaves=)", () => {
       expect(ch).toContain("<svg class=hl-leaves");
       expect(new TextEncoder().encode(ch).length).toBeLessThan(27_000); // mockup: leaves + picker; the default page keeps the 25 KB cap
     }
-    expect(await (await get(`${BASE}/direct?leaves=__proto__`)).text()).not.toContain("<svg class=hl-leaves");
+    const unknown = await (await get(`${BASE}/direct?leaves=__proto__`)).text();
+    expect(unknown).not.toContain("__proto__");
+    expect(unknown).toContain('value="photo-vines" checked');
   });
 });
 
@@ -113,23 +125,28 @@ describe("Background picker (no JS, cookie)", () => {
     for (const p of ["/direct", "/contacts"]) {
       const html = await (await get(`${BASE}${p}`)).text();
       expect(html).toContain('<details class=hb-pick><summary>Background</summary><form method=post action="/harbor/background"><fieldset><legend>Page background</legend>');
-      expect((html.match(/type=radio name=leaves/g) ?? []).length).toBe(7);
+      expect((html.match(/type=radio name=leaves/g) ?? []).length).toBe(4);
+      expect(html).not.toContain("(photo)");
     }
-    const r = await pick("vines", "/direct");
+    const r = await pick("photo-vines", "/direct");
     expect(r.status).toBe(303);
     expect(r.headers.get("location")).toBe("/direct");
     const cookie = r.headers.get("set-cookie") ?? "";
-    expect(cookie).toMatch(/^hb_bg=vines; Path=\/; Max-Age=31536000; Secure; HttpOnly; SameSite=Lax$/);
-    const d = await h.relay.fetch(`${BASE}/direct`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt(), cookie: "hb_bg=vines" } });
+    expect(cookie).toMatch(/^hb_bg=photo-vines; Path=\/; Max-Age=31536000; Secure; HttpOnly; SameSite=Lax$/);
+    const d = await h.relay.fetch(`${BASE}/direct`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt(), cookie: "hb_bg=photo-vines" } });
     const html = await d.text();
     expect(html).toContain("<svg class=hl-leaves");
-    expect(html).toContain('value="vines" checked');
+    expect(html).not.toContain("hl-photo-");
+    expect(html).toContain('value="photo-vines" checked');
     expect(d.headers.get("content-security-policy")).toBe(STRICT_CSP);
+    const c = await h.relay.fetch(`${BASE}/contacts`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt(), cookie: "hb_bg=photo-vines" } });
+    expect(await c.text()).toContain('<div class="hl-photo hl-photo-vines" aria-hidden=true></div>');
   });
-  it("refuses other origins, unknown options and off-site back paths", async () => {
-    expect((await pick("vines", "/direct", "https://evil.example")).status).toBe(403);
+  it("refuses other origins, removed layouts, unknown options and off-site back paths", async () => {
+    expect((await pick("photo-vines", "/direct", "https://evil.example")).status).toBe(403);
     expect((await pick("lava", "/direct")).status).toBe(400);
-    expect((await pick("vines", "https://evil.example/")).status).toBe(400);
-    expect((await pick("vines", "//evil.example")).status).toBe(400);
+    for (const removed of ["corners", "vines", "scatter"]) expect((await pick(removed, "/direct")).status).toBe(400);
+    expect((await pick("photo-vines", "https://evil.example/")).status).toBe(400);
+    expect((await pick("photo-vines", "//evil.example")).status).toBe(400);
   });
 });
