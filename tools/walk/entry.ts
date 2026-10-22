@@ -5,6 +5,7 @@ import type { Env } from "../../src/env";
 export { Relay } from "../../src/relay";
 import { walkAllowed } from "./guard";
 import { walkForward } from "./forward";
+import { fakeGoogle, isGoogleUrl, skipConsent } from "./fake-google";
 
 const WALK_HOST = "approve.walk.invalid";
 const KID = "walk-local";
@@ -42,6 +43,7 @@ function patchCerts(env: Env) {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url === certs) return Response.json({ keys: [(await walkKeys()).jwk] });
+    if (isGoogleUrl(url)) return fakeGoogle(url, input instanceof Request ? input.method : (init?.method ?? "GET"));
     return real(input, init);
   }) as typeof fetch;
 }
@@ -52,6 +54,6 @@ export default {
     patchCerts(env);
     const fwd = walkForward(req, await walkJwt(env), WALK_HOST); // 127.0.0.1 / localhost / [::1] all map to the approve host
     const stub = env.RELAY.get(env.RELAY.idFromName("relay"));
-    return stub.fetch(fwd);
+    return skipConsent(await stub.fetch(fwd));
   },
 } satisfies ExportedHandler<Env & { WALK_LOCAL?: string }>;
