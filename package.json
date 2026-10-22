@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "test": "node scripts/check-example-numbers.mjs && node scripts/harbor-tokens.mjs --check && vitest run",
+    "test": "node scripts/check-example-numbers.mjs && node scripts/mutation-check.mjs --patterns && node scripts/harbor-tokens.mjs --check && vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "mutation": "bash scripts/mutation-check.sh",
     "lint": "oxlint --type-aware .",
