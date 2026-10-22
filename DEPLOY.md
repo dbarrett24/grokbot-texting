@@ -13,7 +13,7 @@ you --(email PIN + passkey)--> your private status page (contacts sync, log)
 - The bot can only text people in your Google Contacts, plus any numbers you list yourself.
 - Tap-to-approve, a daily cap and a link block are switches you can turn on (section 12).
 
-**Numbered steps:** a new install follows **[docs/SETUP.md](docs/SETUP.md)** (`step-1` through `step-8`). The deploy config is `.relay-local/wrangler.toml` (gitignored), not the committed template. Commands below that talk to the Worker take `-c .relay-local/wrangler.toml`. This file's section numbers are what the Worker pages cite.
+**Numbered steps:** a new install follows **[docs/SETUP.md](docs/SETUP.md)** (`step-1` through `step-9`). The deploy config is `.relay-local/wrangler.toml` (gitignored), not the committed template. Commands below that talk to the Worker take `-c .relay-local/wrangler.toml`. This file's section numbers are what the Worker pages cite.
 
 **Ground rules:**
 - Do every step on **your own computer** (macOS, Linux, or Windows with WSL) and your own phone. Never on a shared computer or one a bot runs on.

@@ -136,7 +136,9 @@ describe("docs/SETUP.md Step 2 example", () => {
     }
     expect(doc).toContain("multi_send_needs_2_to_3");
     expect(doc).toContain("to_name");
-    expect(doc).not.toContain("America/Denver");
-    expect(doc).not.toContain("Dave's");
+    // Generic PII guards: the only time zone shown is the documented example, and no real email addresses.
+    const zones = doc.match(/\b(?:Africa|America|Asia|Atlantic|Australia|Europe|Pacific)\/[A-Z][A-Za-z_]+/g) ?? [];
+    expect([...new Set(zones)]).toEqual(["Europe/London"]);
+    expect(doc.match(/[\w.+-]+@(?!example\.(?:com|org|net)\b)[\w-]+\.[\w.]+/g) ?? []).toEqual([]);
   });
 });
