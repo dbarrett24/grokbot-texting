@@ -13,6 +13,8 @@ you --(email PIN + passkey)--> your private status page (contacts sync, log)
 - The bot can only text people in your Google Contacts, plus any numbers you list yourself.
 - Tap-to-approve, a daily cap and a link block are switches you can turn on (section 12).
 
+**Numbered steps:** a new install follows **[docs/SETUP.md](docs/SETUP.md)** (`step-1` through `step-8`). The deploy config is `.relay-local/wrangler.toml` (gitignored), not the committed template. Commands below that talk to the Worker take `-c .relay-local/wrangler.toml`. This file's section numbers are what the Worker pages cite.
+
 **Ground rules:**
 - Do every step on **your own computer** (macOS, Linux, or Windows with WSL) and your own phone. Never on a shared computer or one a bot runs on.
 - No password, token or key goes into a chat, email, note or ticket. Each one is typed only into a hidden prompt on your computer, or into your bot's secret prompt.
@@ -112,9 +114,11 @@ npm test && npm run typecheck
 
 **Upgrading later:** from the same folder, `git pull`, then `npm install --legacy-peer-deps` (a new version can change the dependencies, and the old `node_modules` won't match), then `npm test && npm run typecheck` before you deploy again.
 
-## 5. Edit wrangler.toml (no secrets go in this file)
-1. Uncomment `routes` and put in your two hostnames (`custom_domain = true` stays).
-2. Set these under `[vars]`:
+## 5. Local wrangler config (no secrets go in this file)
+
+Build `.relay-local/wrangler.toml` as [docs/SETUP.md](docs/SETUP.md) Step 2. It is gitignored, so `git pull` never adds the two `[[rules]]` blocks and never sets `main`. The subfolder file needs `main = "../src/index.ts"`, a Text rule for `**/*.css`, and a Data rule for `**/*.woff2` and `**/*.webp`, both with `fallthrough = false`. `npm run check` fails when a rule is missing or wrong, or when `main` does not resolve to `src/index.ts`. Leave the committed `wrangler.toml` as the template.
+
+In that local file, set `routes` to your two hostnames (`custom_domain = true`) and set these under `[vars]`:
    ```toml
    TIMEZONE = "America/New_York"                 # REQUIRED: your IANA zone (list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
    DEFAULT_COUNTRY_CODE = "+1"                   # REQUIRED: your country code, or "none" (see below)
@@ -124,7 +128,7 @@ npm test && npm run typecheck
    CAP_START_DATE = "YYYY-MM-DD"                 # today; only used if you turn on tap-to-approve
    ```
    `GOOGLE_ACCOUNTS` can stay `""`: Google accounts are now connected on the Contacts page (section 9). It's kept for deploys that already use `GOOGLE_RT_<LABEL>` secrets.
-3. Leave the rest as shipped: `DIRECT_SEND = "1"`, `ALLOW_EMAIL_OTP = "1"`, `REQUIRED_AMR = "otp"`, `NOTIFY_MODE = "sms"`, `RUNAWAY_PAUSE = "0"`, `GROUP_MMS = "0"`, `DISABLED = "0"`, `workers_dev = false`.
+Leave the rest as shipped: `DIRECT_SEND = "1"`, `ALLOW_EMAIL_OTP = "1"`, `REQUIRED_AMR = "otp"`, `NOTIFY_MODE = "sms"`, `RUNAWAY_PAUSE = "0"`, `GROUP_MMS = "0"`, `DISABLED = "0"`, `workers_dev = false`.
 
 **TIMEZONE** has no default. If it's missing or misspelled, the relay refuses everything with `timezone_not_configured` or `timezone_invalid` until you fix it.
 
@@ -132,7 +136,7 @@ npm test && npm run typecheck
 
 **Labels:** letters, digits or `_`, with `UPLOAD` reserved. The first label wins when two accounts have the same number.
 
-**Check:** `grep -nE '^[^#]*(REPLACE|example\.com)' wrangler.toml` prints nothing.
+**Check:** `npm run check` prints `check-wrangler: OK`, and `grep -nE '^[^#]*(REPLACE|example\.com)' .relay-local/wrangler.toml` prints nothing once your real hosts are in.
 
 ## 6. Sign in to Cloudflare and store the secrets
 Each `secret put` asks for its value at a hidden prompt. Type or paste it there, nowhere else.
@@ -142,26 +146,26 @@ The Worker doesn't exist yet, so the **first** `secret put` asks: `There doesn't
 npx wrangler login                 # HUMAN STEP: browser sign-in to the NEW account, with your passkey
 npx wrangler whoami                # must show the new account
 openssl rand -hex 32               # this is your bot token. Keep this window open until section 11
-npx wrangler secret put REQUEST_TOKEN
-npx wrangler secret put ACCESS_AUD           # AUD tag from 3.4
-npx wrangler secret put APPROVER_EMAIL       # email from 2.1
-npx wrangler secret put GATEWAY_USER         # from the app (1.6)
-npx wrangler secret put GATEWAY_PASS         # from the app (1.6)
-npx wrangler secret put GATEWAY_DEVICE_ID    # from 1.8
-npx wrangler secret put GATEWAY_PASSPHRASE   # passphrase mode, the default (1.7); skip in device-key mode
-echo passphrase | npx wrangler secret put GATEWAY_MODE   # or device_key if you opted in (1.7)
-npx wrangler secret put OWNER_NUMBER         # YOUR OWN number, + and country code, no spaces
-npx wrangler secret put ALLOWLIST            # {"+<your number>":"Your Name"}: your own number, so you can test
-openssl rand -base64 32 | tr -d '\n' | npx wrangler secret put LOG_HASH_KEY   # made and stored without showing it
-openssl rand -base64 32 | tr -d '\n' | npx wrangler secret put GOOGLE_TOKEN_KEY   # seals Google sign-ins stored by the Worker (section 9)
+npx wrangler -c .relay-local/wrangler.toml secret put REQUEST_TOKEN
+npx wrangler -c .relay-local/wrangler.toml secret put ACCESS_AUD           # AUD tag from 3.4
+npx wrangler -c .relay-local/wrangler.toml secret put APPROVER_EMAIL       # email from 2.1
+npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_USER         # from the app (1.6)
+npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_PASS         # from the app (1.6)
+npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_DEVICE_ID    # from 1.8
+npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_PASSPHRASE   # passphrase mode, the default (1.7); skip in device-key mode
+npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_MODE   # type passphrase at the prompt; or device_key if you opted in (1.7)
+npx wrangler -c .relay-local/wrangler.toml secret put OWNER_NUMBER         # YOUR OWN number, + and country code, no spaces
+npx wrangler -c .relay-local/wrangler.toml secret put ALLOWLIST            # {"+<your number>":"Your Name"}: your own number, so you can test
+openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put LOG_HASH_KEY   # made and stored without showing it
+openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY   # seals Google sign-ins stored by the Worker (section 9)
 ```
 Device-key mode (opt-in): don't type the pin: run `gateway-check` then `confirm-fingerprint` (section 1, step 9). They store `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` for you (on the Worker too, once it's deployed); `secrets` sends them otherwise.
 
-**Check:** `npx wrangler secret list` shows these names (values are never shown): REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, GATEWAY_MODE, GATEWAY_PASSPHRASE (device-key mode: GATEWAY_PINNED_FINGERPRINT and GATEWAY_KEY_VERSION instead), OWNER_NUMBER, ALLOWLIST, LOG_HASH_KEY, GOOGLE_TOKEN_KEY.
+**Check:** `npx wrangler -c .relay-local/wrangler.toml secret list` shows these names (values are never shown): REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, GATEWAY_MODE, GATEWAY_PASSPHRASE (device-key mode: GATEWAY_PINNED_FINGERPRINT and GATEWAY_KEY_VERSION instead), OWNER_NUMBER, ALLOWLIST, LOG_HASH_KEY, GOOGLE_TOKEN_KEY.
 
 ## 7. First deploy
 ```sh
-npx wrangler deploy                # HUMAN STEP: you run it and read the output
+npx wrangler deploy -c .relay-local/wrangler.toml                # HUMAN STEP: you run it and read the output
 ```
 Then, from your computer and not signed in:
 ```sh
@@ -202,9 +206,9 @@ You use **your own** Google Cloud project, so your contacts only ever go to your
 8. Press **Sync now**. After that, a daily sync runs on its own. A failed sync keeps the last good list and texts you once.
 9. **HUMAN STEP:** on the same page, turn on the people you want the bot to text (see "Contacts page" below). Everyone starts **off**.
 
-**Reconnect** signs in again for the same name (use it after `google_token_status_400`). **Disconnect** asks first, then revokes the access at Google and deletes the stored sign-in and that account's contacts. If Google doesn't confirm the revoke, it still deletes and tells you; remove it at https://myaccount.google.com/connections. Disconnect also stops the old fallback: an account still listed in `GOOGLE_ACCOUNTS` (with a `GOOGLE_RT_<LABEL>` secret) is no longer synced from the secret. The page then shows a note to remove it from `GOOGLE_ACCOUNTS`, deploy, and run `npx wrangler secret delete GOOGLE_RT_<LABEL>`. Connecting that name again clears this.
+**Reconnect** signs in again for the same name (use it after `google_token_status_400`). **Disconnect** asks first, then revokes the access at Google and deletes the stored sign-in and that account's contacts. If Google doesn't confirm the revoke, it still deletes and tells you; remove it at https://myaccount.google.com/connections. Disconnect also stops the old fallback: an account still listed in `GOOGLE_ACCOUNTS` (with a `GOOGLE_RT_<LABEL>` secret) is no longer synced from the secret. The page then shows a note to remove it from `GOOGLE_ACCOUNTS`, deploy, and run `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_RT_<LABEL>`. Connecting that name again clears this.
 
-**Upgrading a relay that uses `GOOGLE_RT_<LABEL>` secrets:** nothing breaks. Those accounts keep syncing from the secrets and show as "legacy" on the page, and `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` still work. A sign-in or client saved on the page wins over the secret. To move over: add `GOOGLE_TOKEN_KEY` (section 6), add the redirect URI from step 5 to your client (a Desktop client can't take one, so create a Web client), press Reconnect for each account, then delete the old secrets with `npx wrangler secret delete GOOGLE_RT_<LABEL>`. `scripts/google-consent.mjs` (setup step `google`) is **legacy**. It still works for the secret-based setup, but new deploys don't need it.
+**Upgrading a relay that uses `GOOGLE_RT_<LABEL>` secrets:** nothing breaks. Those accounts keep syncing from the secrets and show as "legacy" on the page, and `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` still work. A sign-in or client saved on the page wins over the secret. To move over: add `GOOGLE_TOKEN_KEY` (section 6), add the redirect URI from step 5 to your client (a Desktop client can't take one, so create a Web client), press Reconnect for each account, then delete the old secrets with `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_RT_<LABEL>`. `scripts/google-consent.mjs` (setup step `google`) is **legacy**. It still works for the secret-based setup, but new deploys don't need it.
 
 **Check:** the page says "Sync finished", and its Health panel shows a number count and a "last good" time for each account. (`/direct` also has a **Sync contacts now** button that answers `{"updated":["PRIMARY"],"failed":[]}`.)
 
@@ -233,7 +237,7 @@ The same codes show in the Contacts page's Health panel with this fix text.
 - **Resolve preview** shows what the bot would match for a name ("one", "ambiguous" with each last 4, or "no match" with the reason, such as "exists but is off"). It never sends.
 - Numbers like `555-0100`…`555-0199`, and 555 followed by `1234`, are documentation examples, and the page refuses to turn them on.
 - **Upgrading an existing relay:** everyone who could be texted before the update stays on and is flagged as migrated. A banner says how many; **Review migrated** filters to them, and **Turn all migrated off** switches them all off at once. Nothing is turned on by the upgrade that wasn't textable before.
-- **`DIRECT_ALLOWLIST` is deprecated.** On the first request after the update its entries are imported once as the `ALLOWLIST_LEGACY` source and flagged: on only when this is an upgrade of a Worker that had already run and `CONTACTS_SNAPSHOT_ONLY` was `"0"` (the old default, so they were textable); off otherwise. A fresh deploy never switches anyone on. After that the secret is ignored. Review them on the page, then delete it: `npx wrangler secret delete DIRECT_ALLOWLIST`. `CONTACTS_SNAPSHOT_ONLY` is only read by that one-time import; leave it as shipped for this release.
+- **`DIRECT_ALLOWLIST` is deprecated.** On the first request after the update its entries are imported once as the `ALLOWLIST_LEGACY` source and flagged: on only when this is an upgrade of a Worker that had already run and `CONTACTS_SNAPSHOT_ONLY` was `"0"` (the old default, so they were textable); off otherwise. A fresh deploy never switches anyone on. After that the secret is ignored. Review them on the page, then delete it: `npx wrangler -c .relay-local/wrangler.toml secret delete DIRECT_ALLOWLIST`. `CONTACTS_SNAPSHOT_ONLY` is only read by that one-time import; leave it as shipped for this release.
 - The page only reads from Google (`contacts.readonly`) and stores everything in your own Worker. It loads nothing from other sites. The bot's token gets 404 for every `/contacts` path on `<API_HOST>`, so the bot can never turn anyone on.
 
 | You see | Fix |
@@ -255,7 +259,10 @@ curl -sS -X POST "$API/send" -H @<(printf 'Authorization: Bearer %s\n' "$RT") -H
   -d '{"to_name":"Your Name","resolve":true}'
 ```
 - Expect `"state":"one"` with a `candidate_id`. Nothing is sent by this call.
-- If you get `ambiguous`, pick from the `candidates` by label. If you get `no_match`, use the exact name from `ALLOWLIST`.
+- One person is `to_name`. `to_names` is an array of 2 or 3. `to_names` with one entry is 400 `multi_send_needs_2_to_3`, including when `resolve` is true, and nothing is sent.
+- Allow-list entries match the saved JSON label (and the first word of that label). A longer name than the label is `no_match`. The label is the name on the Contacts page row badged `always on (ALLOWLIST)`, and the part before ` (unlabeled)` in a resolve candidate. `secret list` does not show it.
+- The read-back is the bot, in chat or by voice. The relay plays no audio and returns no read-back text. `resolve` and `/send` answers are JSON only.
+- If you get `ambiguous`, pick from the `candidates` by label. If you get `no_match`, use the exact saved label, not a longer name.
 
 Then send it, using the formatting rule (below):
 ```sh
@@ -300,7 +307,7 @@ unset RT CID
 **Check:** the bot's section 10 test passes: it reads the test back, waits for your yes, sends it, and the text arrives.
 
 ## 12. Optional switches
-Each one is a `[vars]` line in `wrangler.toml`, followed by `npx wrangler deploy`.
+Each one is a `[vars]` line in `.relay-local/wrangler.toml`, followed by `npx wrangler deploy -c .relay-local/wrangler.toml`.
 
 | Want | Set | Effect |
 |---|---|---|
@@ -323,14 +330,14 @@ A typo in one of these (a word, `0` where it isn't allowed, a decimal, an out-of
 ## 13. Kill switch and rollback
 Any one of these stops texting:
 - **Fastest, no deploy:** Cloudflare dashboard, Workers & Pages, your Worker, Settings, Variables: set `DISABLED` to `1`. Then put `DISABLED = "1"` in wrangler.toml too, or the next deploy turns it back on.
-- `DISABLED = "1"` (everything) or `DIRECT_SEND = "0"` (direct sends only) in wrangler.toml, then `npx wrangler deploy`.
-- `npx wrangler secret put REQUEST_TOKEN` with a new value. The bot's token stops working at once.
+- `DISABLED = "1"` (everything) or `DIRECT_SEND = "0"` (direct sends only) in `.relay-local/wrangler.toml`, then `npx wrangler deploy -c .relay-local/wrangler.toml`.
+- `npx wrangler -c .relay-local/wrangler.toml secret put REQUEST_TOKEN` with a new value. The bot's token stops working at once.
 - **On the phone:** tap **Online** so it goes **Offline**, or turn off Cloud Server.
 
 **Rollback** after a bad deploy:
 ```sh
-npx wrangler deployments list         # find the last good version id
-npx wrangler rollback <version-id>
+npx wrangler deployments list -c .relay-local/wrangler.toml         # find the last good version id
+npx wrangler rollback -c .relay-local/wrangler.toml <version-id>
 ```
 Docs: https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/
 
@@ -341,19 +348,19 @@ Rollback doesn't undo secrets or stored data.
 ## 14. Rotating secrets
 | What | How |
 |---|---|
-| Bot token | `openssl rand -hex 32`, then `npx wrangler secret put REQUEST_TOKEN`, then give the new one to the bot's secret prompt |
-| Gateway password | Regenerate it in the app's Cloud Server settings, then `npx wrangler secret put GATEWAY_PASS` |
-| Passphrase (no device key only) | New `openssl rand -base64 32`. Set it in the app **and** with `npx wrangler secret put GATEWAY_PASSPHRASE` right after. Texts fail until both match |
-| Log key | `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler secret put LOG_HASH_KEY` (stored contacts are re-hashed on the next send) |
+| Bot token | `openssl rand -hex 32`, then `npx wrangler -c .relay-local/wrangler.toml secret put REQUEST_TOKEN`, then give the new one to the bot's secret prompt |
+| Gateway password | Regenerate it in the app's Cloud Server settings, then `npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_PASS` |
+| Passphrase (no device key only) | New `openssl rand -base64 32`. Set it in the app **and** with `npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_PASSPHRASE` right after. Texts fail until both match |
+| Log key | `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler -c .relay-local/wrangler.toml secret put LOG_HASH_KEY` (stored contacts are re-hashed on the next send) |
 | Device key | In the app, Settings, Device…, Device Key, **Rotate device key**. Then run `gateway-check` then `confirm-fingerprint` (section 1 step 9); they update the Worker. Sends refuse until you confirm |
 | Google access | **Disconnect** the account on the Contacts page (revokes at Google and deletes it), then **Connect Google** again. Legacy secret accounts: remove the app at https://myaccount.google.com/connections, then press Reconnect |
 | Google client secret | In the console's Clients page, add a new secret, paste it with the Client ID in the Contacts page's **Save client** form, then delete the old secret in the console |
-| `GOOGLE_TOKEN_KEY` | `npx wrangler secret put GOOGLE_TOKEN_KEY_OLD` with the **current** value, then `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler secret put GOOGLE_TOKEN_KEY`. The old key still decrypts, and each stored sign-in is re-sealed under the new key at the next sync, and the client at the next sync or Contacts page visit. Delete the old one **only after every stored sign-in has been re-sealed**: press **Sync now** on the Contacts page, reload it, and check that the Google accounts panel reads "All N stored Google sign-ins are on the current GOOGLE_TOKEN_KEY" (while any are left it says "X of N … are still on the old GOOGLE_TOKEN_KEY"). Then `npx wrangler secret delete GOOGLE_TOKEN_KEY_OLD`. An account whose sync failed isn't re-sealed, so fix it first or Reconnect it. Without `_OLD`, stored sign-ins fail with `google_token_key_missing` until you Reconnect and paste the client again |
+| `GOOGLE_TOKEN_KEY` | `npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY_OLD` with the **current** value, then `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY`. The old key still decrypts, and each stored sign-in is re-sealed under the new key at the next sync, and the client at the next sync or Contacts page visit. Delete the old one **only after every stored sign-in has been re-sealed**: press **Sync now** on the Contacts page, reload it, and check that the Google accounts panel reads "All N stored Google sign-ins are on the current GOOGLE_TOKEN_KEY" (while any are left it says "X of N … are still on the old GOOGLE_TOKEN_KEY"). Then `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_TOKEN_KEY_OLD`. An account whose sync failed isn't re-sealed, so fix it first or Reconnect it. Without `_OLD`, stored sign-ins fail with `google_token_key_missing` until you Reconnect and paste the client again |
 
 Do it right away if a phone, computer or bot that held one is lost or compromised.
 
 ## 15. Teardown (remove everything)
-1. `npx wrangler delete` (removes the Worker and its stored contacts and log). Confirm in the dashboard that it's gone.
+1. `npx wrangler delete -c .relay-local/wrangler.toml` (removes the Worker and its stored contacts and log). Confirm in the dashboard that it's gone.
 2. Zero Trust: delete the Access application and its policy.
 3. DNS: remove any records left for `<API_HOST>` and `<APPROVE_HOST>`.
 4. Google: remove the app at https://myaccount.google.com/connections for each account, then delete the Cloud project (https://console.cloud.google.com/, IAM & Admin, Settings, Shut down).

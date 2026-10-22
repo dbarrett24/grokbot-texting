@@ -1,0 +1,14 @@
+# Fixture: both harbor rules, main resolves to src/index.ts. Not a deploy config.
+name = "sms-relay"
+main = "../../../src/index.ts"
+compatibility_date = "2026-10-01"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.css"]
+fallthrough = false
+
+[[rules]]
+type = "Data"
+globs = ["**/*.webp", "**/*.woff2"]
+fallthrough = false

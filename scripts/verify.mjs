@@ -6,7 +6,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
-const steps = ["typecheck", "typecheck:strict-next", "typecheck:scripts", "lint", "lint:ratchet", "check:env-docs", "check:ancestors", "check:pii", "test"];
+const steps = ["typecheck", "typecheck:strict-next", "typecheck:scripts", "lint", "lint:ratchet", "check", "check:env-docs", "check:ancestors", "check:pii", "test"];
 /** @type {unknown} */
 const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 const scripts = typeof pkg === "object" && pkg !== null && "scripts" in pkg && typeof pkg.scripts === "object" && pkg.scripts !== null ? pkg.scripts : {};

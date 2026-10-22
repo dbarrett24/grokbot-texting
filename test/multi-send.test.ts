@@ -169,6 +169,15 @@ describe("multi-send guards", () => {
     await expectRefused(await direct(b), 400, { error: code });
   });
 
+  it("one recipient uses to_name; to_names with one entry is multi_send_needs_2_to_3", async () => {
+    const named = await direct({ to_name: "Coach Taylor", resolve: true });
+    expect(named.status).toBe(200);
+    expect(await named.json()).toMatchObject({ state: "one" });
+    await expectRefused(await direct({ to_names: ["Coach Taylor"], body: "x" }), 400, { error: "multi_send_needs_2_to_3" });
+    await expectRefused(await direct({ to_names: ["Coach Taylor"], resolve: true }), 400, { error: "multi_send_needs_2_to_3" });
+    expect(h.calls.filter((c) => c.url.endsWith("/messages"))).toHaveLength(0);
+  });
+
   it.each([
     [{ to_names: ["Coach Taylor", 5], body: "x" }, 1],
     [{ to_names: [null, "Coach Taylor"], body: "x" }, 0],
