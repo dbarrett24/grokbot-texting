@@ -16,14 +16,14 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$RepoUrl = if ($env:RELAY_REPO_URL) { $env:RELAY_REPO_URL } else { 'https://github.com/OWNER/sms-relay-template.git' }  # set to the public repo when it is published
+$RepoUrl = if ($env:RELAY_REPO_URL) { $env:RELAY_REPO_URL } else { 'https://github.com/OWNER/grokbot-texting.git' }  # set to the public repo when it is published
 $NodeLine = 'latest-v22.x'
 $NodeMin = 20
 $NodeHome = Join-Path $env:LOCALAPPDATA 'sms-relay\node'
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Parent = Split-Path -Parent $Here
 if ($env:RELAY_DIR) { $Dir = $env:RELAY_DIR }
-elseif ((Test-Path (Join-Path $Parent 'package.json')) -and (Select-String -Quiet -Path (Join-Path $Parent 'package.json') -Pattern '"sms-relay-template"')) { $Dir = $Parent }
+elseif ((Test-Path (Join-Path $Parent 'package.json')) -and (Select-String -Quiet -Path (Join-Path $Parent 'package.json') -Pattern '"(grokbot-texting|sms-relay-template)"')) { $Dir = $Parent }
 else { $Dir = Join-Path $HOME 'texting-relay' }
 if (Test-Path (Join-Path $NodeHome 'node.exe')) { $env:PATH = "$NodeHome;$env:PATH" }
 $Dry = $Rest -contains '--dry-run'
