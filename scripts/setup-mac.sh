@@ -8,13 +8,13 @@
 # Secrets never appear on screen, in a log, or on a command line. They stay in .relay-local/ (gitignored).
 set -euo pipefail
 
-REPO_URL="${RELAY_REPO_URL:-https://github.com/OWNER/sms-relay-template.git}"   # set to the public repo when it is published
+REPO_URL="${RELAY_REPO_URL:-https://github.com/OWNER/grokbot-texting.git}"   # set to the public repo when it is published
 NODE_LINE="latest-v22.x"
 NODE_MIN=20
 NODE_HOME="$HOME/.sms-relay/node"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -n "${RELAY_DIR:-}" ]; then DIR="$RELAY_DIR"
-elif [ -f "$HERE/../package.json" ] && grep -q '"sms-relay-template"' "$HERE/../package.json"; then DIR="$(cd "$HERE/.." && pwd)"
+elif [ -f "$HERE/../package.json" ] && grep -qE '"(grokbot-texting|sms-relay-template)"' "$HERE/../package.json"; then DIR="$(cd "$HERE/.." && pwd)"
 else DIR="$HOME/texting-relay"; fi
 [ -x "$NODE_HOME/bin/node" ] && PATH="$NODE_HOME/bin:$PATH"
 export PATH

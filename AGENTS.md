@@ -1,4 +1,4 @@
-# AGENTS.md: sms-relay-template
+# AGENTS.md: grokbot-texting
 
 You are probably an agent that has opened only a few files. This page is short on purpose. The repo is built so the
 easy path is the right one, and checks catch what the structure can't. Trust order (poteto's inverse pyramid):

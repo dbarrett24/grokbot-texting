@@ -1,9 +1,9 @@
 ---
 name: verify-sms-relay
-description: Prove a change to sms-relay-template works before asking for review. Use after any edit to src/, mac/, scripts/, tests, config or docs, and before opening or updating a PR.
+description: Prove a change to grokbot-texting works before asking for review. Use after any edit to src/, mac/, scripts/, tests, config or docs, and before opening or updating a PR.
 ---
 
-# Verify sms-relay-template (prove it works)
+# Verify grokbot-texting (prove it works)
 
 Don't say "done" or "should work". Show evidence from the final commit.
 

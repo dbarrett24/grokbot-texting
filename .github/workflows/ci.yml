@@ -1,4 +1,4 @@
-# CI for sms-relay-template: a subset of `npm run verify` (see AGENTS.md).
+# CI for grokbot-texting: a subset of `npm run verify` (see AGENTS.md).
 # Blocking: npm ci, both tsc configs (`npm run typecheck`), `npm test`, gitleaks, `npm run check:ancestors`.
 # Advisory (continue-on-error, so in-flight branches aren't blocked): lint + lint ratchet, strict-next and .mjs
 # typecheck ratchets, env/doc drift. They become blocking in a later PR, once the contacts work has merged.
