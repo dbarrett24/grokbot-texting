@@ -34,7 +34,8 @@ npm run walk        # prints "walk: ready in N ms -> http://127.0.0.1:8787/conta
   the same list.
 - Google is faked in-process (`tools/walk/fake-google.ts`): every Google URL the Worker calls (token, revoke,
   People API) gets fake data, unknown Google paths get 599, and nothing reaches a real Google host. Connect Google
-  skips the consent screen and returns to the callback with the same state and a fake code. To walk it, paste
-  client ID `123-walkonly.apps.googleusercontent.com` and secret `WALK-ONLY-client-secret`, press Connect Google,
-  then Sync now: the fake People list (fictional +44 7700 900xxx numbers and one 555-01xx example) loads.
-  The walk config sets a fake, non-secret `GOOGLE_TOKEN_KEY` so the fake sign-in can be sealed locally.
+  skips the consent screen and returns to the callback with the same state and a fake code. The walk config sets
+  fake, non-secret `GOOGLE_CLIENT_ID` (`123-walkonly.apps.googleusercontent.com`), `GOOGLE_CLIENT_SECRET`
+  (`WALK-ONLY-client-secret`) and `GOOGLE_TOKEN_KEY`, so the page's Connect Google button is enabled without
+  pasting a secret. Press Connect Google, then Sync now: the fake People list (fictional +44 7700 900xxx numbers
+  and one 555-01xx example) loads.

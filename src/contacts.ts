@@ -2,7 +2,7 @@
 // every write takes an `Owner`, and only Relay.requireOwner (Access JWT verified) can make one.
 import type { SignInMethod } from "./access";
 import { Refuse } from "./rules";
-import { HARBOR_CSS } from "./harbor";
+import { HARBOR_CSS, pickerLiveScript } from "./harbor";
 
 declare const OWNER_BRAND: unique symbol;
 /** Proof that Access verified the owner for this request. Not constructible outside requireOwner (type-level). */
@@ -66,7 +66,7 @@ export const TOKEN_KEY_MISSING_FIX = "GOOGLE_TOKEN_KEY is missing or doesn't mat
 
 /** Sync error code → the DEPLOY.md fix text (section 9 table). */
 export const SYNC_FIX: Record<string, string> = {
-  google_client_not_configured: "No Google client yet: finish Set up Google below (paste the Client ID and secret).",
+  google_client_not_configured: "No Google client yet: run node scripts/google-client.mjs (README), then press Connect Google.",
   google_token_key_missing: TOKEN_KEY_MISSING_FIX,
   google_token_decrypt_failed: "The stored Google token can't be read: press Reconnect for that account.",
   default_country_code_invalid: "Set DEFAULT_COUNTRY_CODE (DEPLOY.md section 5) and deploy.",
@@ -99,7 +99,7 @@ export const GCP_PROJECT_LINKS: readonly (keyof typeof GCP_LINKS)[] = ["enablePe
 /** google_error=<code> on /contacts → what to do. Unknown codes get the generic line. */
 export const GOOGLE_ERROR_FIX: Record<string, string> = {
   google_label_invalid: "Use letters, digits or _ for the account name (up to 32), e.g. work.",
-  google_client_not_configured: "Paste the Client ID and secret first (Set up Google).",
+  google_client_not_configured: "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET with node scripts/google-client.mjs (README).",
   google_client_id_invalid: "That doesn't look like a Client ID (it ends in .apps.googleusercontent.com).",
   google_client_secret_invalid: "That doesn't look like a client secret.",
   google_token_key_missing: TOKEN_KEY_MISSING_FIX,
@@ -162,19 +162,13 @@ export interface PageModel {
   googleError: string | null;
 }
 
-/** "Google accounts" panel: accounts with Reconnect/Disconnect, one Connect Google button, and the first-run checklist. */
+/** "Google accounts" panel: accounts with Reconnect/Disconnect, and one Connect Google button. The client id and secret are not on this page. */
 export function renderGooglePanel(g: GooglePanel, csrf: string, googleError: string | null): string {
-  const L = GCP_LINKS;
-  const a = (k: keyof typeof GCP_LINKS, text: string) => {
-    const proj = GCP_PROJECT_LINKS.includes(k);
-    const href = proj && g.project ? withProject(L[k], g.project) : L[k];
-    return `<a href="${esc(href)}" target=_blank rel="noopener noreferrer"${proj ? ` data-gproj data-base="${L[k]}"` : ""}>${text}</a>`;
-  };
   const canConnect = g.tokenKey === "ok" && g.client !== null && g.client !== "unreadable";
   const rows = g.accounts.map((x) => `<li><b>${esc(x.label)}</b>: ${x.stored ? `Connected${x.connected ? " " + esc(x.connected) : ""}` : x.fromSeed ? "from secret GOOGLE_RT_" + esc(x.label) + " (legacy)" : "not connected"}
 <form method=post action="/contacts/google/start" class=inl><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button${canConnect ? "" : " disabled"}>Reconnect</button></form>${x.stored ? `<form method=post action="/contacts/google/disconnect" class=inl data-confirm="Stop syncing ${esc(x.label)}? Its contacts are removed from the list, and Google access is revoked."><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button>Disconnect</button></form>` : ""}</li>`).join("");
   const keyWarn = g.tokenKey === "ok" ? "" : `<p class=warn>GOOGLE_TOKEN_KEY is ${g.tokenKey === "missing" ? "not set" : "not valid"}, so Google sign-in can't store anything. Run setup step <code>keys</code>, then <code>secrets</code>.</p>`;
-  const clientLine = g.client === "stored" ? "Google client: saved here." : g.client === "secrets" ? "Google client: from the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET secrets. Pasting one below replaces it here." : g.client === "unreadable" ? `<span class=warn>Google client: saved, but it can't be read (GOOGLE_TOKEN_KEY changed?). Paste it again below.</span>` : "Google client: not set up yet.";
+  const clientLine = g.client === "stored" ? "Google client: saved here." : g.client === "secrets" ? "Google client: from the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET secrets." : g.client === "unreadable" ? `<span class=warn>Google client: saved, but it can't be read (GOOGLE_TOKEN_KEY changed?). Run <code>node scripts/google-client.mjs --file=client.json</code> again.</span>` : "Google client: not set up yet. Run <code>node scripts/google-client.mjs --file=client.json</code> (README).";
   return `<section id=google aria-labelledby=gh><h2 id=gh>Google accounts</h2>
 ${googleError ? `<p class=warn role=alert>Google: <code>${esc(googleError)}</code>. ${esc(googleErrorFix(googleError))}</p>` : ""}${keyWarn}
 ${g.leftovers.map((l) => `<p class=warn>${esc(l)} was disconnected here and no longer syncs, but it is still set up the old way. Remove it from <code>GOOGLE_ACCOUNTS</code> in wrangler.toml, deploy, and run <code>npx wrangler secret delete GOOGLE_RT_${esc(l)}</code>.</p>`).join("")}
@@ -182,17 +176,7 @@ ${g.keyStatus.onOld > 0 ? `<p class=warn id=gkeys>${g.keyStatus.onOld} of ${g.ke
 <ul id=gaccts>${rows || "<li>No Google accounts yet.</li>"}</ul>
 <form method=post action="/contacts/google/start" class=bar id=gconnect><input type=hidden name=csrf value="${csrf}"><label for=glabel>Account name</label><input type=text id=glabel name=label required maxlength=32 pattern="[A-Za-z0-9_]+" placeholder="work" autocomplete=off><button${canConnect ? "" : " disabled"}>Connect Google</button></form>
 <p class=ro>${clientLine}</p>
-<details id=gsetup${g.client === null || g.client === "unreadable" ? " open" : ""}><summary>Set up Google</summary>
-<p class=ro>Your own Google Cloud project, so your contacts only ever go to your Worker. Links open in a new tab. Google can only prefill the project; type the rest as shown.</p>
-<ol>
-<li>${a("createProject", "Create a project")}. Name it <code>contacts-relay</code>. Then type its <b>project ID</b> here: the next links open in that project (otherwise the console opens whichever project you used last). <input type=text id=gproj autocomplete=off spellcheck=false placeholder="contacts-relay-123456" aria-label="Project ID" value="${esc(g.project ?? "")}"></li>
-<li>${a("enablePeople", "Enable the People API")} (if that page errors: ${a("peopleLibrary", "People API in the library")}, then Enable).</li>
-<li>${a("branding", "Branding")}: app name <code>Contacts relay</code>, your email, audience <b>External</b>. If this project's Google Auth Platform is already set up, the link lands on the overview page instead: open Branding there. Then ${a("createClient", "create an OAuth client")}: type <b>Web application</b>, and under Authorized redirect URIs add exactly:<br><code id=gredir>${esc(g.redirectUri)}</code> <button type=button id=gcopy>Copy</button></li>
-<li>Google shows the Client secret only once. Paste both here:
-<form method=post action="/contacts/google/client" id=gclient><input type=hidden name=csrf value="${csrf}"><label for=gcid>Client ID</label><input type=text id=gcid name=client_id required autocomplete=off spellcheck=false><label for=gcsec>Client secret</label><input type=password id=gcsec name=client_secret required autocomplete=off><button${g.tokenKey === "ok" ? "" : " disabled"}>Save client</button></form></li>
-</ol>
-<p class=ro>Press <b>Connect Google</b> above. On "Google hasn't verified this app": Advanced, then Go to Contacts relay (it's your own app). Tick only the contacts box. Then press <b>Sync now</b>.</p>
-</details></section>`;
+</section>`;
 }
 
 /** Server-rendered shell + one inline module. No framework, no third-party origin, numbers never in HTML. */
@@ -202,14 +186,14 @@ export function renderContactsPage(m: PageModel): string {
 <style nonce="${m.nonce}">
 ${HARBOR_CSS}
 </style>
-${m.leaves ?? ""}<h1 class=product>GrokBot Texting</h1>
+${m.leaves ?? ""}<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=32 height=32><h1 class=product>GrokBot Texting</h1></header>
 <p>Switch on the people this bot may text. New people start off.</p>
 ${m.hashKeyMissing ? `<p class=warn>LOG_HASH_KEY is missing or short, so the list can't be shown. Run setup step keys, then secrets.</p>` : ""}
 ${m.migratedOn > 0 ? `<div class=banner id=banner role=status><b>${m.migratedOn}</b> people were reachable before this update and are still on. Review them. <button id=review>Review migrated</button> <button id=migoff>Turn all migrated off</button></div>` : ""}
 <h2>Contacts</h2>
 <label for=q class=ro>Search by name</label><input type=search id=q autocomplete=off>
 <div class=bar role=group aria-label="Filter">${["All", "On", "Off", "Starred", "Migrated", "New"].map((f, i) => `<button data-f="${f}" aria-pressed="${i === 0}">${f === "New" ? "New since last visit" : f}</button>`).join("")}</div>
-<div class=bar><button id=enall>Enable all shown</button><span id=count class=ro></span></div>
+<div class=bar><button id=enall>Enable all shown</button><span id=count class=ro></span><label class=ro for=per>Per page</label><select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select><button id=prev>Previous</button><button id=next>Next</button><span id=page class=ro></span></div>
 <ul id=list aria-label="People"></ul>
 <h2>Sync</h2>
 <form method=post action="/direct/sync" class=bar>${m.canSync ? `<input type=hidden name=csrf value="${m.csrf}"><input type=hidden name=from value=contacts><button id=sync>Sync now</button>` : "<span>No Google accounts yet: use Connect Google below.</span>"}</form>
@@ -217,11 +201,12 @@ ${err}
 ${renderGooglePanel(m.google, m.csrf, m.googleError)}
 <div id=toast role=status aria-live=polite></div>
 <script type=module nonce="${m.nonce}">
-const CSRF=${JSON.stringify(m.csrf)};let rows=[],filter="All";const $=(s)=>document.querySelector(s);
+const CSRF=${JSON.stringify(m.csrf)};let rows=[],filter="All",page=0;const $=(s)=>document.querySelector(s);
 const toast=(t)=>{const e=$("#toast");e.textContent=t;e.style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display="none",4000)};
 const post=async(p,b)=>{const r=await fetch(p,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({csrf:CSRF,...b})});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.message||j.error||("http_"+r.status));return j};
 const shown=()=>{const q=$("#q").value.trim().toLowerCase();return rows.filter(r=>(!q||r.name.toLowerCase().includes(q))&&(filter==="All"||(filter==="On"&&r.enabled)||(filter==="Off"&&!r.enabled)||(filter==="Starred"&&r.starred)||(filter==="Migrated"&&r.migrated)||(filter==="New"&&r.new)))};
-function render(){const L=$("#list");L.textContent="";const s=shown();$("#count").textContent=s.length+" shown";for(const r of s){const li=document.createElement("li");
+const per=()=>{const n=Number($("#per").value);return n===10||n===25||n===50||n===100?n:25};
+function render(){const L=$("#list");L.textContent="";const s=shown();const size=per();const pages=Math.max(1,Math.ceil(s.length/size));if(page>pages-1)page=pages-1;if(page<0)page=0;const view=s.slice(page*size,(page+1)*size);$("#count").textContent=s.length+" shown";$("#page").textContent=s.length?(page*size+1)+"-"+(page*size+view.length)+" of "+s.length:"";$("#prev").disabled=page<=0;$("#next").disabled=page+1>=pages;for(const r of view){const li=document.createElement("li");
 const w=document.createElement("div");w.className="who";w.textContent=r.name;const sm=document.createElement("small");sm.textContent=r.label+" \\u2022\\u2022\\u2022\\u2022 "+r.last4+(r.migrated?" \\u00b7 migrated":"");w.append(sm);
 if(r.readonly){const b=document.createElement("span");b.className="ro";b.textContent="always on (ALLOWLIST)";li.append(w,b);L.append(li);continue}
 const st=document.createElement("button");st.className="star";st.textContent=r.starred?"\\u2605":"\\u2606";st.setAttribute("aria-pressed",String(r.starred));st.setAttribute("aria-label",(r.starred?"Unstar ":"Star ")+r.name);
@@ -231,17 +216,14 @@ sw.onclick=async()=>{const on=!r.enabled;if(on&&!confirm("Text "+r.name+" at \\u
 li.append(st,w,sw);L.append(li)}}
 const sort=()=>rows.sort((a,b)=>(b["starred"]-a.starred)||a.name.localeCompare(b.name));
 async function load(){const r=await fetch("/contacts/list");if(!r.ok){toast("Could not load the list");return}rows=(await r.json()).people;sort();render()}
-$("#q").oninput=render;document.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{filter=b.dataset.f;document.querySelectorAll("[data-f]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));render()});
+$("#q").oninput=()=>{page=0;render()};document.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{filter=b.dataset.f;page=0;document.querySelectorAll("[data-f]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));render()});
+$("#per").onchange=()=>{page=0;render()};$("#prev").onclick=()=>{page=Math.max(0,page-1);render()};$("#next").onclick=()=>{page++;render()};
 $("#enall").onclick=async()=>{const s=shown().filter(r=>!r.readonly&&!r.enabled);if(!s.length){toast("Everyone shown is already on");return}if(!confirm("Turn on "+s.length+" people? The bot can then text them."))return;
 try{const j=await post("/contacts/enable-all",{keys:s.map(r=>r.key),confirm_count:s.length});toast("Turned on "+j.updated+(j.skipped_example?" ("+j.skipped_example+" example numbers skipped)":""));await load()}catch(e){toast("Error: "+e.message)}};
 const rv=$("#review");if(rv)rv.onclick=()=>document.querySelector('[data-f="Migrated"]').click();
 const mo=$("#migoff");if(mo)mo.onclick=async()=>{const n=rows.filter(r=>r.migrated&&r.enabled).length;if(!confirm("Turn off all "+n+" migrated people?"))return;try{const j=await post("/contacts/migrated-off",{confirm_count:n});toast("Turned off "+j.updated);$("#banner").remove();await load()}catch(e){toast("Error: "+e.message)}};
-const withProject=${withProject.toString()};
-const gp=$("#gproj");if(gp){const fix=()=>{const id=gp.value.trim();try{localStorage.setItem("gproj",id)}catch{}document.querySelectorAll("a[data-gproj]").forEach(a=>{a.href=withProject(a.dataset.base,id)})};
-try{if(!gp.value)gp.value=localStorage.getItem("gproj")||""}catch{}fix();gp.oninput=fix;
-document.querySelectorAll("a[data-gproj]").forEach(a=>a.addEventListener("click",(ev)=>{if(!new URL(a.href).searchParams.get("project")){ev.preventDefault();gp.focus();toast("Type the project ID first, so this opens in the right project")}}))}
-const gc=$("#gcopy");if(gc)gc.onclick=async()=>{try{await navigator.clipboard.writeText($("#gredir").textContent);toast("Copied")}catch{toast("Select it and copy")}};
 document.querySelectorAll("form[data-confirm]").forEach(f=>f.addEventListener("submit",(ev)=>{if(!confirm(f.dataset.confirm))ev.preventDefault()}));
+${pickerLiveScript()}
 ${m.toast ? `toast(${JSON.stringify(m.toast)});` : ""}load();
 </script></html>`;
 }

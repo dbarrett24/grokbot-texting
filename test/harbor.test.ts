@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { harness, postRequest, API, BASE, FRIEND, type Harness } from "./helpers";
-import { HARBOR_CSS, HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH } from "../src/harbor";
+import { scan } from "./phone-scan";
+import { HARBOR_CSS, HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH, HARBOR_LOGO_PATH, pickerLiveScript } from "../src/harbor";
+import { installPicker } from "../src/harbor-picker";
 
 // Everyday Harbor look: one CSS file inlined into each page, the heading font served by the Worker. The CSPs must be
 // exactly what they were before the look was added.
@@ -20,6 +22,18 @@ describe("Harbor look", () => {
     // Backdrop on a fixed layer: never background-attachment:fixed (ignored on iOS Safari, repaints on scroll).
     expect(HARBOR_CSS).not.toContain("background-attachment");
     expect(HARBOR_CSS).toContain('html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-backdrop)');
+    expect(HARBOR_CSS).toContain(".brand{display:inline-flex;gap:0.625rem;align-items:center}");
+    expect(HARBOR_CSS).toContain(".brand-logo{display:block;width:32px;height:32px;max-width:40px;max-height:40px}");
+    expect(HARBOR_CSS).toContain("@media (max-width:480px){.brand-logo{width:28px;height:28px}}");
+    expect(HARBOR_CSS).toContain("h1.product{font-size:2.15em;line-height:1.15;margin:.1em 0 .35em;color:var(--h-text)}");
+    expect(HARBOR_CSS).not.toMatch(/h1\.product\{[^}]*var\(--h-link\)/);
+    expect(HARBOR_CSS).toContain("body:has(.hl-photo) .brand-logo{box-shadow:0 0 0 1px rgb(255,255,255,.18);border-radius:23%}");
+    expect(HARBOR_CSS).toContain(".vh{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}");
+    expect(HARBOR_CSS).not.toMatch(/\.vh\{[^}]*display:none/);
+    expect(HARBOR_CSS).toContain("input:checked+label.hb-opt");
+    expect(HARBOR_CSS).toContain("input:focus-visible+label.hb-opt");
+    expect(HARBOR_CSS).toContain("repeat(auto-fill,minmax(8.75rem,1fr))");
+    expect(HARBOR_CSS).toContain("width:128px");
     expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(8_000); // 6 KB before the leaf + picker mockups
   });
 
@@ -31,6 +45,18 @@ describe("Harbor look", () => {
     expect(new TextDecoder().decode(b.slice(0, 4))).toBe("wOF2");
     expect(b.length).toBeLessThan(25_000);
     expect((await h.relay.fetch(`${API}${HARBOR_FONT_PATH}`)).status).toBe(404);
+  });
+
+  it("logo: the contacts mark, served as SVG on the approve host only", async () => {
+    scan.allow.push('viewBox="0 0 288 288"'); // path coordinates are not phone numbers; the scan sees the file as one string
+    const r = await get(`${BASE}${HARBOR_LOGO_PATH}`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("image/svg+xml");
+    const text = await r.text();
+    expect(text).toContain('viewBox="0 0 288 288"');
+    expect(text).toContain("mask-type:luminance"); // the eyes; a renderer that drops luminance masks loses them
+    expect(r.headers.get("content-security-policy")).toBe("script-src 'none'");
+    expect((await h.relay.fetch(`${API}${HARBOR_LOGO_PATH}`)).status).toBe(404);
   });
 
   it("/direct: Harbor CSS without @font-face, CSP unchanged", async () => {
@@ -65,7 +91,7 @@ describe("Harbor leaf mockups (?leaves=)", () => {
     const direct = await get(`${BASE}/direct`);
     const plain = await direct.text();
     expect(plain).toContain("<svg class=hl-leaves aria-hidden=true"); // photo-vines falls back to the vines SVG
-    expect(plain).toContain('value="photo-vines" checked');
+    expect(plain).toContain('value="photo-vines" aria-pressed=true');
     expect(direct.headers.get("content-security-policy")).toBe(STRICT_CSP);
     const contacts = await (await get(`${BASE}/contacts`)).text();
     expect(contacts).toContain('<div class="hl-photo hl-photo-vines" aria-hidden=true></div>');
@@ -87,7 +113,7 @@ describe("Harbor leaf mockups (?leaves=)", () => {
     }
     const unknown = await (await get(`${BASE}/direct?leaves=__proto__`)).text();
     expect(unknown).not.toContain("__proto__");
-    expect(unknown).toContain('value="photo-vines" checked');
+    expect(unknown).toContain('value="photo-vines" aria-pressed=true');
   });
 });
 
@@ -118,16 +144,25 @@ describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
   });
 });
 
-describe("Background picker (no JS, cookie)", () => {
+describe("Background picker (cookie, live on /contacts)", () => {
   const pick = async (leaves: string, back: string, origin = BASE) =>
     h.relay.fetch(`${BASE}/harbor/background`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", Origin: origin, "Cf-Access-Jwt-Assertion": await h.jwt() }, body: new URLSearchParams({ leaves, back }).toString(), redirect: "manual" });
-  it("every page has the radio group; the post sets a cookie and the page then renders that background server-side", async () => {
+  it("every page posts the same cookie form; /contacts uses radios and /direct uses a tile button, neither has an Apply step", async () => {
     for (const p of ["/direct", "/contacts"]) {
       const html = await (await get(`${BASE}${p}`)).text();
-      expect(html).toContain('<details class=hb-pick><summary>Background</summary><form method=post action="/harbor/background"><fieldset><legend>Page background</legend>');
-      expect((html.match(/type=radio name=leaves/g) ?? []).length).toBe(4);
+      expect(html).toContain('<form method=post action="/harbor/background"');
+      expect(html).toContain("<legend class=vh>Page background</legend>");
       expect(html).not.toContain("(photo)");
     }
+    const direct = await (await get(`${BASE}/direct`)).text();
+    expect(direct).not.toContain("Apply");
+    expect(direct).not.toContain("type=radio");
+    expect((direct.match(/<button type=submit class=hb-opt name=leaves/g) ?? []).length).toBe(4);
+    const contacts = await (await get(`${BASE}/contacts`)).text();
+    expect(contacts.replace(/<noscript>[\s\S]*?<\/noscript>/g, "")).not.toContain("Apply");
+    expect(contacts).toContain("<noscript><button>Apply</button></noscript>");
+    expect((contacts.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(4);
+    expect(contacts).toContain(pickerLiveScript());
     const r = await pick("photo-vines", "/direct");
     expect(r.status).toBe(303);
     expect(r.headers.get("location")).toBe("/direct");
@@ -137,7 +172,7 @@ describe("Background picker (no JS, cookie)", () => {
     const html = await d.text();
     expect(html).toContain("<svg class=hl-leaves");
     expect(html).not.toContain("hl-photo-");
-    expect(html).toContain('value="photo-vines" checked');
+    expect(html).toContain('value="photo-vines" aria-pressed=true');
     expect(d.headers.get("content-security-policy")).toBe(STRICT_CSP);
     const c = await h.relay.fetch(`${BASE}/contacts`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt(), cookie: "hb_bg=photo-vines" } });
     expect(await c.text()).toContain('<div class="hl-photo hl-photo-vines" aria-hidden=true></div>');
@@ -148,5 +183,62 @@ describe("Background picker (no JS, cookie)", () => {
     for (const removed of ["corners", "vines", "scatter"]) expect((await pick(removed, "/direct")).status).toBe(400);
     expect((await pick("photo-vines", "https://evil.example/")).status).toBe(400);
     expect((await pick("photo-vines", "//evil.example")).status).toBe(400);
+  });
+
+  it("a selection change updates the background and posts the choice, with no Apply step", () => {
+    const script = pickerLiveScript();
+    expect(script).not.toContain("Apply");
+    expect(script).not.toContain("onchange=");
+    expect(script).toContain("function applyPickerChoice");
+    expect(script).toContain('installPicker(document,document.querySelector("#hb-bg"),FormData,fetch)');
+    type El = { className: string; removed?: boolean; setAttribute: (n: string, v: string) => void; remove: () => void };
+    const run = (start: string) => {
+      const listeners: Record<string, () => void> = {};
+      const form = {
+        tagName: "FORM", action: "/harbor/background",
+        values: { leaves: start, back: "/contacts" } as Record<string, string>,
+        addEventListener(type: string, fn: () => void) { listeners[type] = fn; },
+      };
+      const photo: El = { className: "hl-photo hl-photo-vines", setAttribute() {}, remove() { photo.removed = true; } };
+      let current: El | null = photo;
+      const doc = {
+        querySelector(sel: string) {
+          if (sel === ".hl-photo") return current && !current.removed ? current : null;
+          return null;
+        },
+        querySelectorAll() { return []; },
+        createElement(): El {
+          const created: El = { className: "", setAttribute() {}, remove() { created.removed = true; } };
+          return created;
+        },
+        body: { prepend(node: El) { current = node; } },
+      };
+      class FD {
+        constructor(_form: object) { /* the live script passes the form; this fake reads the closed-over values */ }
+        get(k: string) { return form.values[k] ?? null; }
+        forEach(fn: (val: string, key: string) => void) { for (const [k, v] of Object.entries(form.values)) fn(v, k); }
+      }
+      const calls: { method: string; body: URLSearchParams }[] = [];
+      const fetchFn = (_url: string, init: { method: string; body: URLSearchParams }) => { calls.push(init); return Promise.resolve(); };
+      installPicker(doc, form, FD, fetchFn);
+      return { form, photo, listeners, calls };
+    };
+    const live = run("photo-vines");
+    live.form.values["leaves"] = "photo-scatter";
+    live.listeners["change"]?.();
+    expect(live.photo.className).toBe("hl-photo hl-photo-scatter");
+    expect(live.calls).toHaveLength(1);
+    expect(live.calls[0]?.method).toBe("POST");
+    expect(live.calls[0]?.body.get("leaves")).toBe("photo-scatter");
+    expect(live.calls[0]?.body.get("back")).toBe("/contacts");
+    const refused = run("photo-vines");
+    refused.form.values["leaves"] = "photo-nope";
+    refused.listeners["change"]?.();
+    expect(refused.photo.className).toBe("hl-photo hl-photo-vines");
+    expect(refused.calls[0]?.body.get("leaves")).toBe("photo-nope");
+    const cleared = run("photo-vines");
+    cleared.form.values["leaves"] = "none";
+    cleared.listeners["change"]?.();
+    expect(cleared.photo.removed).toBe(true);
   });
 });

@@ -116,7 +116,7 @@ npm test && npm run typecheck
 
 ## 5. Local wrangler config (no secrets go in this file)
 
-Build `.relay-local/wrangler.toml` as [docs/SETUP.md](docs/SETUP.md) Step 2. It is gitignored, so `git pull` never adds the two `[[rules]]` blocks and never sets `main`. The subfolder file needs `main = "../src/index.ts"`, a Text rule for `**/*.css`, and a Data rule for `**/*.woff2` and `**/*.webp`, both with `fallthrough = false`. `npm run check` fails when a rule is missing or wrong, or when `main` does not resolve to `src/index.ts`. Leave the committed `wrangler.toml` as the template.
+Build `.relay-local/wrangler.toml` as [docs/SETUP.md](docs/SETUP.md) Step 2. It is gitignored, so `git pull` never adds the two `[[rules]]` blocks and never sets `main`. The subfolder file needs `main = "../src/index.ts"`, one Text rule for `**/*.css` and `**/*.svg`, and a Data rule for `**/*.woff2` and `**/*.webp`, both with `fallthrough = false`. `npm run check` fails when a rule is missing or wrong, or when `main` does not resolve to `src/index.ts`. Leave the committed `wrangler.toml` as the template.
 
 In that local file, set `routes` to your two hostnames (`custom_domain = true`) and set these under `[vars]`:
    ```toml
@@ -188,17 +188,17 @@ curl -si -X POST https://<API_HOST>/send -H "Authorization: Bearer wrong" \
 ## 9. Google Contacts (who the bot may text)
 Read-only access to your contacts' names and numbers. Emails, notes and addresses are never stored. Everything happens on `https://<APPROVE_HOST>/contacts`, in the **Google accounts** panel. No terminal and no `wrangler secret put` per account.
 
-You use **your own** Google Cloud project, so your contacts only ever go to your Worker. Google has no API for creating this kind of client, so the first part is a few minutes of clicking. The page's **Set up Google** list has the four steps sync needs (project, People API, branding plus the OAuth client, paste). Type your project ID once, and those links open inside that project. Publishing the app (Audience) is not on the page: Testing mode still syncs, and tokens then expire after 7 days.
+You use **your own** Google Cloud project and your own Worker. There is no shared database. The standard web OAuth client (`….apps.googleusercontent.com`) is created in the console; `gcloud` cannot create it (README, "Google Cloud client", cites Google's workforce OAuth page). The Contacts page does not ask for the client id or secret.
 
-1. **HUMAN STEP:** Create a project (for example `contacts-relay`): https://console.cloud.google.com/projectcreate. Type its project ID into the checklist. Without it, each console link opens whichever project you used last; the page blocks those links until a project ID is typed. After you save a client, the page uses the project number from the Client ID.
-2. Enable the People API: the checklist's link (`https://console.cloud.google.com/flows/enableapi?apiid=people.googleapis.com&project=<id>`). If that page errors, use the library page `https://console.cloud.google.com/apis/library/people.googleapis.com?project=<id>` and press Enable.
-3. Branding (`https://console.cloud.google.com/auth/overview/create?project=<id>`; if the project's Google Auth Platform is already set up, this redirects to `/auth/overview`: open Branding from there):
-   - User type: **External**. Give it an app name (for example `Contacts relay`) and your email.
-4. Create an OAuth client (the same checklist step as Branding; `https://console.cloud.google.com/auth/clients/create?project=<id>`): Application type **Web application**. Under **Authorized redirect URIs**, add exactly the address the checklist shows (with a Copy button): `https://<APPROVE_HOST>/contacts/google/callback`. No trailing slash.
-   - Optional, not on the page: Audience (`https://console.cloud.google.com/auth/audience?project=<id>`), **Publish app (In production)**. Staying in **Testing** works if you add each Google account as a test user, but access then expires after **7 days** and sync stops.
+1. **HUMAN STEP:** Create a project named `contacts-relay`: https://console.cloud.google.com/projectcreate
+2. Enable the People API: https://console.cloud.google.com/flows/enableapi?apiid=people.googleapis.com (if that page errors, https://console.cloud.google.com/apis/library/people.googleapis.com and press Enable).
+3. Branding (https://console.cloud.google.com/auth/overview/create; if Google Auth Platform is already set up, open Branding from the overview):
+   - User type: **External**. App name `Contacts relay`, and your email.
+4. Create an OAuth client (https://console.cloud.google.com/auth/clients/create): Application type **Web application**. Under **Authorized redirect URIs**, add exactly `https://<APPROVE_HOST>/contacts/google/callback`. No trailing slash. Download the client JSON.
+   - Optional: Audience (https://console.cloud.google.com/auth/audience), **Publish app (In production)**. Staying in **Testing** works if you add each Google account as a test user, but access then expires after **7 days** and sync stops.
    - A published but unverified app shows "Google hasn't verified this app". That's your own app; click Advanced, then Go to (app name). https://support.google.com/cloud/answer/15549945
    - A work or school Google account may have an admin rule that blocks unverified apps.
-5. Google shows the **Client secret only once**. Paste the Client ID and the secret into the checklist's form and press **Save client**. The Worker stores them encrypted (AES-GCM under `GOOGLE_TOKEN_KEY`, section 6); they're never shown again.
+5. On your computer: `node scripts/google-client.mjs --file=<downloaded-client.json>`. It puts `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` with `npx wrangler secret put` and `--config=.relay-local/wrangler.toml` (values on stdin, never printed) and then deletes the JSON. `GOOGLE_TOKEN_KEY` (section 6) must already be set before you press Connect Google.
 6. **HUMAN STEP:** Type a name for the account (for example `primary` or `work`) and press **Connect Google**. Pick the Google account and allow **read-only contacts** only. Back on the page it shows "Connected PRIMARY". The Worker refuses, and revokes at Google, if anything other than read-only contacts was granted.
    - "Google sent no long-lived token": remove the app at https://myaccount.google.com/connections, then Connect again.
    - Repeat for each Google account. The first connected account wins when two accounts have the same number. Accounts in `GOOGLE_ACCOUNTS` come first.
@@ -214,7 +214,7 @@ You use **your own** Google Cloud project, so your contacts only ever go to your
 | `failed` reason | Fix |
 |---|---|
 | `missing_secret_GOOGLE_RT_<LABEL>` | A `GOOGLE_ACCOUNTS` label with no secret and no sign-in: press Reconnect for it (or remove it from `GOOGLE_ACCOUNTS`) |
-| `google_client_not_configured` | Step 5: paste the client |
+| `google_client_not_configured` | Step 5: `node scripts/google-client.mjs` |
 | `google_token_key_missing` | `GOOGLE_TOKEN_KEY` is unset or isn't the key the sign-in was saved with (section 6, section 14) |
 | `google_token_decrypt_failed` | The stored sign-in can't be read: press Reconnect |
 | `default_country_code_invalid` | Set `DEFAULT_COUNTRY_CODE` (section 5) and deploy |
@@ -227,7 +227,7 @@ Sign-in errors come back to the page as a red line with the fix: `google_scope_n
 The same codes show next to **Sync** on the Contacts page, with this fix text.
 
 ### Contacts page (who the bot may text)
-`https://<APPROVE_HOST>/contacts`, behind Access like the rest of that host. The title is **GrokBot Texting**. It lists everyone from Google sync, the manual upload and the old `DIRECT_ALLOWLIST`, with name, label and **only the last 4 digits**. The page is the contact list, **Sync**, and the short **Set up Google** list. Per-account counts stay on `/direct`. The bot can text a person only when they are switched **on** here, or listed in the `ALLOWLIST` secret (shown read-only, "always on (ALLOWLIST)").
+`https://<APPROVE_HOST>/contacts`, behind Access like the rest of that host. The title is **GrokBot Texting**, with the logo beside it. It lists everyone from Google sync, the manual upload and the old `DIRECT_ALLOWLIST`, with name, label and **only the last 4 digits**, 25 at a time (10/25/50/100). **Enable all shown** still means the current search and filter, not only the page on screen. The page is the contact list, **Sync**, and **Connect Google**. Per-account counts stay on `/direct`. The bot can text a person only when they are switched **on** here, or listed in the `ALLOWLIST` secret (shown read-only, "always on (ALLOWLIST)").
 
 - **New people start off.** That includes a new number added to someone who is already on: each number is its own switch.
 - **Turning someone on** asks "Text Riley at •••• 0142?" so you check the last 4 first. **Enable all shown** acts on the current search and filter, and asks with a count.
@@ -353,8 +353,8 @@ Rollback doesn't undo secrets or stored data.
 | Log key | `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler -c .relay-local/wrangler.toml secret put LOG_HASH_KEY` (stored contacts are re-hashed on the next send) |
 | Device key | In the app, Settings, Device…, Device Key, **Rotate device key**. Then run `gateway-check` then `confirm-fingerprint` (section 1 step 9); they update the Worker. Sends refuse until you confirm |
 | Google access | **Disconnect** the account on the Contacts page (revokes at Google and deletes it), then **Connect Google** again. Legacy secret accounts: remove the app at https://myaccount.google.com/connections, then press Reconnect |
-| Google client secret | In the console's Clients page, add a new secret, paste it with the Client ID in the Contacts page's **Save client** form, then delete the old secret in the console |
-| `GOOGLE_TOKEN_KEY` | `npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY_OLD` with the **current** value, then `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY`. The old key still decrypts, and each stored sign-in is re-sealed under the new key at the next sync, and the client at the next sync or Contacts page visit. Delete the old one **only after every stored sign-in has been re-sealed**: press **Sync now** on the Contacts page, reload it, and check that the Google accounts panel reads "All N stored Google sign-ins are on the current GOOGLE_TOKEN_KEY" (while any are left it says "X of N … are still on the old GOOGLE_TOKEN_KEY"). Then `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_TOKEN_KEY_OLD`. An account whose sync failed isn't re-sealed, so fix it first or Reconnect it. Without `_OLD`, stored sign-ins fail with `google_token_key_missing` until you Reconnect and paste the client again |
+| Google client secret | In the console's Clients page, add a new secret, download the client JSON, run `node scripts/google-client.mjs --file=<that-file.json>`, then delete the old secret in the console |
+| `GOOGLE_TOKEN_KEY` | `npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY_OLD` with the **current** value, then `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY`. The old key still decrypts, and each stored sign-in is re-sealed under the new key at the next sync, and the client at the next sync or Contacts page visit. Delete the old one **only after every stored sign-in has been re-sealed**: press **Sync now** on the Contacts page, reload it, and check that the Google accounts panel reads "All N stored Google sign-ins are on the current GOOGLE_TOKEN_KEY" (while any are left it says "X of N … are still on the old GOOGLE_TOKEN_KEY"). Then `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_TOKEN_KEY_OLD`. An account whose sync failed isn't re-sealed, so fix it first or Reconnect it. Without `_OLD`, stored sign-ins fail with `google_token_key_missing` until you Reconnect. If the stored client can't be read either, run `node scripts/google-client.mjs` again |
 
 Do it right away if a phone, computer or bot that held one is lost or compromised.
 
