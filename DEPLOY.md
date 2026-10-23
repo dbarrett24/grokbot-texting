@@ -211,6 +211,10 @@ You use **your own** Google Cloud project and your own Worker. There is no share
 
 **Upgrading a relay that uses `GOOGLE_RT_<LABEL>` secrets:** nothing breaks. Those accounts keep syncing from the secrets and show as "legacy" on the page, and `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` still work. A sign-in saved on the page wins over `GOOGLE_RT_<LABEL>`. A client saved by the old paste form does not: the Worker deletes that stored client and uses the two secrets. To move over: add `GOOGLE_TOKEN_KEY` (section 6), add the redirect URI from step 4 to your client (a Desktop client can't take one, so create a Web client), press Reconnect for each account, then delete the old secrets with `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_RT_<LABEL>`. `scripts/google-consent.mjs` (setup step `google`) is **legacy**. It still works for the secret-based setup, but new deploys don't need it.
 
+**Before you deploy this version.** The first start deletes a stored pasted client, and that can't be undone. A relay that had only that client, and no `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, would lose Google sync.
+
+1. Run `npx wrangler -c .relay-live/wrangler.toml secret list`. It prints names only. Confirm both `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are listed. If either is missing, first run `node scripts/google-client.mjs --file=<client.json>` with the JSON for the same OAuth client the relay already uses, and only then deploy. The script puts those secrets with `--config=.relay-local/wrangler.toml`, so that file must name this same Worker before you run it. Then run the secret list again and deploy only after both names are listed.
+
 **Check:** the page says "Sync finished". A failed sync shows the error and its fix next to **Sync**. (`/direct` still lists each account's number count and "last good" time, and has a **Sync contacts now** button that answers `{"updated":["PRIMARY"],"failed":[]}`.)
 
 | `failed` reason | Fix |

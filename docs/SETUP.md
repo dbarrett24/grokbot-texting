@@ -106,7 +106,7 @@ npm ci --legacy-peer-deps
 npm test && npm run typecheck
 ```
 
-Every test passes and the typecheck is clean before you deploy. Later upgrades, from this same directory: `git pull`, then `npm install --legacy-peer-deps`, then `npm test && npm run typecheck` again. `git pull` updates the committed `wrangler.toml` only. It does not create or patch `.relay-local/wrangler.toml` (Step 2).
+Every test passes and the typecheck is clean before you deploy. Later upgrades, from this same directory: `git pull`, then `npm install --legacy-peer-deps`, then `npm test && npm run typecheck` again. Before deploying, confirm `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are already set (DEPLOY.md section 9, "Before you deploy this version"). `git pull` updates the committed `wrangler.toml` only. It does not create or patch `.relay-local/wrangler.toml` (Step 2).
 
 Optional helpers `scripts/setup-mac.sh` and `scripts/setup-windows.ps1` run the computer steps one at a time (DEPLOY.md). This guide is the commands themselves. It does not write secrets to disk.
 
