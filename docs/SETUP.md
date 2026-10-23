@@ -268,7 +268,7 @@ Type or paste the value when Wrangler asks. Do not put it on the command line, i
 
 The first `secret put` can ask: `There doesn't seem to be a Worker called "sms-relay". Do you want to create a new Worker with that name and add secrets to it?` The quoted name is the `name` in your local file. Answer yes. Wrangler creates an empty placeholder Worker. Step 4's deploy replaces it. Later `secret put` commands do not ask again. (Seen in Wrangler 4.151.1, the version this repo installs.)
 
-Generate a value you must hand to the bot in your own terminal (`openssl rand -hex 32`), paste it into the hidden prompt, then close that terminal. Generate a value you never need to see (`LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`) the same way: `openssl rand -base64 32`, paste at the prompt, close the terminal. Do not pipe the value into `wrangler`. The one exception is Step 7.10: `node scripts/google-client.mjs` pipes the client id and secret on stdin and discards wrangler's output, so the secret is not printed.
+Generate a value you must hand to the bot in your own terminal (`openssl rand -hex 32`), paste it into the hidden prompt, then close that terminal. Generate a value you never need to see (`LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`) the same way: `openssl rand -base64 32`, paste at the prompt, close the terminal. Do not pipe the value into `wrangler`. The one exception is Step 7.10: `node scripts/google-client.mjs` pipes the client id and secret on stdin and discards wrangler's output, so the secret is not printed. It deletes the JSON only after both secret puts succeed. If a put fails, the JSON stays, the script names the secret and how to retry, and it exits non-zero.
 
 Set these now. Gateway secrets wait until Step 7.2, because the values come from the phone.
 
@@ -552,11 +552,12 @@ The standard web client this Worker needs (`….apps.googleusercontent.com`) is 
 1. Create a project named `contacts-relay`: https://console.cloud.google.com/projectcreate
 2. Enable the People API: https://console.cloud.google.com/flows/enableapi?apiid=people.googleapis.com (if that errors, open https://console.cloud.google.com/apis/library/people.googleapis.com and press Enable).
 3. Branding (https://console.cloud.google.com/auth/overview/create): app name `Contacts relay`, your email, audience **External**. If Google Auth Platform is already set up, the link opens the overview; open Branding there.
-4. Create an OAuth client (https://console.cloud.google.com/auth/clients/create): type **Web application**. Under Authorized redirect URIs add exactly `https://<APPROVE_HOST>/contacts/google/callback` with no trailing slash. Download the client JSON. Audience (publish) is optional and not required to sync; Testing mode expires tokens after 7 days.
-5. From this repo: `node scripts/google-client.mjs --file=<that-file.json>`. It runs `npx wrangler secret put` for `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` with `--config=.relay-local/wrangler.toml`, passing each value on stdin, then deletes the JSON. It does not print the secret. `GOOGLE_TOKEN_KEY` from Step 3 must already be set.
-6. Open the Contacts page and press **Connect Google**. Allow read-only contacts only. Anything else is revoked.
-7. Press Sync now. A daily sync runs after that. A failed sync keeps the last good list.
-8. Turn on the people the bot may text. Turning someone on asks you to confirm the last 4 digits.
+4. Create an OAuth client (https://console.cloud.google.com/auth/clients/create): type **Web application**. Under Authorized redirect URIs add exactly `https://<APPROVE_HOST>/contacts/google/callback` with no trailing slash. Download the client JSON.
+5. Audience (https://console.cloud.google.com/auth/audience): **Publish app (In production)**. This is required. Testing mode limits access to the Google accounts you list as test users, and refresh tokens expire after 7 days, so sync stops. A published but unverified app shows "Google hasn't verified this app". That's your own app; click Advanced, then Go to (app name). A work or school Google account may have an admin rule that blocks unverified apps.
+6. From this repo: `node scripts/google-client.mjs --file=<that-file.json>`. It runs `npx wrangler secret put` for `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` with `--config=.relay-local/wrangler.toml`, passing each value on stdin. It deletes the JSON only after both puts succeed. If a put fails, the JSON stays, the script names that secret and the retry (`node scripts/google-client.mjs --file=<path>`), does not print the secret, and exits non-zero. `GOOGLE_TOKEN_KEY` from Step 3 must already be set.
+7. Open the Contacts page and press **Connect Google**. Allow read-only contacts only. Anything else is revoked.
+8. Press Sync now. A daily sync runs after that. A failed sync keeps the last good list.
+9. Turn on the people the bot may text. Turning someone on asks you to confirm the last 4 digits.
 
 Error codes and the fix text on the page are DEPLOY.md section 9. `default_country_code_invalid` is Step 2's `DEFAULT_COUNTRY_CODE`.
 

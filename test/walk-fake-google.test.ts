@@ -8,7 +8,7 @@ import { FAKE_PEOPLE, WALK_CLIENT_ID, WALK_CLIENT_SECRET, fakeGoogle, isGoogleUr
 let h: Harness;
 beforeEach(async () => {
   h = await harness();
-  await h.setEnv({ GOOGLE_ACCOUNTS: "", GOOGLE_TOKEN_KEY: "ab".repeat(32), LOG_HASH_KEY: "TEST-ONLY-log-hash-key-not-a-real-secret" });
+  await h.setEnv({ GOOGLE_ACCOUNTS: "", GOOGLE_TOKEN_KEY: "ab".repeat(32), LOG_HASH_KEY: "TEST-ONLY-log-hash-key-not-a-real-secret", GOOGLE_CLIENT_ID: WALK_CLIENT_ID, GOOGLE_CLIENT_SECRET: WALK_CLIENT_SECRET });
   await inRelay(h, (relay) => {
     const base = relay.net;
     relay.net = async (req: Request) => {
@@ -43,8 +43,8 @@ describe("walk fake Google", () => {
     const other = new Response(null, { status: 303, headers: { location: "/contacts?x=1" } });
     expect(skipConsent(other)).toBe(other);
   });
-  it("paste client -> Connect Google -> callback -> Sync now loads the fake People list", async () => {
-    expect((await form("/contacts/google/client", { csrf: await csrf(), client_id: WALK_CLIENT_ID, client_secret: WALK_CLIENT_SECRET })).status).toBe(303);
+  it("Connect Google -> callback -> Sync now loads the fake People list; the paste route is gone", async () => {
+    expect((await form("/contacts/google/client", { csrf: await csrf(), client_id: WALK_CLIENT_ID, client_secret: WALK_CLIENT_SECRET })).status).toBe(410);
     const start = skipConsent(await form("/contacts/google/start", { csrf: await csrf(), label: "walk" }));
     const back = must(start.headers.get("location"), "location");
     expect(back).toMatch(/^\/contacts\/google\/callback\?state=[a-f0-9]{64}&code=WALK-ONLY-code$/);

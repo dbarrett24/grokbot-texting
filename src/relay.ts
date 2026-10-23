@@ -4,7 +4,7 @@ import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, 
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
 import { HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH, HARBOR_LOGO_PATH, harborFont, harborLogo, harborPhoto, leavesFor, HARBOR_PHOTO_PREFIX, pickerFor, setBackground } from "./harbor";
-import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, isClientId, isClientSecret, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
+import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, importTokenKey, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
   CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
 } from "./contacts";
@@ -152,11 +152,13 @@ export class Relay extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS contacts_migration(e164 TEXT PRIMARY KEY, enabled INTEGER NOT NULL)`);
     // Contacts page CSRF: per page load, reusable for 15 minutes, bound to the Access identity.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS page_csrf(token TEXT PRIMARY KEY, email TEXT, expires_ms INTEGER)`);
-    // Google connect: refresh tokens and the pasted OAuth client, AES-GCM sealed under GOOGLE_TOKEN_KEY (src/google.ts).
+    // Google connect: refresh tokens, AES-GCM sealed under GOOGLE_TOKEN_KEY (src/google.ts).
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_accounts(label TEXT PRIMARY KEY, email TEXT, rt_ct TEXT NOT NULL, rt_iv TEXT NOT NULL, scope TEXT NOT NULL, connected_ms INTEGER NOT NULL, key_ver TEXT NOT NULL)`);
     // One row per sign-in in flight: single use, 10 minutes, bound to the Access identity that started it.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_oauth_state(state TEXT PRIMARY KEY, label TEXT NOT NULL, verifier TEXT NOT NULL, email TEXT NOT NULL, expires_ms INTEGER NOT NULL)`);
+    // Retired paste-form client. The table stays so an old row can be deleted; nothing writes it.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_client(id INTEGER PRIMARY KEY CHECK (id = 1), blob_ct TEXT NOT NULL, blob_iv TEXT NOT NULL, key_ver TEXT NOT NULL, saved_ms INTEGER NOT NULL)`);
+    this.clearStoredGoogleClient();
     try {
       this.sql.exec("ALTER TABLE contacts ADD COLUMN account TEXT");
     } catch {
@@ -1128,28 +1130,16 @@ export class Relay extends DurableObject<Env> {
     return [...seed, ...stored.filter((l) => !seed.includes(l))];
   }
 
-  /** The OAuth client: the in-app (stored, sealed) one first, then the GOOGLE_CLIENT_ID/SECRET secrets. null = neither. */
-  async googleClient(): Promise<GoogleClient | null> {
-    const raw = this.sql.exec("SELECT blob_ct, blob_iv, key_ver, saved_ms FROM google_client WHERE id=1").toArray()[0];
-    if (raw) {
-      const row = decodeClientRow(raw);
-      const { cur, old } = await this.tokenKeys();
-      const { plaintext, kid } = await open([cur, old], { ct: row.blob_ct, iv: row.blob_iv, kid: row.key_ver }, aadFor("client", "client"));
-      const c = decodeClientBlob(plaintext);
-      if (cur && kid !== cur.kid) await this.saveGoogleClient(c.id, c.secret, row.saved_ms); // rotation: re-seal under the new key
-      return { ...c, source: "stored" };
-    }
-    const id = this.env.GOOGLE_CLIENT_ID, secret = this.env.GOOGLE_CLIENT_SECRET;
-    return id && secret ? { id, secret, source: "secrets" } : null;
+  /** Drop a client saved by the retired paste endpoint so it cannot override the Worker secrets. */
+  private clearStoredGoogleClient(): void {
+    this.sql.exec("DELETE FROM google_client");
   }
 
-  /** Store the pasted client, sealed. Needs GOOGLE_TOKEN_KEY. */
-  async saveGoogleClient(id: string, secret: string, savedMs = this.clock()): Promise<void> {
-    if (!isClientId(id)) throw new Refuse("google_client_id_invalid");
-    if (!isClientSecret(secret)) throw new Refuse("google_client_secret_invalid");
-    const k = await this.requireTokenKey();
-    const s = await seal(k, JSON.stringify({ id, secret }), aadFor("client", "client"));
-    this.sql.exec("INSERT OR REPLACE INTO google_client(id, blob_ct, blob_iv, key_ver, saved_ms) VALUES(1,?,?,?,?)", s.ct, s.iv, s.kid, savedMs);
+  /** The OAuth client: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. A pasted row is deleted first. null = unset. */
+  async googleClient(): Promise<GoogleClient | null> {
+    this.clearStoredGoogleClient();
+    const id = this.env.GOOGLE_CLIENT_ID, secret = this.env.GOOGLE_CLIENT_SECRET;
+    return id && secret ? { id, secret, source: "secrets" } : null;
   }
 
   /** A label's refresh token: the stored row first, else the GOOGLE_RT_<LABEL> secret (pre-upgrade deploys). null = neither. */
@@ -1180,7 +1170,7 @@ export class Relay extends DurableObject<Env> {
   }
 
   /**
-   * Rotation check: how many stored rows (sign-ins + the client) are sealed under the current GOOGLE_TOKEN_KEY.
+   * Rotation check: how many stored sign-ins are sealed under the current GOOGLE_TOKEN_KEY.
    * Delete GOOGLE_TOKEN_KEY_OLD only when onOld is 0.
    */
   async googleKeyStatus(): Promise<{ total: number; onCurrent: number; onOld: number }> {
@@ -1190,7 +1180,7 @@ export class Relay extends DurableObject<Env> {
     } catch {
       cur = null;
     }
-    const kids = [...this.sql.exec("SELECT key_ver FROM google_accounts").toArray(), ...this.sql.exec("SELECT key_ver FROM google_client").toArray()].map((r) => r["key_ver"]);
+    const kids = this.sql.exec("SELECT key_ver FROM google_accounts").toArray().map((r) => r["key_ver"]);
     const onCurrent = kids.filter((k) => cur !== null && k === cur.kid).length;
     return { total: kids.length, onCurrent, onOld: kids.length - onCurrent };
   }
@@ -1305,19 +1295,6 @@ export class Relay extends DurableObject<Env> {
     }
   }
 
-  /** POST /contacts/google/client {csrf, client_id, client_secret}: the paste form. Sealed under GOOGLE_TOKEN_KEY; never echoed. */
-  private async googleSaveClient(req: Request): Promise<Response> {
-    const { form } = await this.googleForm(req);
-    const id = form.get("client_id"), secret = form.get("client_secret");
-    try {
-      await this.saveGoogleClient(typeof id === "string" ? id.trim() : "", typeof secret === "string" ? secret.trim() : "");
-    } catch (e) {
-      return this.toContacts({ google_error: e instanceof Refuse ? e.code : errCode(e) });
-    }
-    this.log("google_client_saved", { detail: "source=paste" });
-    return this.toContacts({ google_client: "saved" });
-  }
-
   /** What the Google panel shows. Never a secret: only which source is in use. */
   private async googlePanel(): Promise<GooglePanel> {
     let tokenKey: GooglePanel["tokenKey"] = "missing";
@@ -1326,12 +1303,7 @@ export class Relay extends DurableObject<Env> {
     } catch {
       tokenKey = "invalid";
     }
-    let client: GooglePanel["client"];
-    try {
-      client = (await this.googleClient())?.source ?? null;
-    } catch {
-      client = "unreadable";
-    }
+    const client = (await this.googleClient())?.source ?? null;
     const stored = new Set(this.sql.exec("SELECT label FROM google_accounts").toArray().flatMap((r) => (typeof r["label"] === "string" ? [r["label"]] : [])));
     const when = new Map(this.sql.exec("SELECT label, connected_ms FROM google_accounts").toArray().flatMap((r) => (typeof r["label"] === "string" && typeof r["connected_ms"] === "number" ? [[r["label"], r["connected_ms"]] as const] : [])));
     const ks = await this.googleKeyStatus();
@@ -1481,7 +1453,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     if (req.method === "POST" && path === "/contacts/google/start") return await this.googleStart(req);
     if (req.method === "GET" && path === "/contacts/google/callback") return await this.googleCallback(req);
     if (req.method === "POST" && path === "/contacts/google/disconnect") return await this.googleDisconnect(req);
-    if (req.method === "POST" && path === "/contacts/google/client") return await this.googleSaveClient(req);
+    if (req.method === "POST" && path === "/contacts/google/client") return json(410, { error: "gone" });
     return json(404, { error: "not_found" });
   }
 
@@ -1549,7 +1521,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
       toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors"
         : label(connected) ? `Connected ${label(connected)}. Press Sync now to load its contacts.`
         : label(disconnected) ? `Disconnected ${label(disconnected)}${q.get("revoke") === "failed" ? " (Google didn't confirm the revoke: remove it at myaccount.google.com/connections)" : ""}`
-        : q.get("google_client") === "saved" ? "Google client saved" : null,
+        : null,
       hashKeyMissing: !key,
       google: await this.googlePanel(),
       googleError: gErr && /^[a-z0-9_]{1,80}$/.test(gErr) ? gErr : null,

@@ -12,9 +12,9 @@ import vinesL from "./assets/leaves/vines-1024.webp";
 import vinesS from "./assets/leaves/vines-640.webp";
 import scatterL from "./assets/leaves/scatter-1024.webp";
 import scatterS from "./assets/leaves/scatter-640.webp";
-import cornersT from "./assets/leaves/corners-96.webp";
-import vinesT from "./assets/leaves/vines-96.webp";
-import scatterT from "./assets/leaves/scatter-96.webp";
+import cornersT from "./assets/leaves/corners-256.webp";
+import vinesT from "./assets/leaves/vines-256.webp";
+import scatterT from "./assets/leaves/scatter-256.webp";
 export { pickerLiveScript } from "./harbor-picker";
 
 export const HARBOR_FONT_PATH = "/harbor/source-serif-4-latin-600.woff2";
@@ -55,7 +55,7 @@ type PhotoOption = `photo-${LeavesOption}`;
 export const HARBOR_LEAVES_DEFAULT: LeavesOption | PhotoOption | "none" = "photo-vines";
 const isLeaves = (v: string | null): v is LeavesOption => v !== null && Object.hasOwn(HARBOR_LEAVES, v);
 const PHOTOS: Record<string, ArrayBuffer> = {
-  "corners-1024": cornersL, "corners-640": cornersS, "vines-1024": vinesL, "vines-640": vinesS, "scatter-1024": scatterL, "scatter-640": scatterS, "corners-96": cornersT, "vines-96": vinesT, "scatter-96": scatterT,
+  "corners-1024": cornersL, "corners-640": cornersS, "vines-1024": vinesL, "vines-640": vinesS, "scatter-1024": scatterL, "scatter-640": scatterS, "corners-256": cornersT, "vines-256": vinesT, "scatter-256": scatterT,
 };
 export const HARBOR_PHOTO_PREFIX = "/harbor/leaves/";
 /** GET /harbor/leaves/<option>-<width>.webp, or null when the name isn't one of ours. */

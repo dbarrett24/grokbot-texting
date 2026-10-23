@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { harness, type Harness } from "./helpers";
 import { fakeGoogle, inRelay, must, sql as sqlOf, type FakeGoogle } from "./google-fixture";
-import { aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, open, parseTokenKeyBytes, seal, type TokenKey } from "../src/google";
+import { aadFor, decodeAccountRow, importTokenKey, open, parseTokenKeyBytes, seal, type TokenKey } from "../src/google";
 
 const KEY_A = "ab".repeat(32); // obviously fake test keys
 const KEY_B = "cd".repeat(32);
@@ -14,12 +14,12 @@ let h: Harness;
 let g: FakeGoogle;
 const sql = (q: string, ...a: SqlStorageValue[]) => sqlOf(h, q, ...a);
 const key = async (raw: string): Promise<TokenKey> => must(await importTokenKey(raw), "key");
-const saveBoth = () => inRelay(h, async (r) => { await r.saveGoogleAccount("WORK", RT, "s", null); await r.saveGoogleClient(CLIENT_ID, CLIENT_SECRET); });
+const saveAccount = () => inRelay(h, (r) => r.saveGoogleAccount("WORK", RT, "s", null));
 
 beforeEach(async () => {
   h = await harness();
   g = await fakeGoogle(h);
-  await h.setEnv({ GOOGLE_ACCOUNTS: "", GOOGLE_TOKEN_KEY: KEY_A });
+  await h.setEnv({ GOOGLE_ACCOUNTS: "", GOOGLE_TOKEN_KEY: KEY_A, GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: CLIENT_SECRET });
 });
 
 describe("seal/open (src/google.ts)", () => {
@@ -62,49 +62,39 @@ describe("typed decoders", () => {
     expect(decodeAccountRow(good)).toEqual(good);
     for (const bad of [null, [], { ...good, label: "work" }, { ...good, label: "UPLOAD" }, { ...good, rt_ct: "" }, { ...good, connected_ms: "1" }, { ...good, email: 5 }, { ...good, key_ver: undefined }])
       expect(() => decodeAccountRow(bad)).toThrow("google_row_invalid");
-    expect(decodeClientRow({ blob_ct: "a", blob_iv: "b", key_ver: "c", saved_ms: 2 })).toEqual({ blob_ct: "a", blob_iv: "b", key_ver: "c", saved_ms: 2 });
-    expect(() => decodeClientRow({ blob_ct: "a", blob_iv: "b", key_ver: "c" })).toThrow("google_row_invalid");
-  });
-  it("client blob: exactly {id, secret}, both well-formed", () => {
-    expect(decodeClientBlob(JSON.stringify({ id: CLIENT_ID, secret: CLIENT_SECRET }))).toEqual({ id: CLIENT_ID, secret: CLIENT_SECRET });
-    for (const bad of ["nope", "[]", JSON.stringify({ id: CLIENT_ID }), JSON.stringify({ id: "x", secret: CLIENT_SECRET }), JSON.stringify({ id: CLIENT_ID, secret: CLIENT_SECRET, extra: 1 })])
-      expect(() => decodeClientBlob(bad)).toThrow("google_client_blob_invalid");
   });
 });
 
 describe("Relay storage", () => {
-  it("stores the refresh token and client sealed: no plaintext in any SQLite column", async () => {
-    await saveBoth();
-    const dump = JSON.stringify([await sql("SELECT * FROM google_accounts"), await sql("SELECT * FROM google_client")]);
+  it("stores the refresh token sealed: no plaintext in any SQLite column", async () => {
+    await saveAccount();
+    const dump = JSON.stringify(await sql("SELECT * FROM google_accounts"));
     expect(dump).not.toContain(RT);
     expect(dump).not.toContain(CLIENT_SECRET);
-    expect(dump).not.toContain(CLIENT_ID);
     expect(await inRelay(h, (i) => i.googleRefreshToken("WORK"))).toBe(RT);
-    expect(await inRelay(h, (i) => i.googleClient())).toEqual({ id: CLIENT_ID, secret: CLIENT_SECRET, source: "stored" });
+    expect(await inRelay(h, (i) => i.googleClient())).toEqual({ id: CLIENT_ID, secret: CLIENT_SECRET, source: "secrets" });
   });
 
-  it("refuses to store anything without GOOGLE_TOKEN_KEY (never plaintext)", async () => {
+  it("refuses to store a refresh token without GOOGLE_TOKEN_KEY (never plaintext)", async () => {
     await h.setEnv({ GOOGLE_TOKEN_KEY: "" });
     await expect(inRelay(h, (i) => i.saveGoogleAccount("WORK", RT, "s", null))).rejects.toThrow();
-    await expect(inRelay(h, (i) => i.saveGoogleClient(CLIENT_ID, CLIENT_SECRET))).rejects.toThrow();
     expect(await sql("SELECT * FROM google_accounts")).toEqual([]);
-    expect(await sql("SELECT * FROM google_client")).toEqual([]);
   });
 
-  it("falls back to the GOOGLE_* secrets when nothing is stored, and prefers the stored values when both exist", async () => {
-    await h.setEnv({ GOOGLE_CLIENT_ID: "TEST-ONLY-env-client", GOOGLE_CLIENT_SECRET: "TEST-ONLY-env-secret", GOOGLE_RT_WORK: "TEST-ONLY-env-rt" });
-    expect(await inRelay(h, (i) => i.googleClient())).toEqual({ id: "TEST-ONLY-env-client", secret: "TEST-ONLY-env-secret", source: "secrets" });
+  it("uses the Worker secrets and deletes a stale pasted client instead of preferring it", async () => {
+    await sql("INSERT INTO google_client(id, blob_ct, blob_iv, key_ver, saved_ms) VALUES(1,?,?,?,?)", "TEST-ONLY-stale-client-secret", "iv", "old", 1);
+    expect(await inRelay(h, (i) => i.googleClient())).toEqual({ id: CLIENT_ID, secret: CLIENT_SECRET, source: "secrets" });
+    expect(await sql("SELECT * FROM google_client")).toEqual([]);
+    await h.setEnv({ GOOGLE_RT_WORK: "TEST-ONLY-env-rt" });
     expect(await inRelay(h, (i) => i.googleRefreshToken("WORK"))).toBe("TEST-ONLY-env-rt");
-    await saveBoth();
-    expect((await inRelay(h, (i) => i.googleClient()))?.source).toBe("stored");
+    await saveAccount();
     expect(await inRelay(h, (i) => i.googleRefreshToken("WORK"))).toBe(RT);
     await h.setEnv({ GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: "" });
-    await sql("DELETE FROM google_client");
     expect(await inRelay(h, (i) => i.googleClient())).toBeNull();
   });
 
-  it("sync uses the stored token and client for a label connected in-app (not in GOOGLE_ACCOUNTS)", async () => {
-    await saveBoth();
+  it("sync uses the stored token and the Worker client for a label connected in-app (not in GOOGLE_ACCOUNTS)", async () => {
+    await saveAccount();
     const r = await inRelay(h, (i) => i.syncContacts({ alert: false }));
     expect(r).toEqual({ updated: ["WORK"], failed: [] });
     expect(must(g.tokenCalls[0]).get("refresh_token")).toBe(RT);
@@ -119,8 +109,8 @@ describe("Relay storage", () => {
     expect(await inRelay(h, (i) => i.googleLabels())).toEqual(["PRIMARY", "WORK", "CLUB"]);
   });
 
-  it("rotation: GOOGLE_TOKEN_KEY_OLD decrypts, and the row is re-sealed under the new key; without it the sync fails closed", async () => {
-    await saveBoth();
+  it("rotation: GOOGLE_TOKEN_KEY_OLD decrypts, and the sign-in is re-sealed under the new key; without it the sync fails closed", async () => {
+    await saveAccount();
     const kidA = (await key(KEY_A)).kid, kidB = (await key(KEY_B)).kid;
     await h.setEnv({ GOOGLE_TOKEN_KEY: KEY_B });
     const r = await inRelay(h, (i) => i.syncContacts({ alert: false }));
@@ -130,25 +120,25 @@ describe("Relay storage", () => {
     expect(await inRelay(h, (i) => i.googleRefreshToken("WORK"))).toBe(RT);
     expect((await inRelay(h, (i) => i.googleClient()))?.secret).toBe(CLIENT_SECRET);
     expect((await sql("SELECT key_ver FROM google_accounts"))[0]?.["key_ver"]).toBe(kidB);
-    expect((await sql("SELECT key_ver FROM google_client"))[0]?.["key_ver"]).toBe(kidB);
+    expect(await sql("SELECT * FROM google_client")).toEqual([]);
     await h.setEnv({ GOOGLE_TOKEN_KEY_OLD: "" });
     expect(await inRelay(h, (i) => i.googleRefreshToken("WORK"))).toBe(RT);
   });
 
-  it("googleKeyStatus counts rows still on the old key until each is re-sealed (rotation check)", async () => {
-    await saveBoth();
+  it("googleKeyStatus counts sign-ins still on the old key until each is re-sealed (rotation check)", async () => {
+    await saveAccount();
     await inRelay(h, (i) => i.saveGoogleAccount("CLUB", RT, "s", null));
-    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 3, onCurrent: 3, onOld: 0 });
+    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 2, onCurrent: 2, onOld: 0 });
     await h.setEnv({ GOOGLE_TOKEN_KEY: KEY_B, GOOGLE_TOKEN_KEY_OLD: KEY_A });
-    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 3, onCurrent: 0, onOld: 3 });
+    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 2, onCurrent: 0, onOld: 2 });
     await inRelay(h, (i) => i.googleRefreshToken("WORK"));
-    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 3, onCurrent: 1, onOld: 2 });
+    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 2, onCurrent: 1, onOld: 1 });
     await inRelay(h, (i) => i.syncContacts({ alert: false }));
-    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 3, onCurrent: 3, onOld: 0 });
+    expect(await inRelay(h, (i) => i.googleKeyStatus())).toEqual({ total: 2, onCurrent: 2, onOld: 0 });
   });
 
   it("a tampered stored row fails that account's sync with a code, keeps the old list, and leaks nothing", async () => {
-    await saveBoth();
+    await saveAccount();
     await sql("UPDATE google_accounts SET rt_iv=?", btoa("x".repeat(12)));
     const r = await inRelay(h, (i) => i.syncContacts({ alert: false }));
     expect(r.failed).toEqual([{ account: "WORK", reason: "google_token_decrypt_failed" }]);

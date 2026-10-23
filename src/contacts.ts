@@ -100,8 +100,6 @@ export const GCP_PROJECT_LINKS: readonly (keyof typeof GCP_LINKS)[] = ["enablePe
 export const GOOGLE_ERROR_FIX: Record<string, string> = {
   google_label_invalid: "Use letters, digits or _ for the account name (up to 32), e.g. work.",
   google_client_not_configured: "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET with node scripts/google-client.mjs (README).",
-  google_client_id_invalid: "That doesn't look like a Client ID (it ends in .apps.googleusercontent.com).",
-  google_client_secret_invalid: "That doesn't look like a client secret.",
   google_token_key_missing: TOKEN_KEY_MISSING_FIX,
   google_token_key_invalid: "GOOGLE_TOKEN_KEY is malformed (it must be 32 bytes, as hex or base64): make a new one with setup step keys, then secrets (DEPLOY.md section 14).",
   google_consent_denied: "Google sign-in was cancelled.",
@@ -128,7 +126,7 @@ export function withProject(href: string, id: string): string {
 }
 export interface GooglePanel {
   tokenKey: "ok" | "missing" | "invalid";
-  client: "stored" | "secrets" | "unreadable" | null;
+  client: "secrets" | null;
   redirectUri: string;
   accounts: { label: string; stored: boolean; fromSeed: boolean; connected: string | null }[];
   /** Disconnected here but still in GOOGLE_ACCOUNTS (and maybe a GOOGLE_RT_ secret): tell the owner to remove them. */
@@ -157,11 +155,11 @@ export interface PageModel {
 
 /** "Google accounts" panel: accounts with Reconnect/Disconnect, and one Connect Google button. The client id and secret are not on this page. */
 export function renderGooglePanel(g: GooglePanel, csrf: string, googleError: string | null): string {
-  const canConnect = g.tokenKey === "ok" && g.client !== null && g.client !== "unreadable";
+  const canConnect = g.tokenKey === "ok" && g.client !== null;
   const rows = g.accounts.map((x) => `<li><b>${esc(x.label)}</b>: ${x.stored ? `Connected${x.connected ? " " + esc(x.connected) : ""}` : x.fromSeed ? "from secret GOOGLE_RT_" + esc(x.label) + " (legacy)" : "not connected"}
 <form method=post action="/contacts/google/start" class=inl><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button${canConnect ? "" : " disabled"}>Reconnect</button></form>${x.stored ? `<form method=post action="/contacts/google/disconnect" class=inl data-confirm="Stop syncing ${esc(x.label)}? Its contacts are removed from the list, and Google access is revoked."><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button>Disconnect</button></form>` : ""}</li>`).join("");
   const keyWarn = g.tokenKey === "ok" ? "" : `<p class=warn>GOOGLE_TOKEN_KEY is ${g.tokenKey === "missing" ? "not set" : "not valid"}, so Google sign-in can't store anything. Run setup step <code>keys</code>, then <code>secrets</code>.</p>`;
-  const clientLine = g.client === "stored" ? "Google client: saved here." : g.client === "secrets" ? "Google client: from the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET secrets." : g.client === "unreadable" ? `<span class=warn>Google client: saved, but it can't be read (GOOGLE_TOKEN_KEY changed?). Run <code>node scripts/google-client.mjs --file=client.json</code> again.</span>` : "Google client: not set up yet. Run <code>node scripts/google-client.mjs --file=client.json</code> (README).";
+  const clientLine = g.client === "secrets" ? "Google client: from the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET secrets." : "Google client: not set up yet. Run <code>node scripts/google-client.mjs --file=client.json</code> (README).";
   return `<section id=google aria-labelledby=gh><h2 id=gh>Google accounts</h2>
 ${googleError ? `<p class=warn role=alert>Google: <code>${esc(googleError)}</code>. ${esc(googleErrorFix(googleError))}</p>` : ""}${keyWarn}
 ${g.leftovers.map((l) => `<p class=warn>${esc(l)} was disconnected here and no longer syncs, but it is still set up the old way. Remove it from <code>GOOGLE_ACCOUNTS</code> in wrangler.toml, deploy, and run <code>npx wrangler secret delete GOOGLE_RT_${esc(l)}</code>.</p>`).join("")}
@@ -186,7 +184,7 @@ ${m.migratedOn > 0 ? `<div class=banner id=banner role=status><b>${m.migratedOn}
 <h2>Contacts</h2>
 <label for=q class=ro>Search by name</label><input type=search id=q autocomplete=off>
 <div class=bar role=group aria-label="Filter">${["All", "On", "Off", "Starred", "Migrated", "New"].map((f, i) => `<button data-f="${f}" aria-pressed="${i === 0}">${f === "New" ? "New since last visit" : f}</button>`).join("")}</div>
-<div class=bar><button id=enall>Enable all shown</button><span id=count class=ro></span><label class=ro for=per>Per page</label><select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select><button id=prev>Previous</button><button id=next>Next</button><span id=page class=ro></span></div>
+<div class=bar><button id=enall>Enable all shown</button><span id=count class=ro></span><span class=per><label class=ro for=per>Per page</label><select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select></span><button id=prev>Previous</button><button id=next>Next</button><span id=page class=ro></span></div>
 <ul id=list aria-label="People"></ul>
 <h2>Sync</h2>
 <form method=post action="/direct/sync" class=bar>${m.canSync ? `<input type=hidden name=csrf value="${m.csrf}"><input type=hidden name=from value=contacts><button id=sync>Sync now</button>` : "<span>No Google accounts yet: use Connect Google below.</span>"}</form>
