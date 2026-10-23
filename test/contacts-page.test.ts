@@ -219,7 +219,7 @@ describe("owner-only: guards", () => {
     // The console checklist left this page, so no off-site link remains.
     expect([...html.matchAll(/href="(https?:[^"]*)"/g)]).toEqual([]);
     for (const n of [RILEY, SAM, ALEX, EXAMPLE]) expect(html).not.toContain(n.slice(-4));
-    expect(html).toContain('<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=32 height=32><h1 class=product>GrokBot Texting</h1></header>');
+    expect(html).toContain('<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=96 height=96><h1 class=product>GrokBot Texting</h1></header>');
     expect(html).not.toMatch(/<a[^>]*>[\s\S]*?<img class=brand-logo/);
     expect(html).toContain('<select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select>');
     expect(html).toContain("s.slice(page*size");

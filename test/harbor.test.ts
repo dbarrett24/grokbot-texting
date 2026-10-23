@@ -22,12 +22,15 @@ describe("Harbor look", () => {
     // Backdrop on a fixed layer: never background-attachment:fixed (ignored on iOS Safari, repaints on scroll).
     expect(HARBOR_CSS).not.toContain("background-attachment");
     expect(HARBOR_CSS).toContain('html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-backdrop)');
-    expect(HARBOR_CSS).toContain(".brand{display:inline-flex;gap:0.625rem;align-items:center}");
-    expect(HARBOR_CSS).toContain(".brand-logo{display:block;width:32px;height:32px;max-width:40px;max-height:40px}");
-    expect(HARBOR_CSS).toContain("@media (max-width:480px){.brand-logo{width:28px;height:28px}}");
+    expect(HARBOR_CSS).toContain(".brand{display:flex;align-items:center;gap:20px;margin:.2em 0 .7em}");
+    expect(HARBOR_CSS).toContain(".brand h1.product{margin:0;font-size:2.5em}");
+    expect(HARBOR_CSS).toContain(".brand-logo{display:block;flex:none;width:96px;height:96px;max-width:none;max-height:none;border-radius:23%;box-shadow:0 0 0 1px rgb(255 255 255 / .18)}");
+    expect(HARBOR_CSS).toContain("@media (max-width:480px){.brand{gap:14px}.brand-logo{width:72px;height:72px}.brand h1.product{font-size:1.9em}}");
+    expect(HARBOR_CSS).not.toContain("flex-flow:column");
+    expect(HARBOR_CSS).not.toContain("max-width:40px");
+    expect(HARBOR_CSS).not.toContain("max-height:40px");
     expect(HARBOR_CSS).toContain("h1.product{font-size:2.15em;line-height:1.15;margin:.1em 0 .35em;color:var(--h-text)}");
     expect(HARBOR_CSS).not.toMatch(/h1\.product\{[^}]*var\(--h-link\)/);
-    expect(HARBOR_CSS).toContain("body:has(.hl-photo) .brand-logo{box-shadow:0 0 0 1px rgb(255,255,255,.18);border-radius:23%}");
     expect(HARBOR_CSS).toContain(".vh{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}");
     expect(HARBOR_CSS).not.toMatch(/\.vh\{[^}]*display:none/);
     expect(HARBOR_CSS).toContain("input:checked+label.hb-opt");
@@ -37,7 +40,7 @@ describe("Harbor look", () => {
     expect(HARBOR_CSS).toContain(".per{display:flex;gap:4px}");
     expect(HARBOR_CSS).toContain("/harbor/leaves/corners-256.webp");
     expect(HARBOR_CSS).not.toContain("96.webp");
-    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(8_000); // 6 KB before the leaf + picker mockups
+    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(8_081); // 96px mark beside the title; 72px at 480px
   });
 
   it("font: served by the Worker on the approve host only, as woff2", async () => {
