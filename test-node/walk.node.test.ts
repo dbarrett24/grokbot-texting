@@ -15,7 +15,7 @@ describe("walk config is generated from wrangler.toml", () => {
   it("copies every [[rules]] block verbatim (CSS Text, woff2/webp Data)", () => {
     expect(blocks(main, "rules").length).toBeGreaterThan(0);
     expect(blocks(walk, "rules")).toEqual(blocks(main, "rules"));
-    expect(walk).toMatch(/"\*\*\/\*\.css"/);
+    expect(walk).toMatch(/"\*\*\/\*\.css", "\*\*\/\*\.svg"/);
     expect(walk).toMatch(/"\*\*\/\*\.woff2", "\*\*\/\*\.webp"/);
   });
   it("copies the Durable Object binding, migrations and compatibility_date", () => {

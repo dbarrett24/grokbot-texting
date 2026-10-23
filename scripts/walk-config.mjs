@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Writes walk.local.toml (git-ignored) for the local contacts walk (npm run walk).
 // Built FROM wrangler.toml so it can't drift: compatibility_date, every [[rules]] block
-// (CSS as Text, woff2/webp as Data), the Durable Object binding and migrations are copied verbatim.
+// (CSS and SVG as Text, woff2/webp as Data), the Durable Object binding and migrations are copied verbatim.
 // Only obviously-fake local values are added. No secrets, ever.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,9 @@ export const WALK_VARS = {
   GATEWAY_PASSPHRASE: "WALK-ONLY-passphrase-0123456789abcdef",
   // Fake 32-byte key so Connect Google can seal the fake sign-in locally (tools/walk/fake-google.ts). Not a secret.
   GOOGLE_TOKEN_KEY: "ab".repeat(32),
+  // Fake client so the page's Connect Google button is enabled. The page has no paste fields. Not a secret.
+  GOOGLE_CLIENT_ID: "123-walkonly.apps.googleusercontent.com",
+  GOOGLE_CLIENT_SECRET: "WALK-ONLY-client-secret",
 };
 
 /** Split TOML text into [[array-table]] blocks: [{ name, text }]. Top-level keys and [tables] are ignored. */

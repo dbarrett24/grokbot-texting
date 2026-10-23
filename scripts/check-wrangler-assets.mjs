@@ -22,9 +22,9 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** @typedef {{ type: string | undefined, fallthrough: boolean | undefined, globs: string[] | undefined }} RuleFields */
 
-const TEXT_GLOBS = ["**/*.css"];
+const TEXT_GLOBS = ["**/*.css", "**/*.svg"];
 const DATA_GLOBS = ["**/*.woff2", "**/*.webp"];
-const TEXT_WANT = '[[rules]] type = "Text" globs = ["**/*.css"] fallthrough = false';
+const TEXT_WANT = '[[rules]] type = "Text" globs = ["**/*.css", "**/*.svg"] fallthrough = false';
 const DATA_WANT = '[[rules]] type = "Data" globs = ["**/*.woff2", "**/*.webp"] fallthrough = false';
 
 /**

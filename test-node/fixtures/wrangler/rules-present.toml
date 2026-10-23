@@ -5,7 +5,7 @@ compatibility_date = "2026-10-01"
 
 [[rules]]
 type = "Text"
-globs = ["**/*.css"]
+globs = ["**/*.css", "**/*.svg"]
 fallthrough = false
 
 [[rules]]

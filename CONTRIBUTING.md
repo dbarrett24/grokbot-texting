@@ -28,13 +28,14 @@ npm run walk        # prints "walk: ready in N ms -> http://127.0.0.1:8787/conta
   the URL after `/contacts` (200, HTML) and two harbor assets have answered, so the first page view is already warm.
 - `tools/walk/entry.ts` signs its own Access token for a fake `.invalid` team domain. It refuses to run unless
   `WALK_LOCAL = "1"`; never deploy it. It maps the page's local Origin (`http://127.0.0.1:<port>`) to the approve
-  host, so on/off, stars and the resolve preview work; any other Origin is still refused.
+  host, so on/off and stars work; any other Origin is still refused.
 - Once the page is usable it loads the fake contacts in `tools/walk/fake-contacts.json` (UK Ofcom drama numbers
   `+44 7700 900xxx`, which the page lets you switch on, plus one 555-01xx example it refuses). Every run loads
   the same list.
 - Google is faked in-process (`tools/walk/fake-google.ts`): every Google URL the Worker calls (token, revoke,
   People API) gets fake data, unknown Google paths get 599, and nothing reaches a real Google host. Connect Google
-  skips the consent screen and returns to the callback with the same state and a fake code. To walk it, paste
-  client ID `123-walkonly.apps.googleusercontent.com` and secret `WALK-ONLY-client-secret`, press Connect Google,
-  then Sync now: the fake People list (fictional +44 7700 900xxx numbers and one 555-01xx example) loads.
-  The walk config sets a fake, non-secret `GOOGLE_TOKEN_KEY` so the fake sign-in can be sealed locally.
+  skips the consent screen and returns to the callback with the same state and a fake code. The walk config sets
+  fake, non-secret `GOOGLE_CLIENT_ID` (`123-walkonly.apps.googleusercontent.com`), `GOOGLE_CLIENT_SECRET`
+  (`WALK-ONLY-client-secret`) and `GOOGLE_TOKEN_KEY`, so the page's Connect Google button is enabled without
+  pasting a secret. Press Connect Google, then Sync now: the fake People list (fictional +44 7700 900xxx numbers
+  and one 555-01xx example) loads.

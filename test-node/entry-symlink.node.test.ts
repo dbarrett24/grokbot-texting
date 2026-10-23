@@ -71,6 +71,13 @@ describe.skipIf(process.platform === "win32")("scripts run through a symlinked p
     expect(r.out.trim()).not.toBe("");
   });
 
+  it("google-client.mjs through a symlinked repo path: missing --file is reported (exit 1), not skipped", () => {
+    const repo = linkTo(ROOT);
+    const r = run(join(repo, "scripts", "google-client.mjs"), []);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("--file=");
+  });
+
   it("google-consent.mjs through a symlinked repo path: missing client id is reported (exit 1), not skipped", () => {
     const repo = linkTo(ROOT);
     const r = run(join(repo, "scripts", "google-consent.mjs"), ["primary"], { env: { GOOGLE_CLIENT_ID: undefined, GOOGLE_CLIENT_SECRET: undefined } });

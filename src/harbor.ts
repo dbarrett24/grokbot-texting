@@ -4,6 +4,7 @@
 // CSS without the @font-face, so their headings use the Georgia fallback.
 import css from "./harbor.css";
 import font from "./assets/source-serif-4-latin-600.woff2";
+import logo from "./assets/grokbot-logo.svg";
 import { HARBOR_LEAVES, type LeavesOption } from "./harbor-leaves";
 import cornersL from "./assets/leaves/corners-1024.webp";
 import cornersS from "./assets/leaves/corners-640.webp";
@@ -14,6 +15,7 @@ import scatterS from "./assets/leaves/scatter-640.webp";
 import cornersT from "./assets/leaves/corners-96.webp";
 import vinesT from "./assets/leaves/vines-96.webp";
 import scatterT from "./assets/leaves/scatter-96.webp";
+export { pickerLiveScript } from "./harbor-picker";
 
 export const HARBOR_FONT_PATH = "/harbor/source-serif-4-latin-600.woff2";
 const FONT_FACE = /\/\* @font-face:[\s\S]*?\/\* @end font-face \*\//;
@@ -30,13 +32,27 @@ export function harborFont(): Response {
   });
 }
 
+export const HARBOR_LOGO_PATH = "/harbor/grokbot-logo.svg";
+/** Header mark for /contacts. Same-origin <img>, so the page CSP stays default-src 'self'. Scripts in the file cannot run. */
+export function harborLogo(): Response {
+  return new Response(logo, {
+    headers: {
+      "content-type": "image/svg+xml",
+      "cache-control": "public, max-age=31536000, immutable",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "script-src 'none'",
+    },
+  });
+}
+
 // Leaf backdrop mockups (draft): original inline SVG (src/harbor-leaves.ts), so no fetch and no CSP change on any page.
 // Photo variants (?leaves=photo-corners|photo-vines|photo-scatter): self-served WebP behind a token-coloured scrim.
 // Images need an img source in the CSP. /contacts has one (default-src 'self'); /direct and /approve/* have
 // default-src 'none', which blocks every image (data: URIs too), so there the photo option falls back to the
-// matching SVG option. Pick one at build time with HARBOR_LEAVES_DEFAULT, or preview with ?leaves=.
+// matching SVG option. The picker offers the photos only (the SVG layouts are not choices). The default is the
+// vines photo; pages that cannot load images fall back to the vines SVG. Preview any layout with ?leaves=.
 type PhotoOption = `photo-${LeavesOption}`;
-export const HARBOR_LEAVES_DEFAULT: LeavesOption | PhotoOption | "none" = "none";
+export const HARBOR_LEAVES_DEFAULT: LeavesOption | PhotoOption | "none" = "photo-vines";
 const isLeaves = (v: string | null): v is LeavesOption => v !== null && Object.hasOwn(HARBOR_LEAVES, v);
 const PHOTOS: Record<string, ArrayBuffer> = {
   "corners-1024": cornersL, "corners-640": cornersS, "vines-1024": vinesL, "vines-640": vinesS, "scatter-1024": scatterL, "scatter-640": scatterS, "corners-96": cornersT, "vines-96": vinesT, "scatter-96": scatterT,
@@ -60,12 +76,15 @@ export function leavesFor(req: Request, images = false): string {
   return HARBOR_LEAVES[pick as LeavesOption];
 }
 
-// ---------- Background picker (no JavaScript) ----------
-// A <details> menu with a native radio group posts to POST /harbor/background, which stores the pick in a cookie
-// and 303s back. The page reads the cookie server-side, so the right background is in the first paint (no flash),
-// and it works on /direct and /approve/*, which allow no scripts. form-action 'self' is already in every CSP.
+// ---------- Background picker ----------
+// POST /harbor/background stores the pick in a cookie and 303s back. The page reads the cookie server-side, so the
+// right background is in the first paint. /contacts also paints the new choice in place on change (src/harbor-picker.ts)
+// and posts the same form with fetch. /direct and /approve/* allow no scripts, so the tile itself submits the form.
+// form-action 'self' is already in every CSP.
 export const BG_COOKIE = "hb_bg";
-export const BG_OPTIONS = ["none", "corners", "vines", "scatter", "photo-corners", "photo-vines", "photo-scatter"] as const;
+// SVG layouts (corners, vines, scatter) stay in HARBOR_LEAVES for the no-image fallback and ?leaves= preview.
+// They are not picker choices. The three photos are. Labels have no "(photo)" parenthetical.
+export const BG_OPTIONS = ["none", "photo-corners", "photo-vines", "photo-scatter"] as const;
 type BgOption = (typeof BG_OPTIONS)[number];
 const isBg = (v: string | null | undefined): v is BgOption => !!v && (BG_OPTIONS as readonly string[]).includes(v);
 function bgCookie(req: Request): string | null {
@@ -74,8 +93,7 @@ function bgCookie(req: Request): string | null {
 }
 const BACK = /^\/(?:contacts|direct|approve\/[a-f0-9]{32})$/;
 const LABELS: Record<BgOption, string> = {
-  none: "None", corners: "Corners", vines: "Vines", scatter: "Scatter",
-  "photo-corners": "Corners (photo)", "photo-vines": "Vines (photo)", "photo-scatter": "Scatter (photo)",
+  none: "None", "photo-corners": "Corners", "photo-vines": "Vines", "photo-scatter": "Scatter",
 };
 const LEAF = (x: number, y: number, r: number, s: number) => `<path transform="translate(${x},${y}) rotate(${r}) scale(${s})" d="M0,0C5,-5,14,-5,22,0C14,5,5,5,0,0Z"/>`;
 /** Tiny inline thumbnails (no fetch, so they work under default-src 'none'). */
@@ -88,14 +106,24 @@ function thumb(o: BgOption, images: boolean): string {
   if (o === "none") return `<span class=hb-th></span>`;
   const base = o.startsWith("photo-") ? (o.slice(6) as LeavesOption) : (o as LeavesOption);
   if (o.startsWith("photo-") && images) return `<span class="hb-th hb-th-${o}"></span>`;
-  return `<span class=hb-th><svg viewBox="0 0 64 36" width=64 height=36 fill="#a3b04e" fill-opacity=".6">${MINI[base]}</svg></span>`;
+  return `<span class=hb-th><svg viewBox="0 0 64 36" fill="#a3b04e" fill-opacity=".6">${MINI[base]}</svg></span>`;
 }
-/** The picker markup for this page. `back` is the page's own path; `images` says whether its CSP allows images. */
+/**
+ * The picker. `images` is true only on /contacts, which can run a nonce'd script and load images:
+ * radios (visually hidden, still in the tab and accessibility order) post on change. Other pages
+ * have default-src 'none', so each tile is a submit button: one click posts, with no separate Apply.
+ * A noscript Apply remains on /contacts for a browser that has scripts turned off.
+ */
 export function pickerFor(req: Request, back: string, images = false): string {
   const q = new URL(req.url).searchParams.get("leaves");
   const cur: BgOption = isBg(q) ? q : (bgCookie(req) as BgOption | null) ?? (HARBOR_LEAVES_DEFAULT as BgOption);
-  const opts = BG_OPTIONS.map((o) => `<label class=hb-opt><input type=radio name=leaves value="${o}"${o === cur ? " checked" : ""}>${thumb(o, images)}<span>${LABELS[o]}${o.startsWith("photo-") && !images ? " <small>(photo on Contacts only)</small>" : ""}</span></label>`).join("");
-  return `<details class=hb-pick><summary>Background</summary><form method=post action="/harbor/background"><fieldset><legend>Page background</legend>${opts}</fieldset><input type=hidden name=back value="${BACK.test(back) ? back : "/contacts"}"><button>Apply</button></form></details>`;
+  const safe = BACK.test(back) ? back : "/contacts";
+  const tile = (o: BgOption) => `${thumb(o, images)}<span>${LABELS[o]}</span>`;
+  const opts = images
+    ? BG_OPTIONS.map((o) => `<input class=vh type=radio name=leaves id="hb-${o}" value="${o}"${o === cur ? " checked" : ""}><label class=hb-opt for="hb-${o}">${tile(o)}</label>`).join("")
+    : BG_OPTIONS.map((o) => `<button type=submit class=hb-opt name=leaves value="${o}" aria-pressed=${o === cur}>${tile(o)}</button>`).join("");
+  const fallback = images ? "<noscript><button>Apply</button></noscript>" : "";
+  return `<details class=hb-pick><summary>Background</summary><form method=post action="/harbor/background"${images ? " id=hb-bg" : ""}><fieldset><legend class=vh>Page background</legend><div class=hb-grid>${opts}</div></fieldset><input type=hidden name=back value="${safe}">${fallback}</form></details>`;
 }
 /** POST /harbor/background: same-origin form only; sets the cookie and goes back to the page. */
 export async function setBackground(req: Request): Promise<Response> {
