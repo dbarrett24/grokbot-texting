@@ -562,7 +562,7 @@ export class Relay extends DurableObject<Env> {
 
   /**
    * POST /send (request host, REQUEST_TOKEN). Body: exactly one of {to_name}, {candidate_id} or {to}, plus {body}.
-   * Never echoes a phone number. See README "Direct send" for the full decision table.
+   * Never echoes a phone number. See SETTINGS.md "How a direct send is checked" for the full decision table.
    */
   private async direct(req: Request): Promise<Response> {
     const st = { authed: false, gated: false };

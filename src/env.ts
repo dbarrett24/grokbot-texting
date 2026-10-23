@@ -22,7 +22,7 @@ export interface Env {
   REQUEST_HOST: string; // hostname serving only POST /request, POST /send and GET /request/:id (no Access)
   APPROVE_HOST: string; // hostname serving only /approve/*, /log, /direct*, /contacts* (whole host behind Access; every /contacts* path is 404 on REQUEST_HOST)
   DISABLED?: string; // "1" = kill switch: refuse everything (direct sends included)
-  // ---- direct send (POST /send). See README "Direct send". ----
+  // ---- direct send (POST /send). See SETTINGS.md. ----
   DIRECT_SEND?: string; // "1" (exact; template default) = on. REQUEST_TOKEN can then send WITHOUT approval to numbers on the direct list
   CONTACTS_SNAPSHOT_ONLY?: string; // REMOVED. Read once, by the DIRECT_ALLOWLIST upgrade import only: on an upgrade, exact "0" = those entries were textable, so they stay on (flagged); a fresh deploy never enables them
   RUNAWAY_PAUSE?: string; // unset = on; only "0" (template default) turns it off. More than RUNAWAY_MAX direct sends in 60 min pauses direct send
