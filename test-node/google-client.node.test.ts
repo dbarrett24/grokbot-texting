@@ -123,7 +123,7 @@ describe("installClientJson", () => {
     writeFileSync(file, json);
     const r = spawnSync(process.execPath, ["scripts/google-client.mjs", `--file=${file}`], {
       encoding: "utf8",
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
     });
     const out = `${r.stdout ?? ""}\n${r.stderr ?? ""}`;
     expect(r.status).not.toBe(0);
