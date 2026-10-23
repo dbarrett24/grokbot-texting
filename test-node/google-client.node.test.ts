@@ -51,18 +51,18 @@ describe("fileArg", () => {
 
 describe("configArg", () => {
   it("takes --config=path as one element and has no default", () => {
-    expect(configArg(["--config=.relay-live/wrangler.toml"])).toBe(".relay-live/wrangler.toml");
-    expect(() => configArg(["--config", ".relay-live/wrangler.toml"])).toThrow(/one argument/);
+    expect(configArg(["--config=.relay-local/wrangler.toml"])).toBe(".relay-local/wrangler.toml");
+    expect(() => configArg(["--config", ".relay-local/wrangler.toml"])).toThrow(/one argument/);
     expect(() => configArg([])).toThrow(/pass --config=<path>/);
     expect(() => configArg(["--config="])).toThrow(/pass --config=<path>/);
   });
 });
 
-const LIVE = ".relay-live/wrangler.toml";
+const LIVE = ".relay-local/wrangler.toml";
 function tempConfig(body = 'name = "sms-relay"\n'): { dir: string; config: string } {
   const dir = mkdtempSync(join(tmpdir(), "gclient-cfg-"));
   const config = join(dir, LIVE);
-  mkdirSync(join(dir, ".relay-live"));
+  mkdirSync(join(dir, ".relay-local"));
   writeFileSync(config, body);
   return { dir, config };
 }
@@ -180,7 +180,7 @@ describe("installClientJson", () => {
 
   it("does not fall back to .relay-local/wrangler.toml when --config is omitted", () => {
     expect(() => configArg([])).toThrow(/pass --config=<path>/);
-    expect(configArg(["--file=client.json", "--config=.relay-live/wrangler.toml"])).toBe(".relay-live/wrangler.toml");
+    expect(configArg(["--file=client.json", "--config=.relay-local/wrangler.toml"])).toBe(".relay-local/wrangler.toml");
   });
 
   it("the CLI exits non-zero, keeps the JSON, and never prints the secret when wrangler fails", () => {
