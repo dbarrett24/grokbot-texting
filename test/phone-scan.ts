@@ -23,6 +23,12 @@ function strings(v: unknown, out: string[] = []): string[] {
   return out;
 }
 
+// The logo ring colour is nine spaced digits (`255 255 255`). It is a colour, not a phone number.
+const LOGO_RING = "rgb(255 255 255 / .18)";
+function withoutLogoRing(s: string): string {
+  return s.replaceAll(LOGO_RING, " ");
+}
+
 export function phoneHits(text: string): string[] {
   let parts: string[];
   try {
@@ -42,8 +48,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   const hits: string[] = [];
-  for (const r of scan.responses) hits.push(...phoneHits(r).map((x) => `response: ${x.slice(0, 120)}`));
-  for (const c of scan.console) if (looksLikePhone(c)) hits.push(`console: ${c.slice(0, 120)}`);
+  for (const r of scan.responses) hits.push(...phoneHits(withoutLogoRing(r)).map((x) => `response: ${x.slice(0, 120)}`));
+  for (const c of scan.console) if (looksLikePhone(withoutLogoRing(c))) hits.push(`console: ${c.slice(0, 120)}`);
   for (const s of scan.stubs) {
     const rows = await (runInDurableObject as any)(s, async (i: any) => i.ctx.storage.sql.exec("SELECT event, request_id, recipient, sha256, detail FROM log").toArray());
     for (const row of rows) for (const v of Object.values(row)) if (typeof v === "string" && looksLikePhone(v)) hits.push(`log ${row.event}: ${v.slice(0, 120)}`);

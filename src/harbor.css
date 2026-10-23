@@ -67,9 +67,10 @@ body{font:16px/1.5 var(--h-sans);color:var(--h-text);max-width:40em;margin:1.5em
 body::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:var(--h-surface-radius);background:var(--h-surface);-webkit-backdrop-filter:var(--h-surface-filter);backdrop-filter:var(--h-surface-filter);box-shadow:var(--h-surface-shadow)}
 h1,h2{font-family:var(--h-serif);font-weight:600;letter-spacing:.2px;margin:.4em 0 .5em}h1{font-size:1.6em}h2{font-size:1.3em}
 h1.product{font-size:2.15em;line-height:1.15;margin:.1em 0 .35em;color:var(--h-text)}
-.brand{display:inline-flex;gap:0.625rem;align-items:center}.brand-logo{display:block;width:32px;height:32px;max-width:40px;max-height:40px}
-@media (max-width:480px){.brand-logo{width:28px;height:28px}}
-body:has(.hl-photo) .brand-logo{box-shadow:0 0 0 1px rgb(255,255,255,.18);border-radius:23%}
+.brand{display:flex;align-items:center;gap:20px;margin:.2em 0 .7em}
+.brand h1.product{margin:0;font-size:2.5em}
+.brand-logo{display:block;flex:none;width:96px;height:96px;max-width:none;max-height:none;border-radius:23%;box-shadow:0 0 0 1px rgb(255 255 255 / .18)}
+@media (max-width:480px){.brand{gap:14px}.brand-logo{width:72px;height:72px}.brand h1.product{font-size:1.9em}}
 a{color:var(--h-link)}a:hover{color:var(--h-text)}code{font-size:.9em}small,.ro{color:var(--h-muted)}.warn{color:var(--h-critical)}
 :focus-visible{outline:2px solid var(--h-focus);outline-offset:2px}
 button{font:inherit;font-weight:600;color:var(--h-text);padding:.4em .8em;border-radius:var(--h-button-radius);border:1px solid var(--h-border);background:var(--h-solid);cursor:pointer}
