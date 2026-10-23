@@ -126,16 +126,9 @@ export function withProject(href: string, id: string): string {
   else u.searchParams.delete("project");
   return u.toString();
 }
-/** A Web client ID starts with the project number: "123456789012-abc….apps.googleusercontent.com". */
-export function projectNumberOf(clientId: string | null): string | null {
-  return clientId?.match(/^([0-9]{6,20})-[A-Za-z0-9]+\.apps\.googleusercontent\.com$/)?.[1] ?? null;
-}
-
 export interface GooglePanel {
   tokenKey: "ok" | "missing" | "invalid";
   client: "stored" | "secrets" | "unreadable" | null;
-  /** Project number from the client ID, when a client is known: the links use it until a project ID is typed. */
-  project: string | null;
   redirectUri: string;
   accounts: { label: string; stored: boolean; fromSeed: boolean; connected: string | null }[];
   /** Disconnected here but still in GOOGLE_ACCOUNTS (and maybe a GOOGLE_RT_ secret): tell the owner to remove them. */

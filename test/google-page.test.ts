@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { API, BASE, harness, type Harness } from "./helpers";
 import { fakeGoogle, inRelay, must, sql as sqlOf, type FakeGoogle } from "./google-fixture";
-import { GCP_LINKS, GCP_PROJECT_LINKS, GOOGLE_ERROR_FIX, SYNC_FIX, TOKEN_KEY_MISSING_FIX, googleErrorFix, projectNumberOf, syncFix, withProject } from "../src/contacts";
+import { GCP_LINKS, GCP_PROJECT_LINKS, GOOGLE_ERROR_FIX, SYNC_FIX, TOKEN_KEY_MISSING_FIX, googleErrorFix, syncFix, withProject } from "../src/contacts";
 import { GOOGLE_SCOPE } from "../src/google";
 
 const KEY = "ab".repeat(32); // obviously fake
@@ -176,12 +176,6 @@ describe("EL review fixes (deep links land in the right project; disconnect left
     for (const k of ["peopleLibrary", "branding", "audience", "createClient"] as const) expect(withProject(GCP_LINKS[k], "contacts-relay-123456")).toBe(`${GCP_LINKS[k]}?project=contacts-relay-123456`);
     expect(withProject(GCP_LINKS.audience, "123456789012")).toBe(`${GCP_LINKS.audience}?project=123456789012`);
     for (const bad of ["", "X", "a b", "evil&x=1", "-bad-start"]) expect(withProject(`${GCP_LINKS.audience}?project=old-project-1`, bad)).toBe(GCP_LINKS.audience);
-  });
-
-  it("the project number comes from a Web client ID", () => {
-    expect(projectNumberOf("123456789012-abc123.apps.googleusercontent.com")).toBe("123456789012");
-    expect(projectNumberOf("123-testonly.apps.googleusercontent.com")).toBeNull();
-    expect(projectNumberOf(null)).toBeNull();
   });
 
   it("with a stored client, the page still has no paste form and no console links", async () => {
