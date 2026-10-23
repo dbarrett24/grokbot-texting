@@ -10,10 +10,11 @@ workers_dev = false   # served only on your two custom hostnames
 #   { pattern = "app.example.com", custom_domain = true },    # APPROVE_HOST
 # ]
 
-# Page look (src/harbor.ts): the Harbor CSS is bundled as text, the Source Serif 4 font as bytes.
+# Page look (src/harbor.ts): Harbor CSS and the header logo are text; the font and leaf photos are bytes.
+# One rule per type: a second Text rule would be ignored once fallthrough is false.
 [[rules]]
 type = "Text"
-globs = ["**/*.css"]
+globs = ["**/*.css", "**/*.svg"]
 fallthrough = false
 
 [[rules]]

@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { API, BASE, harness, type Harness } from "./helpers";
 import { fakeGoogle, inRelay, must, sql as sqlOf, type FakeGoogle } from "./google-fixture";
-import { GCP_LINKS, GCP_PROJECT_LINKS, GOOGLE_ERROR_FIX, SYNC_FIX, TOKEN_KEY_MISSING_FIX, googleErrorFix, projectNumberOf, syncFix, withProject } from "../src/contacts";
+import { GCP_LINKS, GCP_PROJECT_LINKS, GOOGLE_ERROR_FIX, SYNC_FIX, TOKEN_KEY_MISSING_FIX, googleErrorFix, syncFix, withProject } from "../src/contacts";
 import { GOOGLE_SCOPE } from "../src/google";
 
 const KEY = "ab".repeat(32); // obviously fake
@@ -33,13 +33,15 @@ beforeEach(async () => {
 });
 
 describe("Set up Google checklist", () => {
-  it("lists every deep link (new tab, no referrer), the exact redirect URI, and opens itself when no client is set", async () => {
+  it("the page is Connect Google only: no client fields, no console checklist", async () => {
     const { html } = await page();
-    for (const url of Object.values(GCP_LINKS)) expect(html).toContain(`href="${url}" target=_blank rel="noopener noreferrer"`);
-    expect(html).toContain('<code id=gredir>https://approve.example.test/contacts/google/callback</code>');
-    expect(html).toMatch(/<details id=gsetup open>/);
-    for (const k of ["enablePeople", "peopleLibrary", "branding", "audience", "createClient"] as const) expect(html).toContain(`href="${GCP_LINKS[k]}" target=_blank rel="noopener noreferrer" data-gproj`);
-    for (const k of ["createProject", "connections"] as const) expect(html).not.toContain(`href="${GCP_LINKS[k]}" target=_blank rel="noopener noreferrer" data-gproj`);
+    expect(html).not.toContain("name=client_id");
+    expect(html).not.toContain("name=client_secret");
+    expect(html).not.toContain("Save client");
+    expect(html).not.toContain("id=gsetup");
+    expect(html).not.toContain("id=gclient");
+    for (const href of Object.values(GCP_LINKS)) expect(html).not.toContain(href);
+    expect(html).toContain("node scripts/google-client.mjs --file=client.json");
     expect(html).toMatch(/<button disabled>Connect Google<\/button>/); // no client yet
   });
 
@@ -63,11 +65,11 @@ describe("Set up Google checklist", () => {
     expect(csp).not.toMatch(/form-action[^;]*\*/);
   });
 
-  it("without GOOGLE_TOKEN_KEY: says so, and Save client / Connect are disabled", async () => {
+  it("without GOOGLE_TOKEN_KEY: says so, and Connect is disabled", async () => {
     await h.setEnv({ GOOGLE_TOKEN_KEY: "" });
     const { html } = await page();
     expect(html).toContain("GOOGLE_TOKEN_KEY is not set");
-    expect(html).toMatch(/<button disabled>Save client<\/button>/);
+    expect(html).not.toContain("Save client");
     expect(html).toMatch(/<button disabled>Connect Google<\/button>/);
     await h.setEnv({ GOOGLE_TOKEN_KEY: "not-a-key" });
     expect((await page()).html).toContain("GOOGLE_TOKEN_KEY is not valid");
@@ -85,7 +87,8 @@ describe("POST /contacts/google/client (paste form)", () => {
     expect(html).not.toContain(CLIENT_SECRET);
     expect(html).toContain("Google client: saved here.");
     expect(html).toContain("Google client saved");
-    expect(html).toMatch(/<details id=gsetup>/); // closed once a client exists
+    expect(html).not.toContain("id=gsetup");
+    expect(html).not.toContain(CLIENT_SECRET);
     expect(html).toMatch(/<button>Connect Google<\/button>/);
   });
 
@@ -175,21 +178,15 @@ describe("EL review fixes (deep links land in the right project; disconnect left
     for (const bad of ["", "X", "a b", "evil&x=1", "-bad-start"]) expect(withProject(`${GCP_LINKS.audience}?project=old-project-1`, bad)).toBe(GCP_LINKS.audience);
   });
 
-  it("the project number comes from a Web client ID", () => {
-    expect(projectNumberOf("123456789012-abc123.apps.googleusercontent.com")).toBe("123456789012");
-    expect(projectNumberOf("123-testonly.apps.googleusercontent.com")).toBeNull();
-    expect(projectNumberOf(null)).toBeNull();
-  });
-
-  it("with a stored client, links 2-6 are rendered with that project and the field is prefilled; the script reuses withProject and blocks project-less clicks", async () => {
+  it("with a stored client, the page still has no paste form and no console links", async () => {
     await inRelay(h, (i) => i.saveGoogleClient("424242-abc123.apps.googleusercontent.com", CLIENT_SECRET));
     const { html } = await page();
-    for (const k of GCP_PROJECT_LINKS) expect(html).toContain(`href="${withProject(GCP_LINKS[k], "424242").replace(/&/g, "&amp;")}"`);
-    for (const k of ["createProject", "connections"] as const) expect(html).toContain(`href="${GCP_LINKS[k]}"`);
-    expect(html).toContain('value="424242"');
-    expect(html).toContain(`const withProject=${withProject.toString()};`);
-    expect(html).toContain("Type the project ID first");
-    expect(html).toContain("the link lands on the overview page instead");
+    for (const href of Object.values(GCP_LINKS)) expect(html).not.toContain(href);
+    expect(html).not.toContain("name=client_secret");
+    expect(html).not.toContain("Type the project ID first");
+    expect(html).toContain("Google client: saved here.");
+    expect(html).toMatch(/<button>Connect Google<\/button>/);
+    expect(html).not.toContain(CLIENT_SECRET);
   });
 
   it("a disconnected GOOGLE_ACCOUNTS label: the page says to remove the legacy setting and secret", async () => {

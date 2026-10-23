@@ -75,7 +75,7 @@ describe("check CLI", () => {
     expect(missing.status).toBe(1);
     expect(missing.stderr).toContain("missing Text rule");
     expect(missing.stderr).toContain("missing Data rule");
-    expect(missing.stderr).toContain('globs = ["**/*.css"]');
+    expect(missing.stderr).toContain('globs = ["**/*.css", "**/*.svg"]');
     expect(missing.stderr).toContain('globs = ["**/*.woff2", "**/*.webp"]');
     expect(missing.stderr).toContain("check-wrangler: FAIL");
     const wrong = run(["--config=test-node/fixtures/wrangler/wrong-main.toml"]);

@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { runInDurableObject } from "cloudflare:test";
 import { harness, API, BASE, OWNER, FRIEND, type Harness } from "./helpers";
 import type { Relay } from "../src/relay";
-import { GCP_LINKS, isContactsPath, isExampleNumber, ownerFromAccess, type Owner } from "../src/contacts";
+import { isContactsPath, isExampleNumber, ownerFromAccess, type Owner } from "../src/contacts";
 
 const RILEY = "+447700900142", RILEY_NEW = "+447700900143", SAM = "+447700900151", ALEX = "+447700900161", EXAMPLE = "+15555550123";
 const snap = (contacts: unknown[]) => ({ generated_at: "2026-10-19T19:00:00Z", contacts });
@@ -216,13 +216,17 @@ describe("owner-only: guards", () => {
     expect(csp).toMatch(/default-src 'self'; script-src 'self' 'nonce-[a-f0-9]{32}'/);
     expect(csp).toContain("frame-ancestors 'none'");
     expect(html).not.toMatch(/src="https?:/); // nothing loads from another origin
-    // Off-site links: only the Set up Google deep links (google-connect PR 3), each a new tab with no referrer.
-    const allowed = new Set<string>(Object.values(GCP_LINKS));
-    for (const m of html.matchAll(/href="(https?:[^"]*)"([^>]*)>/g)) {
-      expect(allowed.has(m[1] ?? "")).toBe(true);
-      expect(m[2]).toContain('target=_blank rel="noopener noreferrer"');
-    }
+    // The console checklist left this page, so no off-site link remains.
+    expect([...html.matchAll(/href="(https?:[^"]*)"/g)]).toEqual([]);
     for (const n of [RILEY, SAM, ALEX, EXAMPLE]) expect(html).not.toContain(n.slice(-4));
+    expect(html).toContain('<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=32 height=32><h1 class=product>GrokBot Texting</h1></header>');
+    expect(html).not.toMatch(/<a[^>]*>[\s\S]*?<img class=brand-logo/);
+    expect(html).toContain('<select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select>');
+    expect(html).toContain("s.slice(page*size");
+    expect(html).toContain("<h2>Contacts</h2>");
+    expect(html).toContain("<h2>Sync</h2>");
+    expect(html).not.toContain("Resolve preview");
+    expect(html).not.toContain("<summary>Health</summary>");
     expect(new TextEncoder().encode(html).length).toBeLessThan(25_000);
   });
 });

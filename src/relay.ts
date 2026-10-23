@@ -3,10 +3,10 @@ import type { Env } from "./env";
 import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, importHmacKey } from "./e2e";
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
-import { HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH, harborFont, harborPhoto, leavesFor, HARBOR_PHOTO_PREFIX, pickerFor, setBackground } from "./harbor";
+import { HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH, HARBOR_LOGO_PATH, harborFont, harborLogo, harborPhoto, leavesFor, HARBOR_PHOTO_PREFIX, pickerFor, setBackground } from "./harbor";
 import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, decodeClientBlob, decodeClientRow, importTokenKey, isClientId, isClientSecret, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
-  CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, projectNumberOf, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
+  CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
 } from "./contacts";
 import { E164, Refuse, hasLink, localDate, maskNumber, parseAllowlist, parseCount, parseSwitch, parseTapConfig, parseTimezone, sendCap, validateRequestBody, validateTapText, type TapConfig } from "./rules";
 import {
@@ -299,6 +299,7 @@ export class Relay extends DurableObject<Env> {
         if (m && req.method === "GET") return await this.approvePage(req, m[1]);
         if (m && req.method === "POST") return await this.decide(req, m[1]);
         if (req.method === "GET" && path === HARBOR_FONT_PATH) return harborFont(); // static OFL font for /contacts headings
+        if (req.method === "GET" && path === HARBOR_LOGO_PATH) return harborLogo(); // contacts header mark
         if (req.method === "POST" && path === "/harbor/background") return await setBackground(req); // cosmetic cookie only
         if (req.method === "GET" && path.startsWith(HARBOR_PHOTO_PREFIX)) return harborPhoto(path) ?? json(404, { error: "not_found" });
         if (req.method === "GET" && path === "/log") return await this.showLog(req);
@@ -1332,16 +1333,10 @@ export class Relay extends DurableObject<Env> {
       client = "unreadable";
     }
     const stored = new Set(this.sql.exec("SELECT label FROM google_accounts").toArray().flatMap((r) => (typeof r["label"] === "string" ? [r["label"]] : [])));
-    let project: string | null = null;
-    try {
-      project = projectNumberOf((await this.googleClient())?.id ?? null);
-    } catch {
-      project = null;
-    }
     const when = new Map(this.sql.exec("SELECT label, connected_ms FROM google_accounts").toArray().flatMap((r) => (typeof r["label"] === "string" && typeof r["connected_ms"] === "number" ? [[r["label"], r["connected_ms"]] as const] : [])));
     const ks = await this.googleKeyStatus();
     return {
-      tokenKey, client, project, redirectUri: this.googleRedirectUri(),
+      tokenKey, client, redirectUri: this.googleRedirectUri(),
       accounts: this.googleLabels().map((label) => { const ms = when.get(label); return { label, stored: stored.has(label), fromSeed: !stored.has(label) && !!this.legacyRt(label), connected: ms === undefined ? null : this.fmtTime(ms) }; }),
       leftovers: this.googleLegacyLeftovers(),
       keyStatus: { total: ks.total, onOld: ks.onOld },
@@ -1547,15 +1542,11 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     const connected = q.get("connected"), disconnected = q.get("disconnected");
     const label = (v: string | null) => (v && /^[A-Z0-9_]{1,32}$/.test(v) ? v : null);
     const html = renderContactsPage({
-      csrf, nonce, method: who.method, leaves: leavesFor(req, true) + pickerFor(req, "/contacts", true), // /contacts CSP (default-src 'self') allows same-origin images
+      csrf, nonce, leaves: leavesFor(req, true) + pickerFor(req, "/contacts", true), // /contacts CSP (default-src 'self') allows same-origin images
       migratedOn: key ? (this.sql.exec(`SELECT COUNT(*) AS c FROM contact_prefs WHERE ${MIGRATED_ON}`).one()["c"] as number) : 0,
-      sources: [...accts, UPLOAD_SOURCE, LEGACY_SOURCE].filter((a) => a !== LEGACY_SOURCE || this.meta(`acct:${a}:ok_ms`)).map((a) => {
-        const ok = this.meta(`acct:${a}:ok_ms`);
-        return { name: a, numbers: this.meta(`acct:${a}:numbers`), lastGood: ok ? this.fmtTime(Number(ok)) : null };
-      }),
       lastError: errCodeOf && lastErr ? { code: errCodeOf, when: this.fmtTime(lastErr.ms) } : null,
       canSync: accts.length > 0,
-      toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors: see Health"
+      toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors"
         : label(connected) ? `Connected ${label(connected)}. Press Sync now to load its contacts.`
         : label(disconnected) ? `Disconnected ${label(disconnected)}${q.get("revoke") === "failed" ? " (Google didn't confirm the revoke: remove it at myaccount.google.com/connections)" : ""}`
         : q.get("google_client") === "saved" ? "Google client saved" : null,
