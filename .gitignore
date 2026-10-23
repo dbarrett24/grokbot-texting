@@ -3,6 +3,7 @@ node_modules
 .dev.vars
 *.tgz
 .env*
-.relay-local/
+# Covers any local or live relay config folder.
+.relay-*/
 walk.local.toml
 .walk-state-*/
