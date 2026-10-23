@@ -46,7 +46,7 @@ html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-bac
 .hl-photo-vines{background-image:var(--hl-scrim),url(/harbor/leaves/vines-1024.webp)}
 .hl-photo-scatter{background-image:var(--hl-scrim),url(/harbor/leaves/scatter-1024.webp)}
 @media (max-width:40em){.hl-photo-corners{background-image:var(--hl-scrim),url(/harbor/leaves/corners-640.webp)}.hl-photo-vines{background-image:var(--hl-scrim),url(/harbor/leaves/vines-640.webp)}.hl-photo-scatter{background-image:var(--hl-scrim),url(/harbor/leaves/scatter-640.webp)}}
-.hb-th.hb-th-photo-corners{background:url(/harbor/leaves/corners-96.webp) center/cover}.hb-th.hb-th-photo-vines{background:url(/harbor/leaves/vines-96.webp) center/cover}.hb-th.hb-th-photo-scatter{background:url(/harbor/leaves/scatter-96.webp) center/cover}
+.hb-th.hb-th-photo-corners{background:url(/harbor/leaves/corners-256.webp) center/cover}.hb-th.hb-th-photo-vines{background:url(/harbor/leaves/vines-256.webp) center/cover}.hb-th.hb-th-photo-scatter{background:url(/harbor/leaves/scatter-256.webp) center/cover}
 /* @end photo */
 /* Picker: radios are clipped, not display:none, so they stay in the tab and accessibility order.
    Tiles are about 2x the old 64x36 thumbs and wrap in a grid that fits a 375px viewport. */
@@ -83,6 +83,8 @@ details{margin:.8em 0}summary{cursor:pointer;font-weight:600}
 /* /contacts page parts (same selectors as before; no markup change) */
 body:has(#list){max-width:44em}.banner{background:var(--h-warning-bg);border:1px solid var(--h-warning-border);padding:.6em .8em;border-radius:var(--h-input-radius)}
 .bar{display:flex;flex-wrap:wrap;gap:.4em;margin:.6em 0;align-items:center}.bar button[aria-pressed=true]{background:var(--h-text);color:var(--h-cta-ink);border-color:var(--h-text)}
+/* Keeps the per-page label with its select when .bar wraps. */
+.per{display:flex;gap:4px}
 ul#list{list-style:none;padding:0;margin:0}#list li{display:flex;align-items:center;gap:.5em;padding:.55em 0;border-bottom:1px solid var(--h-border)}
 .who{flex:1;min-width:0}.who small{display:block}.star{border:none;background:none;font-size:1.4em;padding:0 .2em;color:var(--h-muted)}.star:hover:not(:disabled){background:none;box-shadow:none;color:var(--h-text)}
 .star[aria-pressed=true]{color:var(--h-focus)}.sw{min-width:4.2em}.sw[aria-checked=true]{background:var(--h-success);color:var(--h-cta-ink);border-color:var(--h-success)}.ro{font-size:.85em}

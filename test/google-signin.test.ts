@@ -35,8 +35,7 @@ beforeEach(async () => {
   h = await harness();
   g = await fakeGoogle(h);
   g.tokenReply = { status: 200, body: { access_token: "TEST-ONLY-at", refresh_token: RT, scope: GOOGLE_SCOPE, token_type: "Bearer" } };
-  await h.setEnv({ GOOGLE_ACCOUNTS: "", GOOGLE_TOKEN_KEY: KEY, LOG_HASH_KEY: "TEST-ONLY-log-hash-key-not-a-real-secret" });
-  await inRelay(h, (i) => i.saveGoogleClient(CLIENT_ID, CLIENT_SECRET));
+  await h.setEnv({ GOOGLE_ACCOUNTS: "", GOOGLE_TOKEN_KEY: KEY, LOG_HASH_KEY: "TEST-ONLY-log-hash-key-not-a-real-secret", GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: CLIENT_SECRET });
 });
 
 describe("POST /contacts/google/start", () => {
@@ -85,9 +84,10 @@ describe("POST /contacts/google/start", () => {
     expect(bad.status).toBe(303); // a code on the page, not a 500
     expect(where(bad).searchParams.get("google_error")).toBe("google_token_key_invalid");
     expect(await sql("SELECT * FROM google_oauth_state")).toEqual([]);
-    await h.setEnv({ GOOGLE_TOKEN_KEY: KEY });
-    await sql("DELETE FROM google_client");
+    await h.setEnv({ GOOGLE_TOKEN_KEY: KEY, GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: "" });
+    await sql("INSERT INTO google_client(id, blob_ct, blob_iv, key_ver, saved_ms) VALUES(1,?,?,?,?)", CLIENT_SECRET, "iv", "kid", 1);
     expect(where(await start()).searchParams.get("google_error")).toBe("google_client_not_configured");
+    expect(await sql("SELECT * FROM google_client")).toEqual([]);
   });
 });
 

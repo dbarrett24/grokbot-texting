@@ -1,5 +1,6 @@
-// Google connection storage (google-connect PR 1): per-deploy OAuth client and per-label refresh tokens,
-// AES-GCM 256 encrypted at rest in the Relay Durable Object's SQLite under the GOOGLE_TOKEN_KEY secret.
+// Google connection storage: per-label refresh tokens, AES-GCM 256 encrypted at rest in the Relay
+// Durable Object's SQLite under the GOOGLE_TOKEN_KEY secret. The OAuth client is the GOOGLE_CLIENT_ID
+// and GOOGLE_CLIENT_SECRET Worker secrets (scripts/google-client.mjs), not a row in this database.
 // Pure helpers only; the Relay owns the tables. Errors are codes, never key, token or secret values.
 import { hex, unb64 } from "./e2e";
 
@@ -8,9 +9,8 @@ export const GOOGLE_SCOPE = "https://www.googleapis.com/auth/contacts.readonly";
 
 export type TokenKey = { kid: string; key: CryptoKey };
 export type Sealed = { ct: string; iv: string; kid: string };
-export type GoogleClient = { id: string; secret: string; source: "stored" | "secrets" };
+export type GoogleClient = { id: string; secret: string; source: "secrets" };
 export type GoogleAccountRow = { label: string; email: string | null; rt_ct: string; rt_iv: string; scope: string; connected_ms: number; key_ver: string };
-export type GoogleClientRow = { blob_ct: string; blob_iv: string; key_ver: string; saved_ms: number };
 
 const b64 = (u: Uint8Array) => btoa(String.fromCharCode(...u));
 
@@ -89,31 +89,10 @@ export function decodeAccountRow(v: unknown): GoogleAccountRow {
   return { label, email, rt_ct: str(v, "rt_ct"), rt_iv: str(v, "rt_iv"), scope: str(v, "scope"), connected_ms: num(v, "connected_ms"), key_ver: str(v, "key_ver") };
 }
 
-export function decodeClientRow(v: unknown): GoogleClientRow {
-  if (!isObj(v)) throw new Error("google_row_invalid");
-  return { blob_ct: str(v, "blob_ct"), blob_iv: str(v, "blob_iv"), key_ver: str(v, "key_ver"), saved_ms: num(v, "saved_ms") };
-}
-
-/** Decrypted client blob: {"id": "...apps.googleusercontent.com", "secret": "..."}, nothing else. */
-export function decodeClientBlob(json: string): { id: string; secret: string } {
-  let v: unknown;
-  try {
-    v = JSON.parse(json);
-  } catch {
-    throw new Error("google_client_blob_invalid");
-  }
-  if (!isObj(v) || Object.keys(v).some((k) => k !== "id" && k !== "secret")) throw new Error("google_client_blob_invalid");
-  const id = v["id"], secret = v["secret"];
-  if (typeof id !== "string" || !isClientId(id) || typeof secret !== "string" || !isClientSecret(secret)) throw new Error("google_client_blob_invalid");
-  return { id, secret };
-}
-
 /** Same rule as GOOGLE_ACCOUNTS labels (src/direct.ts parseAccounts): A-Z 0-9 _, 1..32, not UPLOAD. */
 export function isLabel(l: string): boolean {
   return /^[A-Z0-9_]{1,32}$/.test(l) && l !== "UPLOAD" && l !== "ALLOWLIST_LEGACY";
 }
-export const isClientId = (v: string) => /^[A-Za-z0-9-]{1,120}\.apps\.googleusercontent\.com$/.test(v);
-export const isClientSecret = (v: string) => /^[\x21-\x7e]{10,200}$/.test(v);
 
 // ---- google-connect PR 2: web sign-in (start/callback), state + PKCE, exact scope, revoke ----
 export const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";

@@ -221,6 +221,8 @@ describe.skipIf(process.platform === "win32")("local secret writer", () => {
     expect(statSync(f).mode & 0o777).toBe(0o600);
   });
   it("is covered by .gitignore", () => {
-    expect(readFileSync(join(ROOT, ".gitignore"), "utf8")).toMatch(/^\.relay-local\/$/m);
+    const ignore = readFileSync(join(ROOT, ".gitignore"), "utf8");
+    expect(ignore).toMatch(/^# Covers any local or live relay config folder\.$/m);
+    expect(ignore).toMatch(/^\.relay-\*\/$/m);
   });
 });

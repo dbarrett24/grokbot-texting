@@ -34,6 +34,9 @@ describe("Harbor look", () => {
     expect(HARBOR_CSS).toContain("input:focus-visible+label.hb-opt");
     expect(HARBOR_CSS).toContain("repeat(auto-fill,minmax(8.75rem,1fr))");
     expect(HARBOR_CSS).toContain("width:128px");
+    expect(HARBOR_CSS).toContain(".per{display:flex;gap:4px}");
+    expect(HARBOR_CSS).toContain("/harbor/leaves/corners-256.webp");
+    expect(HARBOR_CSS).not.toContain("96.webp");
     expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(8_000); // 6 KB before the leaf + picker mockups
   });
 
@@ -95,6 +98,7 @@ describe("Harbor leaf mockups (?leaves=)", () => {
     expect(direct.headers.get("content-security-policy")).toBe(STRICT_CSP);
     const contacts = await (await get(`${BASE}/contacts`)).text();
     expect(contacts).toContain('<div class="hl-photo hl-photo-vines" aria-hidden=true></div>');
+    expect(contacts).toContain('<span class=per><label class=ro for=per>Per page</label><select id=per>');
     expect(contacts).toContain('value="photo-vines" checked');
     expect(contacts).not.toContain('value="vines"');
     expect(contacts).not.toContain('value="corners"');
@@ -131,7 +135,7 @@ describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
   });
 
   it("serves the WebP files from the approve host only; unknown names 404", async () => {
-    for (const n of ["corners-1024", "corners-640", "vines-1024", "vines-640", "scatter-1024", "scatter-640"]) {
+    for (const n of ["corners-1024", "corners-640", "corners-256", "vines-1024", "vines-640", "vines-256", "scatter-1024", "scatter-640", "scatter-256"]) {
       const r = await get(`${BASE}/harbor/leaves/${n}.webp`);
       expect(r.status).toBe(200);
       expect(r.headers.get("content-type")).toBe("image/webp");

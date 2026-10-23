@@ -76,48 +76,44 @@ describe("Set up Google checklist", () => {
   });
 });
 
-describe("POST /contacts/google/client (paste form)", () => {
-  it("seals the pasted client, never echoes the secret, and enables Connect Google", async () => {
-    const r = await post("/contacts/google/client", { csrf: csrfOf((await page()).html), client_id: ` ${CLIENT_ID} `, client_secret: CLIENT_SECRET });
-    expect(r.status).toBe(303);
-    expect(loc(r)).toBe("/contacts?google_client=saved");
-    expect(await inRelay(h, (i) => i.googleClient())).toEqual({ id: CLIENT_ID, secret: CLIENT_SECRET, source: "stored" });
-    expect(JSON.stringify(await sql("SELECT * FROM google_client"))).not.toContain(CLIENT_SECRET);
-    const { html } = await page("?google_client=saved");
+describe("POST /contacts/google/client (retired)", () => {
+  const STALE = "TEST-ONLY-stale-client-secret";
+  const plant = () => sql("INSERT INTO google_client(id, blob_ct, blob_iv, key_ver, saved_ms) VALUES(1,?,?,?,?)", STALE, "iv", "kid", 1);
+
+  it("answers 410 without echoing the secret, and a stale stored client is cleared when secrets are set", async () => {
+    await h.setEnv({ GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: CLIENT_SECRET });
+    const r = await post("/contacts/google/client", { client_id: CLIENT_ID, client_secret: STALE });
+    expect(r.status).toBe(410);
+    const body = await r.text();
+    expect(body).toBe('{"error":"gone"}');
+    expect(body).not.toContain(STALE);
+    expect(body).not.toContain(CLIENT_SECRET);
+    await plant();
+    expect(await inRelay(h, (i) => i.googleClient())).toEqual({ id: CLIENT_ID, secret: CLIENT_SECRET, source: "secrets" });
+    expect(await sql("SELECT * FROM google_client")).toEqual([]);
+    const { html } = await page();
+    expect(html).not.toContain(STALE);
     expect(html).not.toContain(CLIENT_SECRET);
-    expect(html).toContain("Google client: saved here.");
-    expect(html).toContain("Google client saved");
-    expect(html).not.toContain("id=gsetup");
-    expect(html).not.toContain(CLIENT_SECRET);
+    expect(html).not.toContain("Google client: saved here.");
+    expect(html).not.toContain("Google client saved");
+    expect(html).toContain("from the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET secrets");
     expect(html).toMatch(/<button>Connect Google<\/button>/);
   });
 
-  it("refuses a malformed ID or secret with a code, and without CSRF / same Origin / on the bot host", async () => {
+  it("is 410 on the approve host with or without CSRF, and 404 on the bot host", async () => {
     const csrf = csrfOf((await page()).html);
-    expect(loc(await post("/contacts/google/client", { csrf, client_id: "nope", client_secret: CLIENT_SECRET }))).toBe("/contacts?google_error=google_client_id_invalid");
-    expect(loc(await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: "short" }))).toBe("/contacts?google_error=google_client_secret_invalid");
-    expect((await post("/contacts/google/client", { client_id: CLIENT_ID, client_secret: CLIENT_SECRET })).status).toBe(403);
-    expect((await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET }, { origin: "https://evil.example.test" })).status).toBe(403);
-    expect((await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET }, { host: API, origin: API })).status).toBe(404);
+    expect((await post("/contacts/google/client", { csrf, client_id: "nope", client_secret: CLIENT_SECRET })).status).toBe(410);
+    expect((await post("/contacts/google/client", { client_id: CLIENT_ID, client_secret: CLIENT_SECRET })).status).toBe(410);
+    expect((await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET }, { origin: "https://evil.example.test" })).status).toBe(410);
+    const api = await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET }, { host: API, origin: API });
+    expect(api.status).toBe(404);
+    expect(await api.text()).not.toContain(CLIENT_SECRET);
     expect(await sql("SELECT * FROM google_client")).toEqual([]);
   });
 
-  it("without GOOGLE_TOKEN_KEY nothing is stored", async () => {
-    const csrf = csrfOf((await page()).html);
-    await h.setEnv({ GOOGLE_TOKEN_KEY: "" });
-    expect(loc(await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET }))).toBe("/contacts?google_error=google_token_key_missing");
-    expect(await sql("SELECT * FROM google_client")).toEqual([]);
-  });
-
-  it.each([
-    ["the client set as GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET secrets", false, { GOOGLE_TOKEN_KEY: "", GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: CLIENT_SECRET }],
-    ["a pasted client still readable via GOOGLE_TOKEN_KEY_OLD", true, { GOOGLE_TOKEN_KEY: "", GOOGLE_TOKEN_KEY_OLD: KEY }],
-  ])("Connect Google with %s but no GOOGLE_TOKEN_KEY: refused before Google (nowhere to keep the token), no sign-in started", async (_what, paste, env) => {
-    let csrf = csrfOf((await page()).html);
-    if (paste) await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET });
-    await h.setEnv(env);
-    csrf = csrfOf((await page()).html);
-    const start = await post("/contacts/google/start", { csrf, label: "work" });
+  it("Connect Google with the secrets set but no GOOGLE_TOKEN_KEY: refused before Google, no sign-in started", async () => {
+    await h.setEnv({ GOOGLE_TOKEN_KEY: "", GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: CLIENT_SECRET });
+    const start = await post("/contacts/google/start", { csrf: csrfOf((await page()).html), label: "work" });
     expect(start.status).toBe(303);
     expect(loc(start)).toBe("/contacts?google_error=google_token_key_missing");
     expect(await sql("SELECT * FROM google_oauth_state")).toEqual([]);
@@ -125,10 +121,9 @@ describe("POST /contacts/google/client (paste form)", () => {
 });
 
 describe("accounts panel + Connect Google end to end", () => {
-  it("paste client → Connect Google → callback → the account shows as connected with Reconnect and Disconnect", async () => {
-    let csrf = csrfOf((await page()).html);
-    await post("/contacts/google/client", { csrf, client_id: CLIENT_ID, client_secret: CLIENT_SECRET });
-    csrf = csrfOf((await page()).html);
+  it("Connect Google → callback → the account shows as connected with Reconnect and Disconnect", async () => {
+    await h.setEnv({ GOOGLE_CLIENT_ID: CLIENT_ID, GOOGLE_CLIENT_SECRET: CLIENT_SECRET });
+    const csrf = csrfOf((await page()).html);
     const start = await post("/contacts/google/start", { csrf, label: "work" });
     const state = must(new URL(loc(start)).searchParams.get("state"));
     g.tokenReply = { status: 200, body: { access_token: "TEST-ONLY-at", refresh_token: "TEST-ONLY-rt", scope: GOOGLE_SCOPE } };
@@ -178,15 +173,15 @@ describe("EL review fixes (deep links land in the right project; disconnect left
     for (const bad of ["", "X", "a b", "evil&x=1", "-bad-start"]) expect(withProject(`${GCP_LINKS.audience}?project=old-project-1`, bad)).toBe(GCP_LINKS.audience);
   });
 
-  it("with a stored client, the page still has no paste form and no console links", async () => {
-    await inRelay(h, (i) => i.saveGoogleClient("424242-abc123.apps.googleusercontent.com", CLIENT_SECRET));
+  it("a stale stored client is cleared and does not count as configured", async () => {
+    await sql("INSERT INTO google_client(id, blob_ct, blob_iv, key_ver, saved_ms) VALUES(1,?,?,?,?)", CLIENT_SECRET, "iv", "kid", 1);
     const { html } = await page();
     for (const href of Object.values(GCP_LINKS)) expect(html).not.toContain(href);
     expect(html).not.toContain("name=client_secret");
-    expect(html).not.toContain("Type the project ID first");
-    expect(html).toContain("Google client: saved here.");
-    expect(html).toMatch(/<button>Connect Google<\/button>/);
+    expect(html).not.toContain("Google client: saved here.");
+    expect(html).toMatch(/<button disabled>Connect Google<\/button>/);
     expect(html).not.toContain(CLIENT_SECRET);
+    expect(await sql("SELECT * FROM google_client")).toEqual([]);
   });
 
   it("a disconnected GOOGLE_ACCOUNTS label: the page says to remove the legacy setting and secret", async () => {
@@ -201,11 +196,11 @@ describe("EL review fixes (deep links land in the right project; disconnect left
   });
 
   it("rotation status: counts rows on the old key, then confirms all are on the current key", async () => {
-    await inRelay(h, async (i) => { await i.saveGoogleClient(CLIENT_ID, CLIENT_SECRET); await i.saveGoogleAccount("WORK", "TEST-ONLY-rt", GOOGLE_SCOPE, null); });
+    await inRelay(h, (i) => i.saveGoogleAccount("WORK", "TEST-ONLY-rt", GOOGLE_SCOPE, null));
     await h.setEnv({ GOOGLE_TOKEN_KEY: "cd".repeat(32), GOOGLE_TOKEN_KEY_OLD: KEY });
-    expect((await page()).html).toMatch(/1 of 2 stored Google sign-ins are still on the old GOOGLE_TOKEN_KEY/); // the page load re-sealed the client
+    expect((await page()).html).toMatch(/1 of 1 stored Google sign-ins are still on the old GOOGLE_TOKEN_KEY/);
     await inRelay(h, (i) => i.googleRefreshToken("WORK"));
-    expect((await page()).html).toContain("All 2 stored Google sign-ins are on the current GOOGLE_TOKEN_KEY.");
+    expect((await page()).html).toContain("All 1 stored Google sign-ins are on the current GOOGLE_TOKEN_KEY.");
   });
 });
 
