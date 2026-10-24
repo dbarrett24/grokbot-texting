@@ -225,11 +225,12 @@ describe("POST /direct/sync (Sync now)", () => {
 
   it("needs Access, the same Origin and the single-use CSRF; nothing is fetched from Google when refused", async () => {
     const { csrf } = await page();
+    const missingJwt = await post(csrf, BASE, {}, false);
+    expect(missingJwt.status).toBe(401);
     const refused = [
       await post("0".repeat(32)),
       await post(csrf, null),
       await post(csrf, "https://evil.example.test"),
-      await post(csrf, BASE, {}, false),
       await post(csrf, BASE, { Authorization: "Bearer TEST-ONLY-request-token" }),
     ];
     for (const r of refused) expect(r.status).toBe(403);

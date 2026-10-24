@@ -243,7 +243,7 @@ Set in `[vars]` of the local file. Secrets are Step 3, not this file. Switches a
 | `DIRECT_PER_MINUTE_MAX` | Optional burst cap. |
 | `DIRECT_HOURS` | Optional `HH:MM-HH:MM` window in `TIMEZONE`. |
 | `DIRECT_LOOKUP_MAX_PER_HOUR` | Lookups and refusals on `/send` per hour. Default 30. `"off"` removes it. Sends never count. |
-| `DIRECT_NOTIFY_EACH` | `"1"`: text yourself the name and first 80 characters of each direct send. |
+| `DIRECT_NOTIFY_EACH` | `"1"`: text yourself the name, the local time and a log link for each direct send. The message is not included. |
 | `GATEWAY_PBKDF2_ITERATIONS` | Passphrase mode. Default 100000. Allowed 75000–100000. |
 | `DELIVERY` | Unset or `"android"`: this guide. `"mac"` or `"shortcut"`: SETUP-iphone.md. Anything else: 503 `delivery_invalid`. |
 | `UNCLAIMED_EXPIRY_MINUTES` | mac/shortcut only. Default 30. |

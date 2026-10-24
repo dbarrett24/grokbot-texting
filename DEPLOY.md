@@ -282,7 +282,7 @@ unset RT CID
 **Check:**
 - The answer has `"state":"sent"`, and the text arrives on your phone with blank lines between the parts.
 - `"sent"` means SMS Gateway's cloud accepted the encrypted text for your phone and gave it an id. It is not a delivery receipt: the phone sends it when it picks it up (right away if it's Online), and the app shows the real status.
-- `https://<APPROVE_HOST>/log` shows `direct_sent` with hashes only, never a number or the text.
+- `https://<APPROVE_HOST>/log` (the audit JSON, no `Accept: text/html`) shows `direct_sent` with hashes only, never a number or the text. The HTML log masks numbers. `?format=json` stays masked unless you add `full=1`, and that response is still behind Access.
 - A number on no list gets 403 `recipient_not_on_allowlist`.
 - If you get HTTP 502 `send_failed`: `test-send` and `smoke` print a `fix=` hint for the gateway side. Also look in `/log`. Check the phone is Online.
   | In `/log` or `fix=` | Fix |
@@ -325,7 +325,7 @@ Each one is a `[vars]` line in `.relay-local/wrangler.toml`, followed by `npx wr
 | Per-minute cap | `DIRECT_PER_MINUTE_MAX = "5"` | Limits bursts. |
 | Quiet hours | `DIRECT_HOURS = "08:00-21:00"` | Refuses outside the window (`direct_outside_hours`). |
 | Runaway pause | `RUNAWAY_PAUSE = "1"`, `RUNAWAY_MAX = "10"` | More than MAX sends in 60 minutes pauses sending and texts you. You resume on `/direct`. |
-| Copy of each send | `DIRECT_NOTIFY_EACH = "1"` | Texts you the name and the first 80 characters of each send. |
+| Copy of each send | `DIRECT_NOTIFY_EACH = "1"` | Texts you the name, the local time and a log link. The message itself is not in the notice. |
 | Tap limits | `PENDING_CAP_PER_DAY` (20), `SEND_CAP_INITIAL` (5), `SEND_CAP_AFTER` (10), `CAP_RAISE_AFTER_DAYS` (14), `REQUEST_TTL_SECONDS` (900), `MIN_SECONDS_BETWEEN_SENDS` (30), `MAX_TEXT_CHARS` (640, both flows) | Defaults in brackets. The tap send cap is `SEND_CAP_INITIAL` a day for `CAP_RAISE_AFTER_DAYS` days from `CAP_START_DATE`, then `SEND_CAP_AFTER`. |
 
 **Two more settings, normally left as shipped:**

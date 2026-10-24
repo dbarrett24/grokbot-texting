@@ -6,7 +6,13 @@ This repository is a template you run yourself. Your assistant can send texts fr
 
 ## What it does
 
-You say who to text and what to say. Your assistant reads it back, you agree, and your phone sends it. A private page, which only you can open, is where you choose who is allowed and where you read a log. The log never keeps the message text or a full phone number.
+You say who to text and what to say. Your assistant reads it back, you agree, and your phone sends it. A private page, which only you can open, is where you choose who is allowed, approve a text, and read a log. The audit log never keeps the message text or a full phone number.
+
+## Inbound texts
+
+Recording inbound texts is off until you turn it on. With `CAPTURE_INBOUND = "0"` and `STORE_MESSAGE_BODIES = "0"` (the template) the Worker does not keep a message body, and `POST /messages` refuses. If you set both to `"1"` and set the `LOG_ENC_KEY` secret (32 bytes, not the same value as `LOG_HASH_KEY`), an inbound text can be stored as AES-GCM ciphertext of the number and the body, plus the time, the direction, and the last 4 digits. Outbound texts can store the same way when `STORE_MESSAGE_BODIES = "1"`. Without the key, nothing is written for an inbound text and a send still goes out with at most the last 4 digits saved.
+
+Inbound rows are deleted after 30 days and outbound rows after 90 days. The daily job does that, and so does the Durable Object alarm. To delete them all now, sign in on the private page and `POST /messages/purge` with `{"confirm":"purge-all"}`. Unknown numbers are never added to your contacts.
 
 ## How it works
 
@@ -55,6 +61,12 @@ A shared group thread is off until you turn it on, and it works only from an And
 ## Changing the code
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The commands, endpoints, and send rules are in [SETTINGS.md](SETTINGS.md).
+
+## Support
+
+[![☕ Buy me a drink](https://img.shields.io/badge/%E2%98%95%20Buy%20me%20a%20drink-12223a?style=flat)](https://example.com/drink)
+
+The Contacts, Approve, Direct, and Log pages include that link in the footer. The text is `SUPPORT_LABEL` and the address is `SUPPORT_URL`, both in `src/pages.ts`.
 
 ## License
 

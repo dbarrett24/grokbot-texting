@@ -1,6 +1,6 @@
 // Contacts-page picker behaviour. The page inlines these functions inside its nonce'd module.
 // No on* attribute: /contacts CSP is script-src 'self' plus that nonce, and this must not ask for 'unsafe-inline'.
-// /direct and /approve never receive this script (their CSP is default-src 'none'); their tiles are submit buttons.
+// Approve, Direct and Log inline this script under a nonce, same as /contacts. Their tiles are radios.
 
 interface LeafNode {
   className: string;

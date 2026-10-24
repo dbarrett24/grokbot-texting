@@ -67,9 +67,11 @@ export interface ContactsLive {
 /** The browser script. `installContacts.name` tracks a minifier rename so the call still matches toString(). */
 export function contactsLiveScript(csrf: string, toastText: string | null): string {
   // bind: fetch, confirm and the timers throw if they are called with `this` set to the env object.
-  return `const CSRF=${JSON.stringify(csrf)};\n${installContacts.toString()}\n${installContacts.name}({doc:document,fetchFn:fetch.bind(globalThis),csrf:CSRF,setTimer:setTimeout.bind(globalThis),clearTimer:clearTimeout.bind(globalThis),now:Date.now,confirmFn:confirm.bind(globalThis),toastText:${JSON.stringify(toastText)}});`;
+  return `const CSRF=${JSON.stringify(csrf)};\n${installContacts.toString()}\n${installContacts.name}({doc:document,fetchFn:fetch.bind(self),csrf:CSRF,setTimer:setTimeout.bind(self),clearTimer:clearTimeout.bind(self),now:Date.now,confirmFn:confirm.bind(self),toastText:${JSON.stringify(toastText)}});`;
 }
 
+// Methods, not nested functions. esbuild keepNames injects a __name() call beside a nested
+// function, and toString() would ship that call without the helper (the page then throws).
 export function installContacts(env: ContactsLive): void {
   const UNDO_MS = 5000;
   interface Person {
@@ -88,8 +90,6 @@ export function installContacts(env: ContactsLive): void {
     busy: boolean;
   }
 
-  // Methods, not nested functions. esbuild keepNames injects a __name() call beside a nested
-  // function, and toString() would ship that call without the helper (the page then throws).
   const doc = env.doc;
   const dom = {
     must(sel: string): LiveEl {
