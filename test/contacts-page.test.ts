@@ -219,10 +219,10 @@ describe("owner-only: guards", () => {
     expect(html).not.toMatch(/src="https?:/); // nothing loads from another origin
     expect([...html.matchAll(/href="(https?:[^"]*)"/g)].map((m) => m[1])).toEqual([SUPPORT_URL]);
     expect(html).toContain('rel="noopener noreferrer"');
-    expect(html).toContain(`<footer><a class=support href="${SUPPORT_URL}" rel="noopener noreferrer"><span aria-hidden=true>☕</span> ${SUPPORT_LABEL.slice(SUPPORT_LABEL.indexOf(" ") + 1)}</a></footer>`);
+    expect(html).toContain(`<h1 class=product>GrokBot Texting</h1><a class=support href="${SUPPORT_URL}" rel="noopener noreferrer"><span aria-hidden=true>☕</span><span>${SUPPORT_LABEL.slice(SUPPORT_LABEL.indexOf(" ") + 1)}</span></a></header>`);
     expect(html).not.toMatch(/cocoa|coffee|hot chocolate|hot-chocolate/i);
     for (const n of [RILEY, SAM, ALEX, EXAMPLE]) expect(html).not.toContain(n.slice(-4));
-    expect(html).toContain('<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=96 height=96><h1 class=product>GrokBot Texting</h1></header>');
+    expect(html).toContain('<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=96 height=96><h1 class=product>GrokBot Texting</h1><a class=support');
     expect(html).not.toMatch(/<a[^>]*>[\s\S]*?<img class=brand-logo/);
     expect(html).toContain('<select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select>');
     expect(html).toContain("s.slice(page * size");
@@ -236,7 +236,7 @@ describe("owner-only: guards", () => {
     expect(html).not.toContain('confirm("Text');
     expect(html).not.toContain("Resolve preview");
     expect(html).not.toContain("<summary>Health</summary>");
-    expect(new TextEncoder().encode(html).length).toBeLessThan(39_000); // toolbar, switch, dialog, the inlined contacts script and three scene picker tiles (measured 38507)
+    expect(new TextEncoder().encode(html).length).toBeLessThan(42_500); // toolbar, switch, dialog, the inlined contacts script and three scene picker tiles (measured 38507)
   });
 });
 

@@ -44,7 +44,7 @@ export function applyPickerChoice(doc: PickerDoc, value: string): void {
     if (el) el.remove();
     return;
   }
-  if(!/^(corners|vines|scatter|dock|willow|lantern)$/.test(name))return;
+  if(!/^(corners|vines|scatter|dock|willow|lantern|navywater|navyleaves)$/.test(name))return;
   if (!el) {
     const created = doc.createElement("div");
     created.className = "hl-photo hl-photo-" + name;

@@ -131,8 +131,9 @@ describe("Approve, Direct and Log pages", () => {
     expect(html).not.toContain(FRIEND);
     expect(html).toContain('data-act=copy');
     expect(html).toContain('aria-current="page"');
-    expect(html).toContain('class=sitenav');
-    expect(html).toContain("class=tabrow");
+    expect(html).toContain('<nav class=tabs aria-label="Admin pages"><ul><li><a href="/contacts">');
+    expect(html).toContain('<li><a href="/approve" aria-current="page"><svg class=ti aria-hidden=true');
+    expect(html).not.toContain("<footer>");
     expect(page.headers.get("cache-control")).toBe("no-store");
     const nonce = /'nonce-([a-f0-9]{32})'/.exec(page.headers.get("content-security-policy") ?? "")?.[1] ?? "";
     expect(page.headers.get("content-security-policy")).toBe(pageCsp(nonce));
@@ -162,7 +163,7 @@ describe("Approve, Direct and Log pages", () => {
     const html = await page.text();
     expect(html).toContain("<h2>Direct send</h2>");
     expect(html).toContain('href="/direct" aria-current="page"');
-    expect(html).toContain("class=tabrow");
+    expect(html.match(/<nav class=tabs/g)).toEqual(["<nav class=tabs"]);
     expect(page.headers.get("cache-control")).toBe("no-store");
     expect(page.headers.get("content-security-policy")).toContain("object-src 'none'");
     expect(page.headers.get("content-security-policy")).not.toContain("unsafe-inline");
@@ -180,7 +181,7 @@ describe("Approve, Direct and Log pages", () => {
       expect(r.status).toBe(200);
       const html = await r.text();
       expect(SUPPORT_LABEL).toBe("☕ Buy me a drink");
-      expect(html).toContain(`<footer><a class=support href="${SUPPORT_URL}" rel="noopener noreferrer"><span aria-hidden=true>☕</span> ${SUPPORT_LABEL.slice(SUPPORT_LABEL.indexOf(" ") + 1)}</a></footer>`);
+      expect(html).toContain(`<h1 class=product>GrokBot Texting</h1><a class=support href="${SUPPORT_URL}" rel="noopener noreferrer"><span aria-hidden=true>☕</span><span>${SUPPORT_LABEL.slice(SUPPORT_LABEL.indexOf(" ") + 1)}</span></a></header>`);
       expect(html.match(/Buy me a drink/g)).toEqual(["Buy me a drink"]);
       expect(html).not.toContain("img.shields.io");
       expect(html).not.toMatch(/cocoa|coffee|hot chocolate|hot-chocolate/i);

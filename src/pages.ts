@@ -8,28 +8,38 @@ export type NavKey = "contacts" | "approve" | "direct" | "log";
 export const SUPPORT_URL = "https://example.com/drink";
 export const SUPPORT_LABEL = "☕ Buy me a drink";
 
-const NAV: readonly { key: NavKey; href: string; label: string }[] = [
-  { key: "contacts", href: "/contacts", label: "Contacts" },
-  { key: "approve", href: "/approve", label: "Approve" },
-  { key: "direct", href: "/direct", label: "Direct" },
-  { key: "log", href: "/log", label: "Log" },
+// Lucide icons (users, check-check, send, list), 18px, stroke 2. Inline SVG with presentation attributes only, so the CSP is unchanged.
+const NAV: readonly { key: NavKey; href: string; label: string; icon: string }[] = [
+  { key: "contacts", href: "/contacts", label: "Contacts", icon: '<path d="M16,21v-2a4,4,0,0,0-4-4H6a4,4,0,0,0-4,4v2"/><circle cx="9" cy="7" r="4"/><path d="M22,21v-2a4,4,0,0,0-3-3.87"/><path d="M16,3.13a4,4,0,0,1,0,7.75"/>' },
+  { key: "approve", href: "/approve", label: "Approve", icon: '<path d="M18,6,7,17l-5-5"/><path d="m22,10-7.5,7.5L13,16"/>' },
+  { key: "direct", href: "/direct", label: "Direct", icon: '<path d="M22,2,11,13"/><path d="M22,2,15,22l-4-9-9-4Z"/>' },
+  { key: "log", href: "/log", label: "Log", icon: '<path d="M3,12h.01"/><path d="M3,18h.01"/><path d="M3,6h.01"/><path d="M8,12h13"/><path d="M8,18h13"/><path d="M8,6h13"/>' },
 ];
 
 export function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 }
 
+/** The gold support badge. The mark and the words are separate elements; the CSS gap (8px) spaces them, not a text space. */
 export function renderSupport(): string {
   const gap = SUPPORT_LABEL.indexOf(" ");
   const mark = gap > 0 ? esc(SUPPORT_LABEL.slice(0, gap)) : "";
   const name = esc(gap > 0 ? SUPPORT_LABEL.slice(gap + 1) : SUPPORT_LABEL);
-  const text = mark === "" ? name : `<span aria-hidden=true>${mark}</span> ${name}`;
-  return `<footer><a class=support href="${esc(SUPPORT_URL)}" rel="noopener noreferrer">${text}</a></footer>`;
+  const text = mark === "" ? `<span>${name}</span>` : `<span aria-hidden=true>${mark}</span><span>${name}</span>`;
+  return `<a class=support href="${esc(SUPPORT_URL)}" rel="noopener noreferrer">${text}</a>`;
+}
+
+/** Logo, title and the support badge in one row (the badge wraps below on phones). */
+export function renderHeader(): string {
+  return `<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=96 height=96><h1 class=product>GrokBot Texting</h1>${renderSupport()}</header>`;
 }
 
 export function renderNav(current: NavKey): string {
-  const links = NAV.map((n) => `<a href="${n.href}"${n.key === current ? ' aria-current="page"' : ""}>${n.label}</a>`).join("");
-  return `<nav class=sitenav aria-label="Pages">${links}</nav><nav class=tabrow aria-label="Pages">${links}</nav>`;
+  const items = NAV.map((n) => {
+    const icon = `<svg class=ti aria-hidden=true width=18 height=18 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2 stroke-linecap=round stroke-linejoin=round>${n.icon}</svg>`;
+    return `<li><a href="${n.href}"${n.key === current ? ' aria-current="page"' : ""}>${icon}<span>${n.label}</span></a></li>`;
+  }).join("");
+  return `<nav class=tabs aria-label="Admin pages"><ul>${items}</ul></nav>`;
 }
 
 /** Stricter than the old approve/direct policy (nonce styles, no unsafe-inline) and adds the sources Copy, Undo and photos need. */
@@ -83,10 +93,9 @@ export function renderShell(o: ShellOpts): string {
 <style nonce="${o.nonce}">
 ${o.css}
 </style>
-${o.leaves}<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=96 height=96><h1 class=product>GrokBot Texting</h1></header>
+${o.leaves}${renderHeader()}
 ${renderNav(o.current)}
 ${o.body}
-${renderSupport()}
 <div id=toast role=status aria-live=polite></div>
 <button type=button id=undo data-act=undo hidden>Undo</button>
 <script type=module nonce="${o.nonce}">
