@@ -18,6 +18,17 @@ beforeEach(async () => { h = await harness(); });
 const get = async (url: string) => h.relay.fetch(url, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt() } });
 
 describe("Harbor look", () => {
+  it("gives every page one fixed card width (no per-page max-width)", () => {
+    expect(HARBOR_CSS).toContain("width:100%;max-width:760px;");
+    expect(HARBOR_CSS).not.toMatch(/body\{[^}]*max-width:4\dem/);
+    expect(HARBOR_CSS).not.toContain("max-width:44em");
+    expect(HARBOR_CSS).not.toMatch(/body:has\([^)]*\)\{max-width/);
+  });
+
+  it("styles the support badge gold, 16px, at least 44px tall, with an 8px gap after the mug", () => {
+    expect(HARBOR_CSS).toContain("a.support{display:inline-flex;align-items:center;gap:8px;margin-left:auto;min-height:44px;box-sizing:border-box;padding:0 18px;border-radius:999px;background:#E3B341;color:#1F1C18;font:600 16px/1 var(--h-sans);text-decoration:none}");
+  });
+
   it("CSS: the approved Harbor picks (CTA 135deg, glow alpha 0.34), no other origin, small", () => {
     expect(HARBOR_CSS).toContain("--h-cta-fill:linear-gradient(135deg,");
     expect(HARBOR_CSS).toContain("rgba(91, 155, 216, 0.34)");
@@ -28,10 +39,10 @@ describe("Harbor look", () => {
     // Backdrop on a fixed layer: never background-attachment:fixed (ignored on iOS Safari, repaints on scroll).
     expect(HARBOR_CSS).not.toContain("background-attachment");
     expect(HARBOR_CSS).toContain('html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-backdrop)');
-    expect(HARBOR_CSS).toContain(".brand{display:flex;align-items:center;gap:20px;margin:.2em 0 .7em}");
+    expect(HARBOR_CSS).toContain(".brand{display:flex;flex-wrap:wrap;align-items:center;gap:20px;margin:0 0 24px}");
     expect(HARBOR_CSS).toContain(".brand h1.product{margin:0;font-size:2.5em}");
     expect(HARBOR_CSS).toContain(".brand-logo{display:block;flex:none;width:96px;height:96px;max-width:none;max-height:none;border-radius:23%;box-shadow:0 0 0 1px rgb(255 255 255 / .18)}");
-    expect(HARBOR_CSS).toContain("@media (max-width:480px){.brand{gap:14px}.brand-logo{width:72px;height:72px}.brand h1.product{font-size:1.9em}}");
+    expect(HARBOR_CSS).toContain("@media (max-width:560px){.brand{gap:14px}.brand-logo{width:72px;height:72px}.brand h1.product{font-size:1.9em}}");
     expect(HARBOR_CSS).not.toContain("flex-flow:column");
     expect(HARBOR_CSS).not.toContain("max-width:40px");
     expect(HARBOR_CSS).not.toContain("max-height:40px");
@@ -49,18 +60,18 @@ describe("Harbor look", () => {
     expect(HARBOR_CSS).toContain(".badge[hidden]{display:none}");
     const support = /a\.support\{[^}]*\}/.exec(HARBOR_CSS)?.[0] ?? "";
     const supportHeight = Number(/height:(\d+)px/.exec(support)?.[1]);
-    const supportFont = Number(/font-size:(\d+)px/.exec(support)?.[1]);
-    expect(supportHeight).toBeGreaterThanOrEqual(28);
-    expect(supportHeight).toBeLessThanOrEqual(32);
+    const supportFont = Number(/font:\d+ (\d+)px/.exec(support)?.[1]);
+    expect(supportHeight).toBeGreaterThanOrEqual(44);
+    expect(supportHeight).toBeLessThanOrEqual(48);
     expect(supportFont).toBeGreaterThanOrEqual(12);
-    expect(supportFont).toBeLessThanOrEqual(13);
-    expect(support).toContain("border:1px solid var(--h-border)");
-    expect(support).toContain("background:var(--h-solid)");
-    expect(support).toContain("color:var(--h-text)");
+    expect(supportFont).toBeLessThanOrEqual(16);
+    expect(support).toContain("gap:8px"); // the space after the mug
+    expect(support).toContain("background:#E3B341"); // concept D gold badge
+    expect(support).toContain("color:#1F1C18"); // dark ink on gold: 8.7:1
     expect(HARBOR_CSS).toContain("dialog.ask button{min-height:44px;min-width:44px}");
     expect(HARBOR_CSS).toContain("--h-border:#6b89ad");
     expect(HARBOR_CSS).not.toContain("#56708f");
-    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(16_800); // contacts toolbar, switch, sync disclosure, dialog, three scene photo rules (measured 16408)
+    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(18_300); // + concept D tab track, chips, gold badge and the two navy scenes (measured 17805)
   });
 
   it("font: served by the Worker on the approve host only, as woff2", async () => {
@@ -141,7 +152,7 @@ describe("Harbor leaf mockups (?leaves=)", () => {
       const c = await get(`${BASE}/contacts?leaves=${o}`);
       const ch = await c.text();
       expect(ch).toContain("<svg class=hl-leaves");
-      expect(new TextEncoder().encode(ch).length).toBeLessThan(43_500); // leaves SVG on the contacts shell plus scene CSS and tiles (measured 42631); the default page cap is 39 KB
+      expect(new TextEncoder().encode(ch).length).toBeLessThan(46_500); // leaves SVG on the contacts shell plus scene CSS and tiles (measured 42631); the default page cap is 39 KB
     }
     const unknown = await (await get(`${BASE}/direct?leaves=__proto__`)).text();
     expect(unknown).not.toContain("__proto__");
@@ -149,7 +160,7 @@ describe("Harbor leaf mockups (?leaves=)", () => {
   });
 
   it("offers the three scene photos as picker choices and paints each when picked", async () => {
-    for (const [o, label] of [["dock", "Harbor dock"], ["willow", "Willow lake"], ["lantern", "Lantern dock"]] as const) {
+    for (const [o, label] of [["dock", "Harbor dock"], ["willow", "Willow lake"], ["lantern", "Lantern dock"], ["navywater", "Navy water"], ["navyleaves", "Navy leaves"]] as const) {
       const html = await (await get(`${BASE}/direct?leaves=photo-${o}`)).text();
       expect(html).toContain(`value="photo-${o}" checked`);
       expect(html).toContain(label);
@@ -162,7 +173,7 @@ describe("Harbor leaf mockups (?leaves=)", () => {
 
 describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
   it("/contacts and /direct both get the photo layer; CSPs stay their own", async () => {
-    for (const o of ["corners", "vines", "scatter", "dock", "willow", "lantern"]) {
+    for (const o of ["corners", "vines", "scatter", "dock", "willow", "lantern", "navywater", "navyleaves"]) {
       const c = await get(`${BASE}/contacts?leaves=photo-${o}`);
       expect(await c.text()).toContain(`<div class="hl-photo hl-photo-${o}" aria-hidden=true></div>`);
       const d = await get(`${BASE}/direct?leaves=photo-${o}`);
@@ -173,13 +184,13 @@ describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
   });
 
   it("serves the WebP files from the approve host only; unknown names 404", async () => {
-    for (const n of ["corners-1024", "corners-640", "corners-256", "vines-1024", "vines-640", "vines-256", "scatter-1024", "scatter-640", "scatter-256", "dock-1280", "dock-640", "dock-256", "willow-1280", "willow-640", "willow-256", "lantern-1280", "lantern-640", "lantern-256"]) {
+    for (const n of ["corners-1024", "corners-640", "corners-256", "vines-1024", "vines-640", "vines-256", "scatter-1024", "scatter-640", "scatter-256", "dock-1280", "dock-640", "dock-256", "willow-1280", "willow-640", "willow-256", "lantern-1280", "lantern-640", "lantern-256", "navywater-1280", "navywater-640", "navywater-256", "navyleaves-1280", "navyleaves-640", "navyleaves-256"]) {
       const r = await get(`${BASE}/harbor/leaves/${n}.webp`);
       expect(r.status).toBe(200);
       expect(r.headers.get("content-type")).toBe("image/webp");
       const b = new Uint8Array(await r.arrayBuffer());
       expect(new TextDecoder().decode(b.slice(8, 12))).toBe("WEBP");
-      expect(b.length).toBeLessThan(n.startsWith("dock") || n.startsWith("willow") || n.startsWith("lantern") ? 100_000 : 25_000); // scene photos are full-frame (largest 76.6 KB)
+      expect(b.length).toBeLessThan(n.startsWith("dock") || n.startsWith("willow") || n.startsWith("lantern") || n.startsWith("navy") ? 100_000 : 25_000); // scene photos are full-frame (largest 76.6 KB)
     }
     expect((await get(`${BASE}/harbor/leaves/nope-1024.webp`)).status).toBe(404);
     expect((await h.relay.fetch(`${API}/harbor/leaves/corners-1024.webp`)).status).toBe(404);
@@ -199,12 +210,12 @@ describe("Background picker (cookie, live on /contacts)", () => {
     const direct = await (await get(`${BASE}/direct`)).text();
     expect(direct.replace(/<noscript>[\s\S]*?<\/noscript>/g, "")).not.toContain("Apply");
     expect(direct).toContain("<noscript><button>Apply</button></noscript>");
-    expect((direct.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(7);
+    expect((direct.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(9);
     expect(direct).toContain(pickerLiveScript());
     const contacts = await (await get(`${BASE}/contacts`)).text();
     expect(contacts.replace(/<noscript>[\s\S]*?<\/noscript>/g, "")).not.toContain("Apply");
     expect(contacts).toContain("<noscript><button>Apply</button></noscript>");
-    expect((contacts.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(7);
+    expect((contacts.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(9);
     expect(contacts).toContain(pickerLiveScript());
     const r = await pick("photo-vines", "/direct");
     expect(r.status).toBe(303);

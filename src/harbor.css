@@ -49,10 +49,10 @@ html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-bac
 .hb-th.hb-th-photo-corners{background:url(/harbor/leaves/corners-256.webp) center/cover}.hb-th.hb-th-photo-vines{background:url(/harbor/leaves/vines-256.webp) center/cover}.hb-th.hb-th-photo-scatter{background:url(/harbor/leaves/scatter-256.webp) center/cover}
 /* The scene photos (dock, willow, lantern) are full scenes, so each covers the backdrop (no blend) under a dark navy scrim that keeps every
    text colour at or above 4.5:1 over its brightest pixel (scripts/proof-shots.mjs checks it). */
-.hl-photo-dock,.hl-photo-willow,.hl-photo-lantern{mix-blend-mode:normal;--hl-scrim:linear-gradient(#0b1626c7,#0b1626c7)}
-.hl-photo-dock{background-image:var(--hl-scrim),url(/harbor/leaves/dock-1280.webp)}.hl-photo-willow{background-image:var(--hl-scrim),url(/harbor/leaves/willow-1280.webp)}.hl-photo-lantern{background-image:var(--hl-scrim),url(/harbor/leaves/lantern-1280.webp)}
-@media (max-width:40em){.hl-photo-dock{background-image:var(--hl-scrim),url(/harbor/leaves/dock-640.webp)}.hl-photo-willow{background-image:var(--hl-scrim),url(/harbor/leaves/willow-640.webp)}.hl-photo-lantern{background-image:var(--hl-scrim),url(/harbor/leaves/lantern-640.webp)}}
-.hb-th.hb-th-photo-dock{background:url(/harbor/leaves/dock-256.webp) center/cover}.hb-th.hb-th-photo-willow{background:url(/harbor/leaves/willow-256.webp) center/cover}.hb-th.hb-th-photo-lantern{background:url(/harbor/leaves/lantern-256.webp) center/cover}
+.hl-photo-dock,.hl-photo-willow,.hl-photo-lantern,.hl-photo-navywater,.hl-photo-navyleaves{mix-blend-mode:normal;--hl-scrim:linear-gradient(#0b1626c7,#0b1626c7)}
+.hl-photo-dock{background-image:var(--hl-scrim),url(/harbor/leaves/dock-1280.webp)}.hl-photo-willow{background-image:var(--hl-scrim),url(/harbor/leaves/willow-1280.webp)}.hl-photo-lantern{background-image:var(--hl-scrim),url(/harbor/leaves/lantern-1280.webp)}.hl-photo-navywater{background-image:var(--hl-scrim),url(/harbor/leaves/navywater-1280.webp)}.hl-photo-navyleaves{background-image:var(--hl-scrim),url(/harbor/leaves/navyleaves-1280.webp)}
+@media (max-width:40em){.hl-photo-dock{background-image:var(--hl-scrim),url(/harbor/leaves/dock-640.webp)}.hl-photo-willow{background-image:var(--hl-scrim),url(/harbor/leaves/willow-640.webp)}.hl-photo-lantern{background-image:var(--hl-scrim),url(/harbor/leaves/lantern-640.webp)}.hl-photo-navywater{background-image:var(--hl-scrim),url(/harbor/leaves/navywater-640.webp)}.hl-photo-navyleaves{background-image:var(--hl-scrim),url(/harbor/leaves/navyleaves-640.webp)}}
+.hb-th.hb-th-photo-dock{background:url(/harbor/leaves/dock-256.webp) center/cover}.hb-th.hb-th-photo-willow{background:url(/harbor/leaves/willow-256.webp) center/cover}.hb-th.hb-th-photo-lantern{background:url(/harbor/leaves/lantern-256.webp) center/cover}.hb-th.hb-th-photo-navywater{background:url(/harbor/leaves/navywater-256.webp) center/cover}.hb-th.hb-th-photo-navyleaves{background:url(/harbor/leaves/navyleaves-256.webp) center/cover}
 /* @end photo */
 /* Picker: radios are clipped, not display:none, so they stay in the tab and accessibility order.
    Tiles are about 2x the old 64x36 thumbs and wrap in a grid that fits a 375px viewport. */
@@ -67,16 +67,18 @@ input:checked+label.hb-opt,button.hb-opt[aria-pressed=true]{box-shadow:0 0 0 2px
 input:focus-visible+label.hb-opt,button.hb-opt:focus-visible{outline:2px solid var(--h-focus);outline-offset:3px}
 .hb-th{display:block;width:128px;max-width:100%;aspect-ratio:16/9;border-radius:6px;background:var(--h-backdrop);overflow:hidden}.hb-th svg{display:block;width:100%;height:100%}
 .hb-pick noscript button{width:100%}
-body{font:16px/1.5 var(--h-sans);color:var(--h-text);max-width:40em;margin:1.5em auto;padding:1em 1.4em 1.4em;box-sizing:border-box;position:relative}
+html{padding-inline:1rem}
+/* One fixed card width on every page (no per-page max-width), so the card never shifts between tabs. */
+body{font:16px/1.5 var(--h-sans);color:var(--h-text);width:100%;max-width:760px;margin:1.5em auto;padding:28px;padding:1em 1.4em 1.4em;box-sizing:border-box;position:relative}
 /* The glass is a layer behind body, not on body: backdrop-filter on body would make it the containing block for
    position:fixed children (the /contacts toast would sit at the end of the long card instead of the viewport). */
 body::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:var(--h-surface-radius);background:var(--h-surface);-webkit-backdrop-filter:var(--h-surface-filter);backdrop-filter:var(--h-surface-filter);box-shadow:var(--h-surface-shadow)}
 h1,h2{font-family:var(--h-serif);font-weight:600;letter-spacing:.2px;margin:.4em 0 .5em}h1{font-size:1.6em}h2{font-size:1.3em}
 h1.product{font-size:2.15em;line-height:1.15;margin:.1em 0 .35em;color:var(--h-text)}
-.brand{display:flex;align-items:center;gap:20px;margin:.2em 0 .7em}
+.brand{display:flex;flex-wrap:wrap;align-items:center;gap:20px;margin:0 0 24px}
 .brand h1.product{margin:0;font-size:2.5em}
 .brand-logo{display:block;flex:none;width:96px;height:96px;max-width:none;max-height:none;border-radius:23%;box-shadow:0 0 0 1px rgb(255 255 255 / .18)}
-@media (max-width:480px){.brand{gap:14px}.brand-logo{width:72px;height:72px}.brand h1.product{font-size:1.9em}}
+@media (max-width:560px){.brand{gap:14px}.brand-logo{width:72px;height:72px}.brand h1.product{font-size:1.9em}}
 a{color:var(--h-link)}a:hover{color:var(--h-text)}code{font-size:.9em}small,.ro{color:var(--h-muted)}.warn{color:var(--h-critical)}
 :focus-visible{outline:2px solid var(--h-focus);outline-offset:2px}
 button{font:inherit;font-weight:600;color:var(--h-text);padding:.4em .8em;border-radius:var(--h-button-radius);border:1px solid var(--h-border);background:var(--h-solid);cursor:pointer}
@@ -88,7 +90,7 @@ select{font:inherit;color:var(--h-text);background:var(--h-solid);border:1px sol
 pre{white-space:pre-wrap;border:1px solid var(--h-border);border-radius:var(--h-input-radius);background:var(--h-solid);padding:.75em;font:inherit}
 details{margin:.8em 0}summary{cursor:pointer;font-weight:600}
 /* /contacts page parts */
-body:has(#list){max-width:44em}.banner{background:var(--h-warning-bg);border:1px solid var(--h-warning-border);padding:.6em .8em;border-radius:var(--h-input-radius)}
+.banner{background:var(--h-warning-bg);border:1px solid var(--h-warning-border);padding:.6em .8em;border-radius:var(--h-input-radius)}
 .bar{display:flex;flex-wrap:wrap;gap:.4em;margin:.6em 0;align-items:center}.bar button[aria-pressed=true]{background:var(--h-text);color:var(--h-cta-ink);border-color:var(--h-text)}
 /* Keeps the per-page label with its select when .bar wraps. */
 .per{display:flex;gap:4px}
@@ -111,11 +113,13 @@ form.inl{display:inline;margin-left:.4em}#google{border-top:1px solid var(--h-bo
 button.link{background:none;border:0;padding:0 .25em;min-height:44px;color:var(--h-link);font-weight:600;text-decoration:underline;text-underline-offset:3px}
 button.link:hover:not(:disabled){background:none;box-shadow:none;color:var(--h-text)}
 .tools{display:flex;flex-wrap:wrap;align-items:center;gap:.5em;margin:.7em 0 .2em}
-.seg{display:inline-flex;border-radius:12px;background:rgb(11 22 38 / .55);box-shadow:inset 0 0 0 1px var(--h-border)}
-.seg button{position:relative;z-index:0;min-height:44px;padding:0 1em;border:0;border-radius:12px;background:none;color:var(--h-muted)}
-.seg button::before{content:"";position:absolute;inset:4px;z-index:-1;border-radius:8px}
-.seg button[aria-pressed=true]{color:var(--h-cta-ink)}.seg button[aria-pressed=true]::before{background:var(--h-text)}
-.seg button:hover:not(:disabled){background:none;box-shadow:none;color:var(--h-text)}.seg button[aria-pressed=true]:hover:not(:disabled){color:var(--h-cta-ink)}
+/* Filter chips (All/On/Off, All/In/Out): text only, no shared track, neutral blue when selected (no gold, which is the tabs' accent).
+   The visible chip is 32px; the button itself is 44px tall for the hit area. */
+.seg{display:inline-flex;gap:6px}
+.seg button{position:relative;z-index:0;min-height:44px;padding:0 14px;border:0;background:none;color:#B4C3D4;font-size:14px;font-weight:500}
+.seg button::before{content:"";position:absolute;inset:6px 0;z-index:-1;border-radius:999px;box-shadow:inset 0 0 0 1px var(--h-border)}
+.seg button[aria-pressed=true]{color:#F5F8FB;font-weight:600}.seg button[aria-pressed=true]::before{background:#2a4a6e}
+.seg button:hover:not(:disabled){background:none;box-shadow:none;color:#E8EEF5}.seg button:hover:not(:disabled)::before{background:#ffffff0f}.seg button[aria-pressed=true]:hover:not(:disabled)::before{background:#2a4a6e}
 .seg .n,.more .n{font-weight:400;margin-left:.35em;font-variant-numeric:tabular-nums}
 .more{position:relative;margin:0 0 0 auto}
 .more summary{display:flex;align-items:center;gap:.45em;min-height:44px;box-sizing:border-box;padding:0 .9em;border-radius:12px;box-shadow:inset 0 0 0 1px var(--h-border);list-style:none}
@@ -150,7 +154,19 @@ dialog.ask h2{font-family:var(--h-serif);font-size:1.3em;margin:.1em 0 .4em}
 dialog.ask p{margin:.2em 0 .9em}
 dialog.ask .dlg-acts{display:flex;justify-content:flex-end;gap:.5em}
 dialog.ask button{min-height:44px;min-width:44px}
-@media (max-width:30em){body{margin:3em .5em .5em;padding:.8em 1em 1em}.hl-leaves{opacity:.3}.tools{gap:.4em}.seg button{padding:0 .6em}.more summary{padding:0 .6em}.pager #page{min-width:0;padding:0 .2em}.more .menu{min-width:0;width:min(16rem,calc(100vw - 2em))}}
-.sitenav{display:flex;gap:.3em;margin:0 0 .7em}.tabrow{display:none}.sitenav a,.tabrow a{display:inline-flex;min-height:44px;padding:0 .5em;border-radius:12px;color:var(--h-muted);text-decoration:none;box-shadow:inset 0 0 0 1px var(--h-border)}a[aria-current=page]{color:var(--h-cta-ink);background:var(--h-text);box-shadow:none}@media(max-width:480px){.sitenav{display:none}.tabrow{display:flex;position:fixed;z-index:7;inset:auto 0 0;background:var(--h-solid)}.tabrow a{flex:1;justify-content:center;border-radius:0}body{padding-bottom:4em}#toast{bottom:4em}}
-/* Support pill. Content box is 28px; the 1px border makes the badge 30px. Text is 13px on the solid fill. */
-footer{margin-top:1.2em}a.support{display:inline-flex;align-items:center;height:28px;padding:0 .7em;border-radius:999px;border:1px solid var(--h-border);background:var(--h-solid);color:var(--h-text);font-size:13px;text-decoration:none}
+@media (max-width:30em){body{margin:3em auto .5em}.hl-leaves{opacity:.3}.tools{gap:.4em}.seg button{padding:0 .6em}.more summary{padding:0 .6em}.pager #page{min-width:0;padding:0 .2em}.more .menu{min-width:0;width:min(16rem,calc(100vw - 2em))}}
+/* Page tabs (concept D): a recessed track across the card, four equal tabs, icon + label; the selected tab gets a gold bar, gold icon and a faint tint. */
+.tabs{margin:0 0 20px}.tabs ul{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;list-style:none;margin:0;padding:4px;background:#0f1b2a;border:1px solid #3a4e69;border-radius:14px}
+.tabs a{position:relative;display:flex;align-items:center;justify-content:center;gap:8px;min-height:48px;border-radius:10px;color:#B4C3D4;font:500 16px/1.2 var(--h-sans);text-decoration:none}
+.tabs .ti{flex:none}
+.tabs a:hover{color:#E8EEF5;background:#ffffff0f}
+.tabs a:focus-visible{outline:2px solid #A5D1ED;outline-offset:2px}
+.tabs a[aria-current=page]{color:#F5F8FB;font-weight:600;background:#ffffff0a}.tabs a[aria-current=page] .ti{color:#E3B341}
+.tabs a::after{content:"";position:absolute;left:16px;right:16px;bottom:4px;height:3px;border-radius:2px;background:#E3B341;opacity:0;transform:scaleX(.4);transition:opacity .18s ease-out,transform .18s ease-out}
+.tabs a[aria-current=page]::after{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){.tabs a::after{transition:none}}
+@media (max-width:560px){html{padding-inline:12px}body{padding:18px}.tabs a{flex-direction:column;gap:4px;min-height:56px;font-size:12px}.tabs a::after{left:12px;right:12px}}
+/* Gold support badge, right of the title (wraps under it on phones). 8px between the mug and the words. #1F1C18 on #E3B341 is 8.72:1. */
+a.support{display:inline-flex;align-items:center;gap:8px;margin-left:auto;min-height:44px;box-sizing:border-box;padding:0 18px;border-radius:999px;background:#E3B341;color:#1F1C18;font:600 16px/1 var(--h-sans);text-decoration:none}
+a.support:hover{background:#EBC25A;color:#1F1C18}a.support:focus-visible{outline:2px solid #A5D1ED;outline-offset:2px}
+@media (max-width:560px){a.support{margin-left:0}}
