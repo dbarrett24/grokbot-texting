@@ -130,7 +130,7 @@ describe("accounts panel + Connect Google end to end", () => {
     const cb = await h.relay.fetch(`${BASE}/contacts/google/callback?state=${state}&code=TEST-ONLY-code`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt() }, redirect: "manual" });
     expect(loc(cb)).toBe("/contacts?connected=WORK");
     const { html } = await page("?connected=WORK");
-    expect(html).toMatch(/<b>WORK<\/b>: Connected \S+/);
+    expect(html).toMatch(/<b>WORK<\/b><span class=when>Connected \S+/);
     expect(html).not.toContain("myaccount.google.com/permissions");
     expect(html).toContain('action="/contacts/google/disconnect" class=inl data-confirm="Stop syncing WORK? Its contacts are removed from the list, and Google access is revoked."');
     expect(html).toContain("Connected WORK. Press Sync now to load its contacts.");
@@ -141,8 +141,8 @@ describe("accounts panel + Connect Google end to end", () => {
   it("a GOOGLE_ACCOUNTS label backed only by a secret shows as legacy, with Reconnect and no Disconnect", async () => {
     await h.setEnv({ GOOGLE_ACCOUNTS: "primary", GOOGLE_RT_PRIMARY: "TEST-ONLY-env-rt", GOOGLE_CLIENT_ID: "TEST-ONLY-env-client", GOOGLE_CLIENT_SECRET: "TEST-ONLY-env-secret" });
     const { html } = await page();
-    expect(html).toContain("<b>PRIMARY</b>: from secret GOOGLE_RT_PRIMARY (legacy)");
-    expect(html).toContain('<input type=hidden name=label value="PRIMARY"><button>Reconnect</button>');
+    expect(html).toContain("<b>PRIMARY</b><span class=when>from secret GOOGLE_RT_PRIMARY (legacy)</span>");
+    expect(html).toContain('<input type=hidden name=label value="PRIMARY"><button class=link aria-label="Reconnect PRIMARY">Reconnect</button>');
     expect(html).not.toContain("/contacts/google/disconnect");
     expect(html).toContain("from the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET secrets");
     expect(html).not.toContain("TEST-ONLY-env-secret");
@@ -160,7 +160,7 @@ describe("accounts panel + Connect Google end to end", () => {
   it("the page no longer points at the consent script or GOOGLE_ACCOUNTS for setup", async () => {
     const { html } = await page();
     expect(html).not.toMatch(/google-consent|setup step google|No Google accounts configured \(GOOGLE_ACCOUNTS\)/);
-    expect(html).toContain("No Google accounts yet: use Connect Google below.");
+    expect(html).toContain("No Google accounts yet. Add one below to load contacts.");
   });
 });
 

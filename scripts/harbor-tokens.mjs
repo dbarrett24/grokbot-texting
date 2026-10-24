@@ -51,12 +51,21 @@ function fxv(n) {
   if (o) { if (!v.includes(o[0])) throw new Error(`theme-system changed --effect-${n}; review OVERRIDES (${v})`); v = v.replace(o[0], o[1]); }
   return v;
 }
+// Published --color-border-primary (#56708f) is under 3:1 against the glass on the contacts page.
+// #6b89ad is the approved replacement until theme-system publishes a border that clears 3:1.
+const BORDER_PUBLISHED = "#56708f";
+const BORDER_OVERRIDE = "#6b89ad";
+function borderHex() {
+  const published = color("color-border-primary");
+  if (published !== BORDER_PUBLISHED) throw new Error(`theme-system --color-border-primary changed (${published}); review the glass contrast override`);
+  return BORDER_OVERRIDE;
+}
 
 export function tokens() {
   const t = {
     text: color("color-text-primary"), muted: rgb("effect-text-muted-rgb"), success: rgb("effect-text-success-rgb"),
     critical: rgb("effect-text-critical-glass-rgb"), link: color("color-link-primary"), focus: color("color-focus-primary"),
-    border: color("color-border-primary"), "warning-bg": color("color-background-warning-light"), "warning-border": color("color-border-warning"),
+    border: borderHex(), "warning-bg": color("color-background-warning-light"), "warning-border": color("color-border-warning"),
     "cta-ink": rgb("effect-cta-ink-rgb"), solid: raw(fx, "effect-solid-fill"),
     backdrop: fxv("backdrop"), surface: fxv("surface-fill"), "surface-filter": fxv("surface-filter"), "surface-shadow": fxv("surface-shadow"),
     "hover-fill": fxv("hover-fill"), "cta-fill": fxv("cta-fill"), "cta-fill-hover": fxv("cta-fill-hover"), glow: fxv("glow"),

@@ -209,7 +209,7 @@ describe("owner-only: guards", () => {
     expect(await sendable(RILEY)).toBe(false);
   });
 
-  it("page: strict CSP with a nonce, no other origins, no numbers in the HTML, under 25 KB", async () => {
+  it("page: strict CSP with a nonce, no other origins, no numbers in the HTML, under 37 KB", async () => {
     await upload();
     const { html, res } = await page();
     const csp = res.headers.get("content-security-policy") ?? "";
@@ -222,12 +222,18 @@ describe("owner-only: guards", () => {
     expect(html).toContain('<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=96 height=96><h1 class=product>GrokBot Texting</h1></header>');
     expect(html).not.toMatch(/<a[^>]*>[\s\S]*?<img class=brand-logo/);
     expect(html).toContain('<select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select>');
-    expect(html).toContain("s.slice(page*size");
+    expect(html).toContain("s.slice(page * size");
     expect(html).toContain("<h2>Contacts</h2>");
-    expect(html).toContain("<h2>Sync</h2>");
+    expect(html).toContain('aria-label="Sync"');
+    expect(html).not.toContain("<h2>Sync</h2>");
+    expect(html).toContain('aria-label="Show"');
+    expect(html).toContain('id=ask aria-modal=true aria-labelledby=ask-h');
+    expect(html).toContain('id=enall class=link');
+    expect(html).not.toContain("onclick=");
+    expect(html).not.toContain('confirm("Text');
     expect(html).not.toContain("Resolve preview");
     expect(html).not.toContain("<summary>Health</summary>");
-    expect(new TextEncoder().encode(html).length).toBeLessThan(25_000);
+    expect(new TextEncoder().encode(html).length).toBeLessThan(37_000); // toolbar, switch, dialog, and the inlined contacts script (measured 36076)
   });
 });
 
@@ -394,5 +400,50 @@ describe("Sync now from the page", () => {
     expect(r.status).toBe(303);
     expect(r.headers.get("location")).toBe("/contacts?synced=ok");
     expect(OWNER).toBeTruthy();
+  });
+});
+
+describe("last sync and the Google disclosure", () => {
+  const fmt = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Edmonton", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(new Date(ms));
+  const log = (ms: number, event: string, detail: string) => sql("INSERT INTO log(ms,event,request_id,recipient,sha256,detail) VALUES(?,?,?,?,?,?)", ms, event, null, null, null, detail);
+
+  it("renders the last successful sync, not a later failure, and opens the disclosure for that failure", async () => {
+    await h.setEnv({ GOOGLE_ACCOUNTS: "work", GOOGLE_TOKEN_KEY: "ab".repeat(32) });
+    const okMs = Date.parse("2026-10-16T19:12:00Z");
+    const badMs = okMs + 60_000;
+    await log(okMs, "contacts_sync", "account=WORK contacts=1 numbers=1 dropped_fax_pager=0");
+    await log(badMs, "contacts_sync_failed", "account=WORK reason=empty_result kept_previous=1");
+    const { html } = await page();
+    expect(html).toContain(`Last synced ${fmt(okMs)}`);
+    expect(html).not.toContain(`Last synced ${fmt(badMs)}`);
+    expect(html).toContain("Last sync error");
+    expect(html).toContain("<details open>");
+  });
+
+  it("says Not synced yet and leaves the disclosure closed when the account is healthy", async () => {
+    await h.setEnv({ GOOGLE_ACCOUNTS: "work", GOOGLE_TOKEN_KEY: "ab".repeat(32) });
+    const { html } = await page();
+    expect(html).toContain("0 Google accounts · Not synced yet");
+    expect(html).toContain("<details><summary>Google accounts");
+    expect(html).not.toContain("<details open>");
+  });
+
+  it("opens the disclosure when there is no Google account, and when the token key is no good", async () => {
+    await h.setEnv({ GOOGLE_ACCOUNTS: "", GOOGLE_TOKEN_KEY: "ab".repeat(32) });
+    expect((await page()).html).toContain("<details open>");
+    await h.setEnv({ GOOGLE_ACCOUNTS: "work", GOOGLE_TOKEN_KEY: "not-a-key" });
+    expect((await page()).html).toContain("<details open>");
+    await h.setEnv({ GOOGLE_ACCOUNTS: "work", GOOGLE_TOKEN_KEY: "ab".repeat(32) });
+    const err = await h.relay.fetch(`${BASE}/contacts?google_error=google_consent_denied`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt() } });
+    expect(await err.text()).toContain("<details open>");
+  });
+
+  it("undo is a second prefs write to /contacts/prefs that restores the previous enabled value", async () => {
+    await upload();
+    const k = await keyOf("Riley Moore");
+    expect((await setPref({ key: k, enabled: true })).status).toBe(200);
+    expect(await sendable(RILEY)).toBe(true);
+    expect((await setPref({ key: k, enabled: false })).status).toBe(200);
+    expect(await sendable(RILEY)).toBe(false);
   });
 });
