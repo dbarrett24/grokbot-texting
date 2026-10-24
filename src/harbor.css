@@ -47,6 +47,12 @@ html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-bac
 .hl-photo-scatter{background-image:var(--hl-scrim),url(/harbor/leaves/scatter-1024.webp)}
 @media (max-width:40em){.hl-photo-corners{background-image:var(--hl-scrim),url(/harbor/leaves/corners-640.webp)}.hl-photo-vines{background-image:var(--hl-scrim),url(/harbor/leaves/vines-640.webp)}.hl-photo-scatter{background-image:var(--hl-scrim),url(/harbor/leaves/scatter-640.webp)}}
 .hb-th.hb-th-photo-corners{background:url(/harbor/leaves/corners-256.webp) center/cover}.hb-th.hb-th-photo-vines{background:url(/harbor/leaves/vines-256.webp) center/cover}.hb-th.hb-th-photo-scatter{background:url(/harbor/leaves/scatter-256.webp) center/cover}
+/* The scene photos (dock, willow, lantern) are full scenes, so each covers the backdrop (no blend) under a dark navy scrim that keeps every
+   text colour at or above 4.5:1 over its brightest pixel (scripts/proof-shots.mjs checks it). */
+.hl-photo-dock,.hl-photo-willow,.hl-photo-lantern{mix-blend-mode:normal;--hl-scrim:linear-gradient(#0b1626c7,#0b1626c7)}
+.hl-photo-dock{background-image:var(--hl-scrim),url(/harbor/leaves/dock-1280.webp)}.hl-photo-willow{background-image:var(--hl-scrim),url(/harbor/leaves/willow-1280.webp)}.hl-photo-lantern{background-image:var(--hl-scrim),url(/harbor/leaves/lantern-1280.webp)}
+@media (max-width:40em){.hl-photo-dock{background-image:var(--hl-scrim),url(/harbor/leaves/dock-640.webp)}.hl-photo-willow{background-image:var(--hl-scrim),url(/harbor/leaves/willow-640.webp)}.hl-photo-lantern{background-image:var(--hl-scrim),url(/harbor/leaves/lantern-640.webp)}}
+.hb-th.hb-th-photo-dock{background:url(/harbor/leaves/dock-256.webp) center/cover}.hb-th.hb-th-photo-willow{background:url(/harbor/leaves/willow-256.webp) center/cover}.hb-th.hb-th-photo-lantern{background:url(/harbor/leaves/lantern-256.webp) center/cover}
 /* @end photo */
 /* Picker: radios are clipped, not display:none, so they stay in the tab and accessibility order.
    Tiles are about 2x the old 64x36 thumbs and wrap in a grid that fits a 375px viewport. */

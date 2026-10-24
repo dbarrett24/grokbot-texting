@@ -15,6 +15,15 @@ import scatterS from "./assets/leaves/scatter-640.webp";
 import cornersT from "./assets/leaves/corners-256.webp";
 import vinesT from "./assets/leaves/vines-256.webp";
 import scatterT from "./assets/leaves/scatter-256.webp";
+import dockL from "./assets/leaves/dock-1280.webp";
+import dockS from "./assets/leaves/dock-640.webp";
+import dockT from "./assets/leaves/dock-256.webp";
+import willowL from "./assets/leaves/willow-1280.webp";
+import willowS from "./assets/leaves/willow-640.webp";
+import willowT from "./assets/leaves/willow-256.webp";
+import lanternL from "./assets/leaves/lantern-1280.webp";
+import lanternS from "./assets/leaves/lantern-640.webp";
+import lanternT from "./assets/leaves/lantern-256.webp";
 export { pickerLiveScript } from "./harbor-picker";
 
 export const HARBOR_FONT_PATH = "/harbor/source-serif-4-latin-600.woff2";
@@ -56,6 +65,8 @@ export const HARBOR_LEAVES_DEFAULT: LeavesOption | PhotoOption | "none" = "photo
 const isLeaves = (v: string | null): v is LeavesOption => v !== null && Object.hasOwn(HARBOR_LEAVES, v);
 const PHOTOS: Record<string, ArrayBuffer> = {
   "corners-1024": cornersL, "corners-640": cornersS, "vines-1024": vinesL, "vines-640": vinesS, "scatter-1024": scatterL, "scatter-640": scatterS, "corners-256": cornersT, "vines-256": vinesT, "scatter-256": scatterT,
+  "dock-1280": dockL, "dock-640": dockS, "dock-256": dockT,
+  "willow-1280": willowL, "willow-640": willowS, "willow-256": willowT, "lantern-1280": lanternL, "lantern-640": lanternS, "lantern-256": lanternT,
 };
 export const HARBOR_PHOTO_PREFIX = "/harbor/leaves/";
 /** GET /harbor/leaves/<option>-<width>.webp, or null when the name isn't one of ours. */
@@ -65,14 +76,19 @@ export function harborPhoto(path: string): Response | null {
   if (!bytes) return null;
   return new Response(bytes, { headers: { "content-type": "image/webp", "cache-control": "public, max-age=31536000, immutable", "x-content-type-options": "nosniff" } });
 }
+// The scene photos (harbor dock, willow lake, lantern dock) are not leaf layouts: they have no SVG twin, so without images it falls back to the plain backdrop.
+const SCENES = ["dock", "willow", "lantern"] as const;
+const isScene = (v: string | null): v is (typeof SCENES)[number] => v !== null && (SCENES as readonly string[]).includes(v);
+const photoDiv = (o: string) => `<div class="hl-photo hl-photo-${o}" aria-hidden=true></div>`;
 /** The leaf layer markup for this request ("" for none). `images` says whether the page's CSP lets images load. */
 export function leavesFor(req: Request, images = false): string {
   const q = new URL(req.url).searchParams.get("leaves") ?? bgCookie(req);
   const photo = q?.startsWith("photo-") ? q.slice(6) : null;
-  if (photo !== null && isLeaves(photo)) return images ? `<div class="hl-photo hl-photo-${photo}" aria-hidden=true></div>` : HARBOR_LEAVES[photo];
+  if (photo !== null && isScene(photo)) return images ? photoDiv(photo) : "";
+  if (photo !== null && isLeaves(photo)) return images ? photoDiv(photo) : HARBOR_LEAVES[photo];
   const pick = q === "none" ? "none" : isLeaves(q) ? q : HARBOR_LEAVES_DEFAULT;
   if (pick === "none") return "";
-  if (pick.startsWith("photo-")) { const o = pick.slice(6) as LeavesOption; return images ? `<div class="hl-photo hl-photo-${o}" aria-hidden=true></div>` : HARBOR_LEAVES[o]; }
+  if (pick.startsWith("photo-")) { const o = pick.slice(6) as LeavesOption; return images ? photoDiv(o) : HARBOR_LEAVES[o]; }
   return HARBOR_LEAVES[pick as LeavesOption];
 }
 
@@ -84,7 +100,7 @@ export function leavesFor(req: Request, images = false): string {
 export const BG_COOKIE = "hb_bg";
 // SVG layouts (corners, vines, scatter) stay in HARBOR_LEAVES for the no-image fallback and ?leaves= preview.
 // They are not picker choices. The three photos are. Labels have no "(photo)" parenthetical.
-export const BG_OPTIONS = ["none", "photo-corners", "photo-vines", "photo-scatter"] as const;
+export const BG_OPTIONS = ["none", "photo-corners", "photo-vines", "photo-scatter", "photo-dock", "photo-willow", "photo-lantern"] as const;
 type BgOption = (typeof BG_OPTIONS)[number];
 const isBg = (v: string | null | undefined): v is BgOption => !!v && (BG_OPTIONS as readonly string[]).includes(v);
 function bgCookie(req: Request): string | null {
@@ -93,7 +109,7 @@ function bgCookie(req: Request): string | null {
 }
 const BACK = /^\/(?:contacts|direct|log|approve|approve\/[a-f0-9]{32})$/;
 const LABELS: Record<BgOption, string> = {
-  none: "None", "photo-corners": "Corners", "photo-vines": "Vines", "photo-scatter": "Scatter",
+  none: "None", "photo-corners": "Corners", "photo-vines": "Vines", "photo-scatter": "Scatter", "photo-dock": "Harbor dock", "photo-willow": "Willow lake", "photo-lantern": "Lantern dock",
 };
 const LEAF = (x: number, y: number, r: number, s: number) => `<path transform="translate(${x},${y}) rotate(${r}) scale(${s})" d="M0,0C5,-5,14,-5,22,0C14,5,5,5,0,0Z"/>`;
 /** Tiny inline thumbnails (no fetch, so they work under default-src 'none'). */
@@ -104,6 +120,7 @@ const MINI: Record<LeavesOption, string> = {
 };
 function thumb(o: BgOption, images: boolean): string {
   if (o === "none") return `<span class=hb-th></span>`;
+  if (o === "photo-dock" || o === "photo-willow" || o === "photo-lantern") return images ? `<span class="hb-th hb-th-${o}"></span>` : `<span class=hb-th></span>`;
   const base = o.startsWith("photo-") ? (o.slice(6) as LeavesOption) : (o as LeavesOption);
   if (o.startsWith("photo-") && images) return `<span class="hb-th hb-th-${o}"></span>`;
   return `<span class=hb-th><svg viewBox="0 0 64 36" fill="#a3b04e" fill-opacity=".6">${MINI[base]}</svg></span>`;

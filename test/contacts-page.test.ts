@@ -236,7 +236,7 @@ describe("owner-only: guards", () => {
     expect(html).not.toContain('confirm("Text');
     expect(html).not.toContain("Resolve preview");
     expect(html).not.toContain("<summary>Health</summary>");
-    expect(new TextEncoder().encode(html).length).toBeLessThan(37_000); // toolbar, switch, dialog, and the inlined contacts script (measured 36076)
+    expect(new TextEncoder().encode(html).length).toBeLessThan(39_000); // toolbar, switch, dialog, the inlined contacts script and three scene picker tiles (measured 38507)
   });
 });
 

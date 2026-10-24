@@ -381,7 +381,7 @@ const M = [
   ["gc3_withproject_sets", "src/contacts.ts", 'u.searchParams.set("project", id);', ""],
   ["gc3_withproject_validates", "src/contacts.ts", 'if (/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(id) || /^[0-9]{6,20}$/.test(id)) u.searchParams', 'if (id) u.searchParams'],
   ["gc3_leftover_notice", "src/relay.ts", "leftovers: this.googleLegacyLeftovers(),", "leftovers: [],"],
-  ["picker_live_known", "src/harbor-picker.ts", 'if(!/^(corners|vines|scatter)$/.test(name))return;', ""],
+  ["picker_live_known", "src/harbor-picker.ts", 'if(!/^(corners|vines|scatter|dock|willow|lantern)$/.test(name))return;', ""],
   ["gc_secret_not_logged", "scripts/google-client.mjs", 'o.log("GOOGLE_CLIENT_SECRET set");', 'o.log("GOOGLE_CLIENT_SECRET set: " + secret);'],
   ["gc_unlink_only_after_both", "scripts/google-client.mjs", "if (ok) o.unlink();", "o.unlink();"],
   ["gc_keep_json_until_both_puts", "scripts/google-client.mjs", "let ok = false;", "let ok = true;"],
