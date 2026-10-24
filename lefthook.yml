@@ -1,0 +1,32 @@
+# Pre-push fast check. Shared SpecTackler-CI hook, pinned by tag (see
+# https://github.com/dbarrett24/spectackler-ci/blob/hooks-v1.0.0/hooks/README.md).
+# Installed by `npm ci` / `npm install` through the `prepare` script.
+#
+# The shared config's turbo/pnpm steps (2_, 3_) don't apply to this npm,
+# non-turbo repo, so they're skipped here and replaced by 4_–6_ below.
+# The shared 1_fetch-base and 9_marker steps still run (piped: stop at first failure).
+#
+# Worktrees: git exports GIT_DIR (and friends) to hooks. Tests that spin up
+# temp git repos would inherit it, so every local step runs with those unset.
+remotes:
+  - git_url: https://github.com/dbarrett24/spectackler-ci.git
+    ref: hooks-v1.0.0
+    configs:
+      - hooks/lefthook-pre-push.yml
+
+pre-push:
+  commands:
+    0_spectackler-installed:
+      run: >-
+        test -f "$(git rev-parse --git-common-dir)/info/lefthook-remotes/spectackler-ci-hooks--v1.0.0/hooks/lefthook-pre-push.yml"
+        || { echo "SPECTACKLER-HOOK NOT INSTALLED (run: gh auth setup-git && npx lefthook install)"; exit 1; }
+    2_lint-typecheck:
+      skip: true
+    3_unit-tests:
+      skip: true
+    4_typecheck:
+      run: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR npm run --silent typecheck
+    5_tests:
+      run: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR npm test --silent
+    6_ancestors-pii:
+      run: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR sh -c 'npm run --silent check:ancestors && node scripts/ci/pii-scan.mjs --range origin/main..HEAD'
