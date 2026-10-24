@@ -97,6 +97,10 @@ CAP_START_DATE = "REPLACE_WITH_START_DATE_YYYY-MM-DD"   # invalid = the cap stay
 # MIN_SECONDS_BETWEEN_SENDS = "30"        # 0..86400
 # MAX_TEXT_CHARS = "640"                  # 1..10000 (both flows)
 
+# Message store. Both off in the template. A garbage value refuses every route.
+STORE_MESSAGE_BODIES = "0"                # "1" = encrypt and store the body (needs LOG_ENC_KEY). "0" = do not store bodies.
+CAPTURE_INBOUND = "0"                     # "1" = the owner may record an inbound text at POST /messages. "0" = refused.
+
 # Secrets (set with `npx wrangler secret put NAME`, never written here):
 # REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, ALLOWLIST,
 # GATEWAY_MODE ("passphrase" or "device_key"; setup sets it) and either
@@ -104,7 +108,14 @@ CAP_START_DATE = "REPLACE_WITH_START_DATE_YYYY-MM-DD"   # invalid = the cap stay
 # GATEWAY_PINNED_FINGERPRINT + GATEWAY_KEY_VERSION (device-key mode),
 # OWNER_NUMBER (your own number; needed for sms-mode notices, and always when GROUP_MMS = "1") and/or NTFY_URL + NTFY_TOKEN (ntfy mode),
 # LOG_HASH_KEY (required for direct send, >= 32 chars): HMAC key for number and body hashes,
+# LOG_ENC_KEY (only if you store texts): 32 random bytes, e.g. `openssl rand -base64 32`. AES-GCM for the messages
+#   table. Must be a different value from LOG_HASH_KEY. Do not set it until you want storage on. Missing = fail closed
+#   for inbound capture and for body storage; sends still go out.
 # GOOGLE_TOKEN_KEY (32 random bytes, e.g. `openssl rand -base64 32`; seals Google sign-ins stored by the Worker; GOOGLE_TOKEN_KEY_OLD only while rotating),
 # legacy fallback: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_RT_<LABEL> per account (scripts/google-consent.mjs),
 # DIRECT_ALLOWLIST (DEPRECATED: imported once as flagged legacy contacts, then ignored; delete it after review)
 # DEVICE_TOKEN (DELIVERY = mac or shortcut only; 32+ chars, different from REQUEST_TOKEN, e.g. `openssl rand -hex 32`)
+
+# Daily retention for the messages table (inbound 30 days, outbound 90). The Durable Object alarm also purges.
+[triggers]
+crons = ["15 8 * * *"]

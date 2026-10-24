@@ -376,13 +376,13 @@ describe("optional limits (off by default)", () => {
     expect((await logRows()).filter((x) => x.event === "direct_refused").map((x) => x.detail.match(/reason=(\w+)/)![1])).toEqual(["direct_daily_cap_reached", "direct_daily_cap_reached"]);
   });
 
-  it("DIRECT_NOTIFY_EACH=1 texts the owner a copy (label, 80-char preview, local time, log link)", async () => {
+  it("DIRECT_NOTIFY_EACH=1 texts the owner the name, local time and log link, never the body", async () => {
     await h.setEnv({ DIRECT_NOTIFY_EACH: "1" });
     const text = "b".repeat(80) + "TAIL";
     expect(await (await direct({ to_name: "Jordan Bauer", body: text })).json()).toMatchObject({ state: "sent", notified: true });
     const [note] = await ownerTexts();
     expect(note).toContain("Jordan Bauer");
-    expect(note).toContain('"' + "b".repeat(80) + "…\"");
+    expect(note).not.toContain("b".repeat(20));
     expect(note).not.toContain("TAIL");
     expect(note).toContain("6:00 PM MDT");
     expect(note).toContain("https://approve.example.test/log");
@@ -486,7 +486,7 @@ describe("runaway pause", () => {
     expect((await resume(csrf, null)).status).toBe(403);
     expect((await resume(csrf, "https://evil.example.test")).status).toBe(403);
     const noJwt = await h.relay.fetch(`${BASE}/direct/resume`, { method: "POST", headers: { Origin: BASE, "content-type": "application/x-www-form-urlencoded" }, body: `csrf=${csrf}` });
-    expect(noJwt.status).toBe(403);
+    expect(noJwt.status).toBe(401);
     expect((await resume(csrf, BASE, { Authorization: "Bearer TEST-ONLY-request-token" })).status).toBe(403);
     expect(await sql("SELECT v FROM meta WHERE k='direct_paused'")).toEqual([{ v: "1" }]);
     const fresh = (await pausePage()).csrf;
@@ -506,7 +506,7 @@ describe("runaway pause", () => {
 
 describe("contacts snapshot upload", () => {
   it("needs Access, JSON, and same or no Origin", async () => {
-    expect((await upload(SNAPSHOT, { jwt: null })).status).toBe(403);
+    expect((await upload(SNAPSHOT, { jwt: null })).status).toBe(401);
     expect((await upload(SNAPSHOT, { ct: "text/plain" })).status).toBe(415);
     expect((await upload(SNAPSHOT, { origin: "https://evil.example.test" })).status).toBe(403);
     expect((await upload(SNAPSHOT, { origin: BASE })).status).toBe(200);

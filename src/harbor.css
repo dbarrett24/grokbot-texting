@@ -29,7 +29,7 @@
 }
 /* @end harbor-tokens */
 /* @font-face: only where the CSP allows same-origin fonts (/contacts); stripped elsewhere, which fall back to Georgia. */
-@font-face{font-family:'Source Serif 4 Harbor';src:url(/harbor/source-serif-4-latin-600.woff2) format('woff2');font-weight:600;font-display:swap;unicode-range:U+0000-00FF,U+2000-206F,U+20AC,U+2122,U+2212}
+@font-face{font-family:'Source Serif 4 Harbor';src:url(/harbor/source-serif-4-latin-600.woff2) format('woff2');font-weight:600;font-display:swap}
 /* @end font-face */
 :root{color-scheme:dark;background:var(--h-solid)}
 /* The backdrop is a fixed layer behind everything (not background-attachment:fixed, which iOS Safari ignores and which
@@ -37,11 +37,11 @@
 html::before{content:"";position:fixed;inset:0;z-index:-3;background:var(--h-backdrop);pointer-events:none}
 /* Optional leaf layer (src/harbor-leaves.ts): fixed between the backdrop (-3) and the glass (-1), thickest at the
    edges and masked away toward the centre so the card stays readable. */
-.hl-leaves{position:fixed;inset:0;width:100%;height:100%;z-index:-2;pointer-events:none;-webkit-mask-image:radial-gradient(ellipse at center,transparent 28%,#000 78%);mask-image:radial-gradient(ellipse at center,transparent 28%,#000 78%)}
+.hl-leaves,.hl-photo{position:fixed;inset:0;z-index:-2;pointer-events:none}.hl-leaves{--m:radial-gradient(#0000 28%,#000 78%);-webkit-mask-image:var(--m);mask-image:var(--m)}
 /* @photo: photo leaf backdrops (/contacts only; see src/harbor.ts). The photos bake in their own blue gradient, so
    they are blended (soft-light) over the Harbor backdrop instead of covering it: the gradient and the gold and blue
    glows stay visible underneath and the leaves read as texture. The smaller file is used on narrow screens. */
-.hl-photo{position:fixed;inset:0;z-index:-2;pointer-events:none;background-position:center;background-size:cover;mix-blend-mode:soft-light;--hl-scrim:linear-gradient(transparent,transparent)}
+.hl-photo{background-position:center;background-size:cover;mix-blend-mode:soft-light;--hl-scrim:linear-gradient(#0009,#0009)}
 .hl-photo-corners{background-image:var(--hl-scrim),url(/harbor/leaves/corners-1024.webp)}
 .hl-photo-vines{background-image:var(--hl-scrim),url(/harbor/leaves/vines-1024.webp)}
 .hl-photo-scatter{background-image:var(--hl-scrim),url(/harbor/leaves/scatter-1024.webp)}
@@ -145,3 +145,6 @@ dialog.ask p{margin:.2em 0 .9em}
 dialog.ask .dlg-acts{display:flex;justify-content:flex-end;gap:.5em}
 dialog.ask button{min-height:44px;min-width:44px}
 @media (max-width:30em){body{margin:3em .5em .5em;padding:.8em 1em 1em}.hl-leaves{opacity:.3}.tools{gap:.4em}.seg button{padding:0 .6em}.more summary{padding:0 .6em}.pager #page{min-width:0;padding:0 .2em}.more .menu{min-width:0;width:min(16rem,calc(100vw - 2em))}}
+.sitenav{display:flex;gap:.3em;margin:0 0 .7em}.tabrow{display:none}.sitenav a,.tabrow a{display:inline-flex;min-height:44px;padding:0 .5em;border-radius:12px;color:var(--h-muted);text-decoration:none;box-shadow:inset 0 0 0 1px var(--h-border)}a[aria-current=page]{color:var(--h-cta-ink);background:var(--h-text);box-shadow:none}@media(max-width:480px){.sitenav{display:none}.tabrow{display:flex;position:fixed;z-index:7;inset:auto 0 0;background:var(--h-solid)}.tabrow a{flex:1;justify-content:center;border-radius:0}body{padding-bottom:4em}#toast{bottom:4em}}
+/* Support pill. Content box is 28px; the 1px border makes the badge 30px. Text is 13px on the solid fill. */
+footer{margin-top:1.2em}a.support{display:inline-flex;align-items:center;height:28px;padding:0 .7em;border-radius:999px;border:1px solid var(--h-border);background:var(--h-solid);color:var(--h-text);font-size:13px;text-decoration:none}

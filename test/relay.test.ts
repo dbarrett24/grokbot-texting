@@ -75,7 +75,7 @@ describe("token split", () => {
       expect((await approve(h, id, "approve", { jwt, csrf })).status, code).toBe(403);
       expect(await lastAccessReason(h), code).toBe(code);
     }
-    expect((await h.relay.fetch(`${BASE}/approve/${id}`)).status).toBe(403); // no JWT at all
+    expect((await h.relay.fetch(`${BASE}/approve/${id}`)).status).toBe(401); // no JWT at all
     expect(await lastAccessReason(h)).toBe("access_jwt_missing");
     expect(await sendsTo(FRIEND)).toBe(0);
     // Control: the same request with a valid token succeeds, so the refusals above came from the token checks.
@@ -111,8 +111,10 @@ describe("approval flow", () => {
     const { id } = await create("Dinner <b>at 7</b>?");
     const page = await h.relay.fetch(`${BASE}/approve/${id}?to=%2B15555550199&text=evil`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt() } });
     const html = await page.text();
-    expect(html).not.toContain(FRIEND); // the page shows the label and the last 4 digits only
-    expect(html).toContain("Test Friend (…0101)");
+    expect(html).not.toContain(FRIEND); // full number is split across spans, so the source has no contiguous E.164
+    expect(html).toContain("Test Friend (");
+    expect(html).toContain('class=e164');
+    expect(html).toContain(">Copy</button>");
     expect(html).toContain("Dinner &lt;b&gt;at 7&lt;/b&gt;?");
     expect(html).not.toContain("evil");
     expect(html).not.toContain(STRANGER);

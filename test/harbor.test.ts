@@ -4,9 +4,15 @@ import { scan } from "./phone-scan";
 import { HARBOR_CSS, HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH, HARBOR_LOGO_PATH, pickerLiveScript } from "../src/harbor";
 import { installPicker } from "../src/harbor-picker";
 
-// Everyday Harbor look: one CSS file inlined into each page, the heading font served by the Worker. The CSPs must be
-// exactly what they were before the look was added.
-const STRICT_CSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'";
+// Everyday Harbor look. /contacts keeps its CSP byte for byte. Approve, Direct and Log use a nonce policy
+// that drops unsafe-inline and allows same-origin images, fonts and the page's own script.
+const PAGE_CSP = (nonce: string) => `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src 'self'; font-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`;
+function expectPageCsp(csp: string | null): string {
+  const nonce = /'nonce-([a-f0-9]{32})'/.exec(csp ?? "")?.[1] ?? "";
+  expect(csp).toBe(PAGE_CSP(nonce));
+  expect(nonce).toMatch(/^[a-f0-9]{32}$/);
+  return nonce;
+}
 let h: Harness;
 beforeEach(async () => { h = await harness(); });
 const get = async (url: string) => h.relay.fetch(url, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt() } });
@@ -41,6 +47,16 @@ describe("Harbor look", () => {
     expect(HARBOR_CSS).toContain("/harbor/leaves/corners-256.webp");
     expect(HARBOR_CSS).not.toContain("96.webp");
     expect(HARBOR_CSS).toContain(".badge[hidden]{display:none}");
+    const support = /a\.support\{[^}]*\}/.exec(HARBOR_CSS)?.[0] ?? "";
+    const supportHeight = Number(/height:(\d+)px/.exec(support)?.[1]);
+    const supportFont = Number(/font-size:(\d+)px/.exec(support)?.[1]);
+    expect(supportHeight).toBeGreaterThanOrEqual(28);
+    expect(supportHeight).toBeLessThanOrEqual(32);
+    expect(supportFont).toBeGreaterThanOrEqual(12);
+    expect(supportFont).toBeLessThanOrEqual(13);
+    expect(support).toContain("border:1px solid var(--h-border)");
+    expect(support).toContain("background:var(--h-solid)");
+    expect(support).toContain("color:var(--h-text)");
     expect(HARBOR_CSS).toContain("dialog.ask button{min-height:44px;min-width:44px}");
     expect(HARBOR_CSS).toContain("--h-border:#6b89ad");
     expect(HARBOR_CSS).not.toContain("#56708f");
@@ -69,21 +85,24 @@ describe("Harbor look", () => {
     expect((await h.relay.fetch(`${API}${HARBOR_LOGO_PATH}`)).status).toBe(404);
   });
 
-  it("/direct: Harbor CSS without @font-face, CSP unchanged", async () => {
+  it("/direct: Harbor CSS with the font, nonce CSP, no-store", async () => {
     const r = await get(`${BASE}/direct`);
     const html = await r.text();
-    expect(html).toContain(`<style>${HARBOR_CSS_NO_FONT}</style>`);
-    expect(html).not.toContain("@font-face");
-    expect(r.headers.get("content-security-policy")).toBe(STRICT_CSP);
+    const nonce = expectPageCsp(r.headers.get("content-security-policy"));
+    expect(html).toContain(`<style nonce="${nonce}">\n${HARBOR_CSS}\n</style>`);
+    expect(html).toContain("@font-face");
+    expect(r.headers.get("cache-control")).toBe("no-store");
+    expect(r.headers.get("content-security-policy")).not.toContain("unsafe-inline");
   });
 
-  it("/approve: Harbor CSS without @font-face, CSP unchanged", async () => {
+  it("/approve: Harbor CSS with the font, nonce CSP, approve button kept", async () => {
     const id = ((await (await postRequest(h, { to: FRIEND, text: "hi" })).json()) as { id: string }).id;
     const r = await get(`${BASE}/approve/${id}`);
     const html = await r.text();
-    expect(html).toContain(`<style>${HARBOR_CSS_NO_FONT}</style>`);
-    expect(html).toContain("<button name=action value=approve>Approve and send</button>");
-    expect(r.headers.get("content-security-policy")).toBe(STRICT_CSP);
+    const nonce = expectPageCsp(r.headers.get("content-security-policy"));
+    expect(html).toContain(`<style nonce="${nonce}">\n${HARBOR_CSS}\n</style>`);
+    expect(html).toContain("<button name=action value=approve data-act=approve>Approve and send</button>");
+    expect(r.headers.get("cache-control")).toBe("no-store");
   });
 
   it("/contacts: Harbor CSS with the font, in the nonce'd style, CSP unchanged", async () => {
@@ -100,9 +119,9 @@ describe("Harbor leaf mockups (?leaves=)", () => {
   it("default is the vines photo (vines SVG where images are blocked); SVG layouts still render from ?leaves= but are not picker options", async () => {
     const direct = await get(`${BASE}/direct`);
     const plain = await direct.text();
-    expect(plain).toContain("<svg class=hl-leaves aria-hidden=true"); // photo-vines falls back to the vines SVG
-    expect(plain).toContain('value="photo-vines" aria-pressed=true');
-    expect(direct.headers.get("content-security-policy")).toBe(STRICT_CSP);
+    expect(plain).toContain('<div class="hl-photo hl-photo-vines" aria-hidden=true></div>');
+    expect(plain).toContain('value="photo-vines" checked');
+    expectPageCsp(direct.headers.get("content-security-policy"));
     const contacts = await (await get(`${BASE}/contacts`)).text();
     expect(contacts).toContain('<div class="hl-photo hl-photo-vines" aria-hidden=true></div>');
     expect(contacts).toContain('<span class=per><label class=ro for=per>Per page</label><select id=per>');
@@ -115,8 +134,10 @@ describe("Harbor leaf mockups (?leaves=)", () => {
       const r = await get(`${BASE}/direct?leaves=${o}`);
       const html = await r.text();
       expect(html).toContain("<svg class=hl-leaves aria-hidden=true");
-      expect(/<svg class=hl-leaves[\s\S]*?<\/svg>\n/.exec(html)?.[0]).not.toMatch(/href="(?!#)/); // only in-document <use> refs
-      expect(r.headers.get("content-security-policy")).toBe(STRICT_CSP);
+      const svg = html.slice(html.indexOf("<svg class=hl-leaves"), html.indexOf("<header"));
+      expect(svg.startsWith("<svg")).toBe(true);
+      expect(svg).not.toMatch(/href="(?!#)/); // only in-document <use> refs
+      expectPageCsp(r.headers.get("content-security-policy"));
       const c = await get(`${BASE}/contacts?leaves=${o}`);
       const ch = await c.text();
       expect(ch).toContain("<svg class=hl-leaves");
@@ -124,20 +145,19 @@ describe("Harbor leaf mockups (?leaves=)", () => {
     }
     const unknown = await (await get(`${BASE}/direct?leaves=__proto__`)).text();
     expect(unknown).not.toContain("__proto__");
-    expect(unknown).toContain('value="photo-vines" aria-pressed=true');
+    expect(unknown).toContain('value="photo-vines" checked');
   });
 });
 
 describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
-  it("/contacts gets the photo layer; /direct falls back to the SVG option; CSPs unchanged", async () => {
+  it("/contacts and /direct both get the photo layer; CSPs stay their own", async () => {
     for (const o of ["corners", "vines", "scatter"]) {
       const c = await get(`${BASE}/contacts?leaves=photo-${o}`);
       expect(await c.text()).toContain(`<div class="hl-photo hl-photo-${o}" aria-hidden=true></div>`);
       const d = await get(`${BASE}/direct?leaves=photo-${o}`);
       const html = await d.text();
-      expect(html).not.toContain("hl-photo-");
-      expect(html).toContain("<svg class=hl-leaves");
-      expect(d.headers.get("content-security-policy")).toBe(STRICT_CSP);
+      expect(html).toContain(`<div class="hl-photo hl-photo-${o}" aria-hidden=true></div>`);
+      expectPageCsp(d.headers.get("content-security-policy"));
     }
   });
 
@@ -158,7 +178,7 @@ describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
 describe("Background picker (cookie, live on /contacts)", () => {
   const pick = async (leaves: string, back: string, origin = BASE) =>
     h.relay.fetch(`${BASE}/harbor/background`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", Origin: origin, "Cf-Access-Jwt-Assertion": await h.jwt() }, body: new URLSearchParams({ leaves, back }).toString(), redirect: "manual" });
-  it("every page posts the same cookie form; /contacts uses radios and /direct uses a tile button, neither has an Apply step", async () => {
+  it("every page posts the same cookie form; Contacts, Direct and Approve use radios, with Apply only inside noscript", async () => {
     for (const p of ["/direct", "/contacts"]) {
       const html = await (await get(`${BASE}${p}`)).text();
       expect(html).toContain('<form method=post action="/harbor/background"');
@@ -166,9 +186,10 @@ describe("Background picker (cookie, live on /contacts)", () => {
       expect(html).not.toContain("(photo)");
     }
     const direct = await (await get(`${BASE}/direct`)).text();
-    expect(direct).not.toContain("Apply");
-    expect(direct).not.toContain("type=radio");
-    expect((direct.match(/<button type=submit class=hb-opt name=leaves/g) ?? []).length).toBe(4);
+    expect(direct.replace(/<noscript>[\s\S]*?<\/noscript>/g, "")).not.toContain("Apply");
+    expect(direct).toContain("<noscript><button>Apply</button></noscript>");
+    expect((direct.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(4);
+    expect(direct).toContain(pickerLiveScript());
     const contacts = await (await get(`${BASE}/contacts`)).text();
     expect(contacts.replace(/<noscript>[\s\S]*?<\/noscript>/g, "")).not.toContain("Apply");
     expect(contacts).toContain("<noscript><button>Apply</button></noscript>");
@@ -181,10 +202,9 @@ describe("Background picker (cookie, live on /contacts)", () => {
     expect(cookie).toMatch(/^hb_bg=photo-vines; Path=\/; Max-Age=31536000; Secure; HttpOnly; SameSite=Lax$/);
     const d = await h.relay.fetch(`${BASE}/direct`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt(), cookie: "hb_bg=photo-vines" } });
     const html = await d.text();
-    expect(html).toContain("<svg class=hl-leaves");
-    expect(html).not.toContain("hl-photo-");
-    expect(html).toContain('value="photo-vines" aria-pressed=true');
-    expect(d.headers.get("content-security-policy")).toBe(STRICT_CSP);
+    expect(html).toContain('<div class="hl-photo hl-photo-vines" aria-hidden=true></div>');
+    expect(html).toContain('value="photo-vines" checked');
+    expectPageCsp(d.headers.get("content-security-policy"));
     const c = await h.relay.fetch(`${BASE}/contacts`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt(), cookie: "hb_bg=photo-vines" } });
     expect(await c.text()).toContain('<div class="hl-photo hl-photo-vines" aria-hidden=true></div>');
   });

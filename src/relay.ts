@@ -3,12 +3,16 @@ import type { Env } from "./env";
 import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, importHmacKey } from "./e2e";
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
-import { HARBOR_CSS_NO_FONT, HARBOR_FONT_PATH, HARBOR_LOGO_PATH, harborFont, harborLogo, harborPhoto, leavesFor, HARBOR_PHOTO_PREFIX, pickerFor, setBackground } from "./harbor";
+import { HARBOR_CSS, HARBOR_FONT_PATH, HARBOR_LOGO_PATH, harborFont, harborLogo, harborPhoto, leavesFor, HARBOR_PHOTO_PREFIX, pickerFor, setBackground } from "./harbor";
 import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, importTokenKey, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
   CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
 } from "./contacts";
 import { E164, Refuse, hasLink, localDate, maskNumber, parseAllowlist, parseCount, parseSwitch, parseTapConfig, parseTimezone, sendCap, validateRequestBody, validateTapText, type TapConfig } from "./rules";
+import {
+  aadBody, aadNumber, captureInboundOn, importMessageKey, INBOUND_KEEP_MS, migrateMessages, openField, OUTBOUND_KEEP_MS, parseInbound, parseMessageKeyBytes, parsePurge, readMessageRow, sealField, storeBodiesOn, type MessageRow,
+} from "./messages";
+import { approveScript, countsLine, logScript, pageHeaders, renderApproveList, renderApproveOne, renderLog, renderShell, type ApproveItem, type LogItem } from "./pages";
 import {
   insideHours, matchName, parseRequiredLimit, minuteOfDay, normalizeName, parseHours, parseNotifyEach, parseOptionalLimit, parseSnapshot,
   safeName, switchOnUnlessZero, switchOnlyIfOne, validateBody, parseAccounts, parseCountryCode, peopleToContacts, UPLOAD_SOURCE, type ContactRow, type SnapshotContact,
@@ -72,6 +76,12 @@ const textOf = (v: unknown): string => (typeof v === "string" ? v : "");
 const MIGRATED_ON = "migrated=1 AND enabled=1 AND gone_ms IS NULL";
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+function sqlUnknown(row: Record<string, SqlStorageValue>): { [k: string]: unknown } {
+  const out: { [k: string]: unknown } = {};
+  for (const [k, v] of Object.entries(row)) out[k] = v;
+  return out;
+}
 
 async function tokenEquals(a: string, b: string): Promise<boolean> {
   // Hash both sides so the comparison is constant-length, then compare without early exit.
@@ -165,6 +175,7 @@ export class Relay extends DurableObject<Env> {
       // already there
     }
     this.migratePrefs();
+    migrateMessages((q) => { this.sql.exec(q); });
     // Daily purge so retention holds even with no traffic.
     ctx.blockConcurrencyWhile(async () => {
       if ((await ctx.storage.getAlarm()) === null) await ctx.storage.setAlarm(Date.now() + 86_400_000);
@@ -249,6 +260,21 @@ export class Relay extends DurableObject<Env> {
     const cutoff = new Date(now);
     cutoff.setUTCMonth(cutoff.getUTCMonth() - 12);
     this.sql.exec("DELETE FROM log WHERE ms < ?", cutoff.getTime());
+    this.sql.exec("DELETE FROM messages WHERE direction='in' AND created_ms < ?", now - INBOUND_KEEP_MS);
+    this.sql.exec("DELETE FROM messages WHERE direction='out' AND created_ms < ?", now - OUTBOUND_KEEP_MS);
+  }
+
+  /** Counts for tests and the owner pages. No message body and no full number. */
+  storedCounts(): { messages: number; bodies: number; contacts: number } {
+    return {
+      messages: this.countOf("SELECT COUNT(*) AS c FROM messages"),
+      bodies: this.countOf("SELECT COUNT(*) AS c FROM messages WHERE body_ct IS NOT NULL"),
+      contacts: this.countOf("SELECT COUNT(*) AS c FROM contacts"),
+    };
+  }
+  private countOf(sql: string): number {
+    const v = this.sql.exec(sql).one()["c"];
+    return typeof v === "number" ? v : 0;
   }
 
   private get(id: string): Row | null {
@@ -259,11 +285,18 @@ export class Relay extends DurableObject<Env> {
   async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
     try {
+      if (url.hostname === "internal" && req.method === "POST" && url.pathname === "/cron") {
+        this.purge(this.clock());
+        return json(200, { ok: true });
+      }
       if (this.env.DISABLED === "1") throw new Refuse("relay_disabled", 503);
       let delivery: Delivery;
       try {
         this.tz(); // required config: refuse every route until TIMEZONE is a valid IANA zone
         delivery = this.delivery(); // same for DELIVERY
+        parseMessageKeyBytes(this.env.LOG_ENC_KEY, this.env.LOG_HASH_KEY);
+        storeBodiesOn(this.env.STORE_MESSAGE_BODIES);
+        captureInboundOn(this.env.CAPTURE_INBOUND);
         if (isDevice(delivery)) {
           const bad = deviceTokenProblem(this.env.DEVICE_TOKEN, this.env.REQUEST_TOKEN);
           if (bad) throw new Refuse(bad, 503);
@@ -297,14 +330,24 @@ export class Relay extends DurableObject<Env> {
       }
       if (host === apprHost) {
         // Approve host (whole host behind Access): never serves /request.
-        const m = path.match(/^\/approve\/([a-f0-9]{32})$/);
-        if (m && req.method === "GET") return await this.approvePage(req, m[1]);
-        if (m && req.method === "POST") return await this.decide(req, m[1]);
+        if (req.method === "GET" && path === "/") {
+          await this.requireOwner(req, "home");
+          return new Response(null, { status: 302, headers: { location: "/contacts", "cache-control": "no-store" } });
+        }
+        if (req.method === "GET" && path === "/approve") return await this.approveList(req);
+        const approveId = path.match(/^\/approve\/([a-f0-9]{32})$/)?.[1];
+        if (approveId && req.method === "GET") return await this.approvePage(req, approveId);
+        if (approveId && req.method === "POST") return await this.decide(req, approveId);
         if (req.method === "GET" && path === HARBOR_FONT_PATH) return harborFont(); // static OFL font for /contacts headings
         if (req.method === "GET" && path === HARBOR_LOGO_PATH) return harborLogo(); // contacts header mark
         if (req.method === "POST" && path === "/harbor/background") return await setBackground(req); // cosmetic cookie only
         if (req.method === "GET" && path.startsWith(HARBOR_PHOTO_PREFIX)) return harborPhoto(path) ?? json(404, { error: "not_found" });
         if (req.method === "GET" && path === "/log") return await this.showLog(req);
+        if (req.method === "GET" && path === "/messages") return await this.messagesJson(req, url.searchParams.get("full") === "1");
+        const messageId = path.match(/^\/messages\/([a-f0-9]{32})$/)?.[1];
+        if (messageId && req.method === "GET") return await this.messageOne(req, messageId);
+        if (req.method === "POST" && path === "/messages/purge") return await this.purgeMessages(req);
+        if (req.method === "POST" && path === "/messages") return await this.captureInbound(req);
         if (req.method === "GET" && path === "/direct") return await this.directPage(req);
         if (req.method === "POST" && path === "/direct/resume") return await this.resumeDirect(req);
         if (req.method === "POST" && path === "/direct/sync") return await this.syncNow(req);
@@ -321,7 +364,8 @@ export class Relay extends DurableObject<Env> {
       if (msg.startsWith("access_")) {
         console.log(`access_denied reason=${msg}`); // code only; shows in wrangler tail. Never the token or claims.
         this.log("access_denied", { detail: msg });
-        return json(403, { error: "forbidden" });
+        const status = msg === "access_jwt_missing" ? 401 : 403;
+        return json(status, { error: "forbidden" });
       }
       this.log("error", { detail: errCode(e) });
       return json(500, { error: "internal" });
@@ -929,14 +973,13 @@ export class Relay extends DurableObject<Env> {
   }
 
   private async notifyDirectEach(id: string, label: string, text: string, now: number, queued = false): Promise<boolean> {
-    const chars = [...text];
-    const preview = chars.length > 80 ? chars.slice(0, 80).join("") + "…" : text;
     // A queued text hasn't gone anywhere yet: say so, and name the device that will send it.
+    // The notice names the person and the time. It does not include the message body.
     const what = queued ? `text queued for your ${this.delivery() === "mac" ? "Mac" : "iPhone Shortcut"} to send to` : "direct send to";
-    const msg = `SMS relay ${what} ${label} at ${this.fmtTime(now)}: "${preview}" ref ${id.slice(0, 8)}. Log: https://${this.env.APPROVE_HOST}/log`;
+    const msg = `SMS relay ${what} ${label} at ${this.fmtTime(now)}. ref ${id.slice(0, 8)}. Log: https://${this.env.APPROVE_HOST}/log`;
     try {
       await this.deliverToOwner(msg, queued ? "SMS relay text queued" : "SMS relay direct send");
-      this.log("direct_notified", { request_id: id });
+      this.log("direct_notified", { request_id: id, detail: `chars=${[...text].length}` });
       return true;
     } catch (e) {
       const why = errCode(e);
@@ -1386,11 +1429,7 @@ export class Relay extends DurableObject<Env> {
     const now = this.clock();
     const lastHour = this.sql.exec("SELECT COUNT(*) AS c FROM direct_sends WHERE ms > ?", now - HOUR).one().c as number;
     const snapAt = this.meta("snapshot_uploaded_ms");
-    const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Direct send</title>
-<style>${HARBOR_CSS_NO_FONT}</style>
-<body>${leavesFor(req)}
-${pickerFor(req, "/direct")}
-<h2>Direct send</h2>
+    const inner = `<h2>Direct send</h2>
 <p><a href="/contacts">Contacts page</a>: choose who the bot may text.</p>
 <p><b>DIRECT_SEND:</b> ${switchOnlyIfOne(this.env.DIRECT_SEND) ? "on" : "off"} · <b>runaway guard:</b> ${switchOnUnlessZero(this.env.RUNAWAY_PAUSE) ? "on" : "off"}</p>
 <p><b>State:</b> ${paused ? `PAUSED since ${esc(this.fmtTime(pausedMs))}. Direct requests are refused.` : "running"}</p>
@@ -1400,9 +1439,10 @@ ${this.devicePageLine()}
 <p><b>Direct list:</b> ${snapAt ? `${esc(this.meta("snapshot_numbers") ?? "?")} numbers under ${esc(this.meta("snapshot_names") ?? "?")} distinct names, rebuilt ${esc(this.fmtTime(Number(snapAt)))}` : "empty"}</p>
 <ul>${[...this.googleLabels(), UPLOAD_SOURCE].map((a) => { const ok = this.meta(`acct:${a}:ok_ms`); return `<li>${esc(a)}: ${ok ? `${esc(this.meta(`acct:${a}:numbers`) ?? "?")} numbers${this.meta(`acct:${a}:dropped`) ? ` (${esc(this.meta(`acct:${a}:dropped`)!)} fax/pager dropped)` : ""}, last good ${esc(this.fmtTime(Number(ok)))}` : "never loaded"}</li>`; }).join("")}</ul>
 ${this.googleLabels().length ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${csrf}"><button>Sync contacts now</button></form>` : "<p>No Google accounts configured (GOOGLE_ACCOUNTS).</p>"}
-${paused ? `<form method=post action="/direct/resume"><input type=hidden name=csrf value="${csrf}"><button>Resume direct send</button></form>` : ""}
-</body>`;
-    return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" } });
+${paused ? `<form method=post action="/direct/resume"><input type=hidden name=csrf value="${csrf}"><button>Resume direct send</button></form>` : ""}`;
+    const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const html = renderShell({ nonce, css: HARBOR_CSS, leaves: leavesFor(req, true) + pickerFor(req, "/direct", true), current: "direct", body: inner, script: "" });
+    return new Response(html, { headers: pageHeaders(nonce) });
   }
 
   /** Access + same Origin (required) + the single-use CSRF token from GET /direct. */
@@ -1656,7 +1696,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
   }
 
   // ---------- Access side (the owner) ----------
-  private async requireOwner(req: Request, route: "page" | "decide" | "log" | "contacts" | "direct" | "resume" | "sync" | "contacts_page" | "prefs" | "preview" | "google"): Promise<Owner> {
+  private async requireOwner(req: Request, route: "page" | "decide" | "log" | "contacts" | "direct" | "resume" | "sync" | "contacts_page" | "prefs" | "preview" | "google" | "home" | "approve_list" | "messages" | "purge"): Promise<Owner> {
     // Token split: the bot's request token must never work here, so refuse any Authorization header.
     if (req.headers.get("Authorization")) throw new Error("access_bearer_not_allowed");
     const who = await verifyAccess(
@@ -1677,29 +1717,66 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     return ownerFromAccess(who);
   }
 
+  private waitingOnOwner(now: number): number {
+    const v = this.sql.exec("SELECT COUNT(*) AS c FROM requests WHERE state='pending' AND expires_ms > ?", now).one()["c"];
+    return typeof v === "number" ? v : 0;
+  }
+  private waitingOnPhone(): number {
+    const v = this.sql.exec("SELECT COUNT(*) AS c FROM device_jobs WHERE state='queued'").one()["c"];
+    return typeof v === "number" ? v : 0;
+  }
+
+  private async approveList(req: Request): Promise<Response> {
+    await this.requireOwner(req, "approve_list");
+    const now = this.clock();
+    const allow = parseAllowlist(this.env.ALLOWLIST);
+    const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const body = countsLine(this.waitingOnOwner(now), this.waitingOnPhone()) + renderApproveList(this.pendingItems(allow, now), new URL(req.url).searchParams.get("error") === "load_failed");
+    const html = renderShell({ nonce, css: HARBOR_CSS, leaves: leavesFor(req, true) + pickerFor(req, "/approve", true), current: "approve", body, script: approveScript() });
+    return new Response(html, { headers: pageHeaders(nonce) });
+  }
+
+  private pendingItems(allow: Map<string, string>, now: number): ApproveItem[] {
+    const rows = this.sql.exec("SELECT id, recipient, text, csrf, expires_ms, sha256, via, to_label FROM requests WHERE state='pending' AND expires_ms > ? ORDER BY created_ms", now).toArray();
+    const out: ApproveItem[] = [];
+    for (const row of rows) {
+      const id = row["id"];
+      const recipient = row["recipient"];
+      const text = row["text"];
+      const csrf = row["csrf"];
+      const sha = row["sha256"];
+      const expires = row["expires_ms"];
+      if (typeof id !== "string" || typeof recipient !== "string" || typeof text !== "string" || typeof csrf !== "string" || typeof sha !== "string" || typeof expires !== "number") continue;
+      const via = row["via"];
+      const toLabel = row["to_label"];
+      const label = (via === "contacts" && typeof toLabel === "string" ? toLabel : allow.get(recipient)) || "not on allowlist";
+      const mins = Math.max(0, Math.ceil((expires - now) / 60000));
+      out.push({ id, label, e164: recipient, text, csrf, open: true, status: `expires in ${mins} min`, sha: sha.slice(0, 12) });
+    }
+    return out;
+  }
+
   private async approvePage(req: Request, id: string): Promise<Response> {
     await this.requireOwner(req, "page");
     const r = this.get(id);
     if (!r) return json(404, { error: "not_found" });
     const allow = parseAllowlist(this.env.ALLOWLIST);
-    const expired = this.clock() >= r.expires_ms;
+    const now = this.clock();
+    const expired = now >= r.expires_ms;
     const open = r.state === "pending" && !expired;
-    const mins = Math.max(0, Math.ceil((r.expires_ms - this.clock()) / 60000));
+    const mins = Math.max(0, Math.ceil((r.expires_ms - now) / 60000));
     // Everything shown comes from the relay's stored row, never from the query string or the bot.
-    const html = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Approve text</title>
-<style>${HARBOR_CSS_NO_FONT}</style>
-<body>${leavesFor(req)}
-${pickerFor(req, `/approve/${id}`)}
-<h2>Send this text?</h2>
-<p><b>To:</b> ${esc((r.via === "contacts" ? r.to_label : allow.get(r.recipient)) || "not on allowlist")} (${esc(maskNumber(r.recipient))})</p>
-<pre>${esc(r.text)}</pre>
-<p><small>ref ${r.id.slice(0, 8)} · sha256 ${r.sha256.slice(0, 12)} · ${open ? `expires in ${mins} min` : `state: ${expired && r.state === "pending" ? "expired" : r.state}`}</small></p>
-${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
-<button name=action value=approve>Approve and send</button>
-<button name=action value=deny>Deny</button></form>` : ""}
-</body>`;
+    const label = (r.via === "contacts" ? r.to_label : allow.get(r.recipient)) || "not on allowlist";
+    const item: ApproveItem = {
+      id: r.id, label, e164: r.recipient, text: r.text, csrf: r.csrf, open,
+      status: open ? `expires in ${mins} min` : `state: ${expired && r.state === "pending" ? "expired" : r.state}`,
+      sha: r.sha256.slice(0, 12),
+    };
+    const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const body = countsLine(this.waitingOnOwner(now), this.waitingOnPhone()) + renderApproveOne(item, new URL(req.url).searchParams.get("error") === "load_failed");
+    const html = renderShell({ nonce, css: HARBOR_CSS, leaves: leavesFor(req, true) + pickerFor(req, `/approve/${id}`, true), current: "approve", body, script: approveScript() });
     this.log("approve_page_viewed", { request_id: id });
-    return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'" } });
+    return new Response(html, { headers: pageHeaders(nonce) });
   }
 
   private async decide(req: Request, id: string): Promise<Response> {
@@ -1766,8 +1843,132 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
 
   private async showLog(req: Request): Promise<Response> {
     await this.requireOwner(req, "log");
+    const url = new URL(req.url);
+    if (url.searchParams.get("format") === "json") return this.messagesJson(req, url.searchParams.get("full") === "1");
+    if ((req.headers.get("accept") ?? "").includes("text/html")) return this.logPage(req, url.searchParams.get("error") === "load_failed");
     const rows = this.sql.exec("SELECT ms,event,request_id,recipient,sha256,detail FROM log ORDER BY seq DESC LIMIT 500").toArray();
     return json(200, rows);
+  }
+
+  private async logPage(req: Request, error: boolean): Promise<Response> {
+    const items = await this.messageViews(false);
+    const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const html = renderShell({ nonce, css: HARBOR_CSS, leaves: leavesFor(req, true) + pickerFor(req, "/log", true), current: "log", body: renderLog(items, error), script: logScript() });
+    return new Response(html, { headers: pageHeaders(nonce) });
+  }
+
+  private async messagesJson(req: Request, full: boolean): Promise<Response> {
+    await this.requireOwner(req, "messages");
+    const views = await this.messageViews(full);
+    return json(200, views.map((r) => ({ id: r.id, created_ms: r.created_ms, direction: r.direction, number: r.number, body: r.body })));
+  }
+
+  private async messageOne(req: Request, id: string): Promise<Response> {
+    await this.requireOwner(req, "messages");
+    const found = this.sql.exec("SELECT * FROM messages WHERE id=?", id).toArray()[0];
+    if (!found) return json(404, { error: "not_found" });
+    const row = readMessageRow(sqlUnknown(found));
+    const key = await this.messageKey();
+    return json(200, { number: await this.openNumber(key, row), body: await this.openBody(key, row) });
+  }
+
+  private async captureInbound(req: Request): Promise<Response> {
+    await this.requireOwner(req, "messages");
+    if (!captureInboundOn(this.env.CAPTURE_INBOUND)) throw new Refuse("capture_inbound_off", 403);
+    this.sameOrigin(req, true);
+    let raw: unknown;
+    try {
+      raw = await req.json();
+    } catch {
+      throw new Refuse("body_not_json");
+    }
+    const { number, body } = parseInbound(raw);
+    const id = await this.insertMessage("in", number, body);
+    return json(201, { id });
+  }
+
+  private async purgeMessages(req: Request): Promise<Response> {
+    await this.requireOwner(req, "purge");
+    this.sameOrigin(req, true);
+    let raw: unknown;
+    try {
+      raw = await req.json();
+    } catch {
+      throw new Refuse("body_not_json");
+    }
+    parsePurge(raw);
+    this.sql.exec("DELETE FROM messages");
+    this.log("messages_purged", { detail: "scope=all" });
+    return json(200, { purged: true });
+  }
+
+  private async messageKey(): Promise<CryptoKey | null> {
+    return importMessageKey(this.env.LOG_ENC_KEY, this.env.LOG_HASH_KEY);
+  }
+
+  private async messageViews(full: boolean): Promise<(LogItem & { created_ms: number; number: string })[]> {
+    const key = await this.messageKey();
+    const out: (LogItem & { created_ms: number; number: string })[] = [];
+    for (const raw of this.sql.exec("SELECT * FROM messages ORDER BY created_ms DESC LIMIT 500").toArray()) {
+      const row = readMessageRow(sqlUnknown(raw));
+      const plain = await this.openNumber(key, row);
+      const number = full ? plain ?? "…" + row.last4 : maskNumber(plain ?? "0000000" + row.last4);
+      out.push({ id: row.id, created_ms: row.created_ms, direction: row.direction, mask: "…" + row.last4, number, body: await this.openBody(key, row), when: this.fmtTime(row.created_ms) });
+    }
+    return out;
+  }
+
+  private async openNumber(key: CryptoKey | null, row: MessageRow): Promise<string | null> {
+    if (!key || row.number_ct === null || row.number_iv === null) return null;
+    try {
+      return await openField(key, row.number_ct, row.number_iv, aadNumber(row.id));
+    } catch {
+      return null;
+    }
+  }
+  private async openBody(key: CryptoKey | null, row: MessageRow): Promise<string | null> {
+    if (!key || row.body_ct === null || row.body_iv === null) return null;
+    try {
+      return await openField(key, row.body_ct, row.body_iv, aadBody(row.id));
+    } catch {
+      return null;
+    }
+  }
+
+  private async insertMessage(direction: "in" | "out", number: string, body: string): Promise<string> {
+    const storeBody = storeBodiesOn(this.env.STORE_MESSAGE_BODIES);
+    const key = await this.messageKey();
+    if ((storeBody || direction === "in") && !key) throw new Refuse("message_enc_key_missing", 503);
+    const id = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const now = this.clock();
+    let numberCt: string | null = null;
+    let numberIv: string | null = null;
+    let bodyCt: string | null = null;
+    let bodyIv: string | null = null;
+    if (key) {
+      const sealed = await sealField(key, number, aadNumber(id));
+      numberCt = sealed.ct;
+      numberIv = sealed.iv;
+      if (storeBody && body) {
+        const sealedBody = await sealField(key, body, aadBody(id));
+        bodyCt = sealedBody.ct;
+        bodyIv = sealedBody.iv;
+      }
+    }
+    this.sql.exec(
+      "INSERT INTO messages(id,created_ms,direction,number_ct,number_iv,body_ct,body_iv,last4) VALUES(?,?,?,?,?,?,?,?)",
+      id, now, direction, numberCt, numberIv, bodyCt, bodyIv, number.slice(-4),
+    );
+    this.log("message_stored", { recipient: number, detail: `direction=${direction}` });
+    return id;
+  }
+
+  private async noteOutbound(to: string, text: string): Promise<void> {
+    try {
+      await this.insertMessage("out", to, text);
+    } catch (e) {
+      console.error(`MESSAGE_STORE_FAILED reason=${errCode(e)}`);
+    }
   }
 
   // ---------- device delivery (DELIVERY = mac | shortcut) ----------
@@ -1790,7 +1991,11 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
     onQueued?: (job: string) => void,
   ): Promise<Delivered> {
     const mode = this.delivery();
-    if (!isDevice(mode)) return { queued: false, gid: await this.gatewaySend(to, text) };
+    if (!isDevice(mode)) {
+      const gid = await this.gatewaySend(to, text);
+      await this.noteOutbound(to, text);
+      return { queued: false, gid };
+    }
     if (!E164.test(to)) throw new Error("bad_recipient");
     const job = hex(crypto.getRandomValues(new Uint8Array(16)));
     this.sql.exec(
@@ -1798,6 +2003,7 @@ ${open ? `<form method=post><input type=hidden name=csrf value="${r.csrf}">
       job, this.clock(), ref.kind, ref.id, to, text, ref.who ?? null, ref.sha ?? null,
     );
     onQueued?.(job); // synchronous with the INSERT: nothing else runs before the caller's state is saved
+    await this.noteOutbound(to, text);
     this.log("device_queued", { request_id: ref.id, detail: `job_id=${job.slice(0, 8)} kind=${ref.kind} via=${mode}` });
     await this.ensureDeviceAlarm();
     if (mode === "shortcut") await this.pingShortcut();
