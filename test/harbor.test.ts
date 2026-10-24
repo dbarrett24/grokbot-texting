@@ -40,7 +40,11 @@ describe("Harbor look", () => {
     expect(HARBOR_CSS).toContain(".per{display:flex;gap:4px}");
     expect(HARBOR_CSS).toContain("/harbor/leaves/corners-256.webp");
     expect(HARBOR_CSS).not.toContain("96.webp");
-    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(8_081); // 96px mark beside the title; 72px at 480px
+    expect(HARBOR_CSS).toContain(".badge[hidden]{display:none}");
+    expect(HARBOR_CSS).toContain("dialog.ask button{min-height:44px;min-width:44px}");
+    expect(HARBOR_CSS).toContain("--h-border:#6b89ad");
+    expect(HARBOR_CSS).not.toContain("#56708f");
+    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(15_500); // contacts toolbar, switch, sync disclosure, dialog
   });
 
   it("font: served by the Worker on the approve host only, as woff2", async () => {
@@ -116,7 +120,7 @@ describe("Harbor leaf mockups (?leaves=)", () => {
       const c = await get(`${BASE}/contacts?leaves=${o}`);
       const ch = await c.text();
       expect(ch).toContain("<svg class=hl-leaves");
-      expect(new TextEncoder().encode(ch).length).toBeLessThan(27_000); // mockup: leaves + picker; the default page keeps the 25 KB cap
+      expect(new TextEncoder().encode(ch).length).toBeLessThan(42_000); // leaves SVG on the contacts shell (measured 40052); the default page cap is 37 KB
     }
     const unknown = await (await get(`${BASE}/direct?leaves=__proto__`)).text();
     expect(unknown).not.toContain("__proto__");
@@ -197,7 +201,7 @@ describe("Background picker (cookie, live on /contacts)", () => {
     expect(script).not.toContain("Apply");
     expect(script).not.toContain("onchange=");
     expect(script).toContain("function applyPickerChoice");
-    expect(script).toContain('installPicker(document,document.querySelector("#hb-bg"),FormData,fetch)');
+    expect(script).toContain('installPicker(document,document.querySelector("#hb-bg"),FormData,fetch.bind(globalThis))');
     type El = { className: string; removed?: boolean; setAttribute: (n: string, v: string) => void; remove: () => void };
     const run = (start: string) => {
       const listeners: Record<string, () => void> = {};
