@@ -60,7 +60,7 @@ describe("Harbor look", () => {
     expect(HARBOR_CSS).toContain("dialog.ask button{min-height:44px;min-width:44px}");
     expect(HARBOR_CSS).toContain("--h-border:#6b89ad");
     expect(HARBOR_CSS).not.toContain("#56708f");
-    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(15_500); // contacts toolbar, switch, sync disclosure, dialog
+    expect(new TextEncoder().encode(HARBOR_CSS).length).toBeLessThan(16_800); // contacts toolbar, switch, sync disclosure, dialog, three scene photo rules (measured 16408)
   });
 
   it("font: served by the Worker on the approve host only, as woff2", async () => {
@@ -141,17 +141,28 @@ describe("Harbor leaf mockups (?leaves=)", () => {
       const c = await get(`${BASE}/contacts?leaves=${o}`);
       const ch = await c.text();
       expect(ch).toContain("<svg class=hl-leaves");
-      expect(new TextEncoder().encode(ch).length).toBeLessThan(42_000); // leaves SVG on the contacts shell (measured 40052); the default page cap is 37 KB
+      expect(new TextEncoder().encode(ch).length).toBeLessThan(43_500); // leaves SVG on the contacts shell plus scene CSS and tiles (measured 42631); the default page cap is 39 KB
     }
     const unknown = await (await get(`${BASE}/direct?leaves=__proto__`)).text();
     expect(unknown).not.toContain("__proto__");
     expect(unknown).toContain('value="photo-vines" checked');
   });
+
+  it("offers the three scene photos as picker choices and paints each when picked", async () => {
+    for (const [o, label] of [["dock", "Harbor dock"], ["willow", "Willow lake"], ["lantern", "Lantern dock"]] as const) {
+      const html = await (await get(`${BASE}/direct?leaves=photo-${o}`)).text();
+      expect(html).toContain(`value="photo-${o}" checked`);
+      expect(html).toContain(label);
+      expect(html).toContain(`<span class="hb-th hb-th-photo-${o}"></span>`);
+      expect(html).toContain(`<div class="hl-photo hl-photo-${o}" aria-hidden=true></div>`);
+      expect(html).not.toContain("<svg class=hl-leaves");
+    }
+  });
 });
 
 describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
   it("/contacts and /direct both get the photo layer; CSPs stay their own", async () => {
-    for (const o of ["corners", "vines", "scatter"]) {
+    for (const o of ["corners", "vines", "scatter", "dock", "willow", "lantern"]) {
       const c = await get(`${BASE}/contacts?leaves=photo-${o}`);
       expect(await c.text()).toContain(`<div class="hl-photo hl-photo-${o}" aria-hidden=true></div>`);
       const d = await get(`${BASE}/direct?leaves=photo-${o}`);
@@ -162,13 +173,13 @@ describe("Harbor photo leaf variants (?leaves=photo-*)", () => {
   });
 
   it("serves the WebP files from the approve host only; unknown names 404", async () => {
-    for (const n of ["corners-1024", "corners-640", "corners-256", "vines-1024", "vines-640", "vines-256", "scatter-1024", "scatter-640", "scatter-256"]) {
+    for (const n of ["corners-1024", "corners-640", "corners-256", "vines-1024", "vines-640", "vines-256", "scatter-1024", "scatter-640", "scatter-256", "dock-1280", "dock-640", "dock-256", "willow-1280", "willow-640", "willow-256", "lantern-1280", "lantern-640", "lantern-256"]) {
       const r = await get(`${BASE}/harbor/leaves/${n}.webp`);
       expect(r.status).toBe(200);
       expect(r.headers.get("content-type")).toBe("image/webp");
       const b = new Uint8Array(await r.arrayBuffer());
       expect(new TextDecoder().decode(b.slice(8, 12))).toBe("WEBP");
-      expect(b.length).toBeLessThan(25_000);
+      expect(b.length).toBeLessThan(n.startsWith("dock") || n.startsWith("willow") || n.startsWith("lantern") ? 100_000 : 25_000); // scene photos are full-frame (largest 76.6 KB)
     }
     expect((await get(`${BASE}/harbor/leaves/nope-1024.webp`)).status).toBe(404);
     expect((await h.relay.fetch(`${API}/harbor/leaves/corners-1024.webp`)).status).toBe(404);
@@ -188,12 +199,12 @@ describe("Background picker (cookie, live on /contacts)", () => {
     const direct = await (await get(`${BASE}/direct`)).text();
     expect(direct.replace(/<noscript>[\s\S]*?<\/noscript>/g, "")).not.toContain("Apply");
     expect(direct).toContain("<noscript><button>Apply</button></noscript>");
-    expect((direct.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(4);
+    expect((direct.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(7);
     expect(direct).toContain(pickerLiveScript());
     const contacts = await (await get(`${BASE}/contacts`)).text();
     expect(contacts.replace(/<noscript>[\s\S]*?<\/noscript>/g, "")).not.toContain("Apply");
     expect(contacts).toContain("<noscript><button>Apply</button></noscript>");
-    expect((contacts.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(4);
+    expect((contacts.match(/class=vh type=radio name=leaves/g) ?? []).length).toBe(7);
     expect(contacts).toContain(pickerLiveScript());
     const r = await pick("photo-vines", "/direct");
     expect(r.status).toBe(303);
