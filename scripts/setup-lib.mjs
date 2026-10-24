@@ -11,6 +11,10 @@ import { resolve as resolveDns4, resolve6, resolveCname } from "node:dns/promise
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mainKind } from "./is-main.mjs";
+import { installNoTtyGuard } from "./no-tty-guard.mjs";
+
+// Tests set one of these. A real TTY read or /dev/tty open then throws instead of prompting.
+if (process.env.VITEST === "true" || process.env.SETUP_NONINTERACTIVE === "1") installNoTtyGuard();
 
 const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const LOCAL = join(REPO, ".relay-local");
@@ -92,14 +96,97 @@ export const ASKABLE = {
 
 // ---------- native dialogs on the owner's screen (the answer never reaches stdout) ----------
 const asText = (s) => JSON.stringify(String(s));
+
+/** The reject choice. Confirm buttons are ["No, different", "Yes, it matches"], so this is "No, different". @param {string[]} buttons */
+export function defaultButton(buttons) {
+  return buttons[0]; // reject: "No, different" is the first confirm button
+}
+
+/**
+ * Button prompts reject on empty input and on EOF (null).
+ * @param {string[]} buttons
+ * @param {string | null} raw
+ * @returns {{ value: string }}
+ */
+export function buttonAnswer(buttons, raw) {
+  if (raw === null || String(raw).trim() === "") return { value: defaultButton(buttons) };
+  return { value: String(raw).replace(/\r?\n$/, "").trim() };
+}
+
+/**
+ * Answer for a non-interactive prompt. `stdinText` (null = EOF) and SETUP_ANSWER are injected and skip the real stdin.
+ * A TTY stdin throws: tests must not read the terminal.
+ * @param {{ stdinText?: string | null, stdin?: { isTTY?: boolean, fd?: number } }} [io]
+ * @returns {string | null}
+ */
+export function readPromptRaw(io = {}) {
+  if (Object.prototype.hasOwnProperty.call(io, "stdinText")) return io.stdinText ?? null;
+  if (process.env.SETUP_ANSWER !== undefined) return process.env.SETUP_ANSWER;
+  const stdin = io.stdin || process.stdin;
+  if (stdin.isTTY) throw new Error("refusing_tty_stdin");
+  const fd = typeof stdin.fd === "number" ? stdin.fd : 0;
+  try {
+    const text = readFileSync(fd, "utf8");
+    return text === "" ? null : text;
+  } catch (e) {
+    const code = e && typeof e === "object" && "code" in e ? String(/** @type {{ code?: unknown }} */ (e).code) : "";
+    if (code === "EAGAIN" || code === "EOF") return null;
+    throw e;
+  }
+}
+
+/**
+ * Linux zenity argv. Button dialogs default to cancel (reject).
+ * @param {{ prompt: string, show: string | null, buttons: string[] | null, hidden: boolean }} spec
+ * @returns {string[]}
+ */
+export function linuxDialogArgs(spec) {
+  if (spec.show !== null && spec.buttons) {
+    return ["--question", `--title=${spec.prompt}`, `--text=${spec.show}`, `--ok-label=${spec.buttons[spec.buttons.length - 1]}`, `--cancel-label=${defaultButton(spec.buttons)}`, "--default-cancel"];
+  }
+  if (spec.show !== null) return ["--info", `--title=${spec.prompt}`, `--text=${spec.show}`];
+  return ["--entry", `--text=${spec.prompt}`, ...(spec.hidden ? ["--hide-text"] : [])];
+}
+
+/** @param {string} text @param {{ write: (chunk: string) => void }} [stdout] */
+function writePrompt(text, stdout) {
+  const line = text.endsWith("\n") ? text : `${text}\n`;
+  const file = process.env.SETUP_PROMPT_OUT;
+  if (file) { appendFileSync(file, line); return; }
+  const out = stdout || process.stdout;
+  if ("isTTY" in out && out.isTTY) throw new Error("refusing_tty_stdout");
+  out.write(line);
+}
+
+/**
+ * Test and piped prompts. Passphrase and topic values (info dialogs, no buttons) are not written anywhere.
+ * @param {{ prompt: string, hidden?: boolean, show?: string | null, buttons?: string[] | null, stdinText?: string | null, stdin?: { isTTY?: boolean, fd?: number }, stdout?: { write: (chunk: string) => void } }} spec
+ * @returns {{ value?: string, cancelled?: boolean, error?: string }}
+ */
+function streamDialog(spec) {
+  const show = spec.show ?? null;
+  const buttons = spec.buttons ?? null;
+  if (show !== null && buttons === null) return { value: "Done" };
+  const text = [spec.prompt, show].filter((x) => x !== null && x !== "").join("\n\n");
+  writePrompt(text, spec.stdout);
+  const raw = readPromptRaw(spec);
+  if (buttons) return buttonAnswer(buttons, raw);
+  if (raw === null || String(raw).trim() === "") return { cancelled: true };
+  return { value: String(raw).replace(/\r?\n$/, "") };
+}
+
+/** @param {{ prompt: string, hidden?: boolean, show?: string | null, buttons?: string[] | null }} spec */
 function dialog({ prompt, hidden = false, show = null, buttons = null }) {
   if (DRY) {
     const sim = process.env[`RELAY_DRYRUN_ANSWER`];
     return sim === undefined ? { cancelled: true } : { value: sim };
   }
+  if (process.env.SETUP_NONINTERACTIVE === "1") return streamDialog({ prompt, hidden, show, buttons });
+  const cmd = process.platform === "darwin" ? "osascript" : process.platform === "win32" ? "powershell.exe" : "zenity";
+  if (process.env.VITEST === "true") return { error: `native_dialog_blocked:${cmd}` };
   let r;
   if (process.platform === "darwin") {
-    const btn = buttons ? `buttons {${buttons.map(asText).join(", ")}} default button ${asText(buttons[buttons.length - 1])}` : "";
+    const btn = buttons ? `buttons {${buttons.map(asText).join(", ")}} default button ${asText(defaultButton(buttons))}` : "";
     const script = show !== null
       ? `display dialog ${asText(show)} with title ${asText(prompt)} ${btn || 'buttons {"Done"} default button "Done"'}\nreturn button returned of result`
       : `display dialog ${asText(prompt)} default answer "" ${hidden ? "with hidden answer" : ""} buttons {"Cancel", "OK"} default button "OK"\nreturn text returned of result`;
@@ -108,19 +195,17 @@ function dialog({ prompt, hidden = false, show = null, buttons = null }) {
     const ps = winDialogScript({ prompt, hidden, show, buttons });
     r = spawnSync("powershell.exe", ["-NoProfile", "-STA", "-Command", "-"], { input: ps, encoding: "utf8" });
   } else {
-    const args = show !== null && buttons
-      ? ["--question", `--title=${prompt}`, `--text=${show}`, `--ok-label=${buttons[buttons.length - 1]}`, `--cancel-label=${buttons[0]}`]
-      : show !== null ? ["--info", `--title=${prompt}`, `--text=${show}`] : ["--entry", `--text=${prompt}`, ...(hidden ? ["--hide-text"] : [])];
+    const args = linuxDialogArgs({ prompt, show, buttons, hidden });
     r = spawnSync("zenity", args, { encoding: "utf8" });
-    if (!r.error && show !== null && buttons) return { value: r.status === 0 ? buttons[buttons.length - 1] : buttons[0] };
+    if (!r.error && show !== null && buttons) return { value: r.status === 0 ? buttons[buttons.length - 1] : defaultButton(buttons) };
   }
   if (r.error) return { error: "no_dialog" };
   if (r.status !== 0) return { cancelled: true };
   return { value: String(r.stdout).replace(/\r?\n$/, "") };
 }
-function winDialogScript({ prompt, hidden, show, buttons }) {
+export function winDialogScript({ prompt, hidden, show, buttons }) {
   const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
-  const pick = buttons ? buttons.map((b, i) => `$b${i}=New-Object Windows.Forms.Button;$b${i}.Text=${q(b)};$b${i}.Width=140;$b${i}.Add_Click({$script:res=${q(b)};$f.Close()});$p.Controls.Add($b${i})`).join(";") : "";
+  const pick = buttons ? buttons.map((b, i) => `$b${i}=New-Object Windows.Forms.Button;$b${i}.Text=${q(b)};$b${i}.Width=140;$b${i}.Add_Click({$script:res=${q(b)};$f.Close()});$p.Controls.Add($b${i})`).join(";") + ";$f.AcceptButton=$b0" : "";
   return [
     "Add-Type -AssemblyName System.Windows.Forms",
     "$f=New-Object Windows.Forms.Form;$f.Text='Texting relay setup';$f.Width=560;$f.Height=230;$f.TopMost=$true;$f.StartPosition='CenterScreen'",
@@ -249,7 +334,7 @@ export function pickDevice(devs, storedId) {
 export function confirmText(fpIn, deviceId, deviceName) {
   const fp = idText(fpIn);
   const g = fp.split(":");
-  return `Device: ${idText(deviceName) || "(no name listed)"}\nDevice id: ${idText(deviceId) || "(unknown)"}\n\n${g.slice(0, 2).join("  ")}   ...   ${g.slice(-2).join("  ")}\n\nCheck this is your phone, then compare the first two and last two groups against the app:\nSettings, Device, Device Key, Key fingerprint.\n\nFull value (no need to read it all):\n${fp}`;
+  return `Device: ${idText(deviceName) || "(no name listed)"}\nDevice id: ${idText(deviceId) || "(unknown)"}\n\n${g.slice(0, 2).join("  ")}   ...   ${g.slice(-2).join("  ")}\n\nCheck this is your phone, then compare the first two and last two groups against the app:\nSettings, Device, Device Key, Key fingerprint.\n\nExpected fingerprint from the gateway-check step, stored in .relay-local/secrets.env (PENDING_FINGERPRINT).\nReject unless you just set up this device.\n\nFull value (no need to read it all):\n${fp}`;
 }
 export function requiredSecrets(s, m) {
   const base = ["REQUEST_TOKEN", "LOG_HASH_KEY", "ACCESS_AUD", "APPROVER_EMAIL", "OWNER_NUMBER", "ALLOWLIST"];

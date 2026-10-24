@@ -36,7 +36,7 @@ beforeEach(() => {
   // The setup helper writes .relay-local next to its own folder, so run a copy in the temp dir, reached
   // through the link (the way a macOS TMPDIR path reaches it).
   mkdirSync(join(link, "scripts"));
-  for (const f of ["setup-lib.mjs", "is-main.mjs"]) {
+  for (const f of ["setup-lib.mjs", "is-main.mjs", "no-tty-guard.mjs"]) {
     if (existsSync(join(ROOT, "scripts", f))) copyFileSync(join(ROOT, "scripts", f), join(link, "scripts", f));
   }
   copyFileSync(join(ROOT, "wrangler.toml"), join(link, "wrangler.toml"));

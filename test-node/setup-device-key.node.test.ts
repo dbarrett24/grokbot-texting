@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, exis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // @ts-expect-error plain .mjs script, no types
-import { gatewayMode, gatewayDiagnosis, GATEWAY_FIX, requiredSecrets, fingerprintOf, staleHint, STALE_PIN_HINT, pickDevice, confirmText, bothModesListed } from "../scripts/setup-lib.mjs";
+import { gatewayMode, gatewayDiagnosis, GATEWAY_FIX, requiredSecrets, fingerprintOf, staleHint, STALE_PIN_HINT, pickDevice, confirmText, bothModesListed, winDialogScript } from "../scripts/setup-lib.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 // Pretend Worker: secret names in $FAKE_LOG.worker; each call's argv in $FAKE_LOG.calls; bulk stdin in $FAKE_LOG.stdin.
@@ -43,12 +43,25 @@ const KEY_A = newKey(), KEY_B = newKey();
 const dev = (pub?: string, ver?: number) => JSON.stringify([{ id: "test-device-1", ...(pub ? { publicKey: pub, keyVersion: ver } : {}) }]);
 
 let dir: string;
-function run(args: string[], env: Record<string, string> = {}) {
+function run(args: string[], env: Record<string, string | undefined> = {}, input?: string) {
+  const merged: NodeJS.ProcessEnv = {
+    ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, FAKE_LOG: join(dir, "fake"),
+    // Never open a real native dialog (osascript on macOS) from a test: default to the fake Linux zenity path.
+    FAKE_PLATFORM: "linux",
+    // Prompts read an injected answer and write the prompt text to a file, never to a TTY.
+    SETUP_NONINTERACTIVE: "1", SETUP_PROMPT_OUT: join(dir, "prompt.txt"), ...env,
+  };
+  for (const k of Object.keys(merged)) if (merged[k] === undefined) delete merged[k];
   const r = spawnSync(process.execPath, ["--require", join(dir, "fake-gw.cjs"), join(dir, "scripts", "setup-lib.mjs"), ...args], {
-    encoding: "utf8", env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, FAKE_LOG: join(dir, "fake"), ...env },
+    encoding: "utf8", timeout: 20_000, env: merged, ...(input !== undefined ? { input } : {}),
   });
-  return { code: r.status, out: r.stdout + r.stderr };
+  return { code: r.status, out: (r.stdout ?? "") + (r.stderr ?? "") };
 }
+/** confirm-fingerprint with an injected "Yes". Does not spawn osascript, zenity, or powershell. */
+function confirm(env: Record<string, string | undefined> = {}) {
+  return run(["confirm-fingerprint"], { SETUP_ANSWER: "Yes, it matches", ...env });
+}
+const promptText = () => readFileSync(join(dir, "prompt.txt"), "utf8");
 const local = (f: string) => join(dir, ".relay-local", f);
 const env = () => Object.fromEntries(readFileSync(local("secrets.env"), "utf8").split("\n").filter((l) => /^[A-Z_]+=/.test(l)).map((l) => [l.slice(0, l.indexOf("=")), JSON.parse(l.slice(l.indexOf("=") + 1))]));
 const settings = () => JSON.parse(readFileSync(local("settings.json"), "utf8"));
@@ -63,6 +76,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "relay-devkey-"));
   mkdirSync(join(dir, "scripts")); mkdirSync(join(dir, "bin"));
   copyFileSync(join(ROOT, "scripts", "setup-lib.mjs"), join(dir, "scripts", "setup-lib.mjs"));
+  copyFileSync(join(ROOT, "scripts", "no-tty-guard.mjs"), join(dir, "scripts", "no-tty-guard.mjs"));
   if (existsSync(join(ROOT, "scripts", "is-main.mjs"))) copyFileSync(join(ROOT, "scripts", "is-main.mjs"), join(dir, "scripts", "is-main.mjs")); // after the realpath fix lands
   copyFileSync(join(ROOT, "wrangler.toml"), join(dir, "wrangler.toml"));
   for (const [n, body] of [["npx", FAKE_NPX], ["npx.cmd", FAKE_NPX], ["zenity", FAKE_ZENITY], ["powershell.exe", FAKE_PWSH], ["cmd.exe", FAKE_CMD]]) {
@@ -157,7 +171,7 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
 
   it("undeployed Worker: confirm writes secrets.env only, no wrangler call", () => {
     run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 2) });
-    const c = run(["confirm-fingerprint"]);
+    const c = confirm();
     expect(c.out).toContain("RELAY_STATUS step=worker-pin result=skip reason=not_deployed_yet");
     expect(calls()).toEqual([]);
     expect(env().GATEWAY_KEY_VERSION).toBe("2");
@@ -176,8 +190,8 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     writeFileSync(join(dir, "fake.worker"), "REQUEST_TOKEN\nGATEWAY_PASSPHRASE\n"); // an earlier passphrase-mode run
     run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 2) });
     deployed();
-    const c = run(["confirm-fingerprint"]); // Linux dialog: fake zenity, owner presses "Yes, it matches"
-    const z = readFileSync(join(dir, "fake.zenity"), "utf8");
+    const c = confirm(); // injected answer; the prompt is captured, not shown on a terminal
+    const z = promptText();
     const g = fingerprintOf(KEY_A).split(":");
     expect(z).toContain(`${g[0]}  ${g[1]}   ...   ${g[14]}  ${g[15]}`); // big: first two and last two groups
     expect(z).toContain(fingerprintOf(KEY_A)); // full value, secondary
@@ -191,14 +205,14 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
   it("deployed Worker without a passphrase: nothing is deleted", () => {
     run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 2) });
     deployed();
-    expect(run(["confirm-fingerprint"]).out).toContain("removed_passphrase=no");
+    expect(confirm().out).toContain("removed_passphrase=no");
     expect(calls().some((c) => c.includes("delete"))).toBe(false);
   });
 
   it("a Worker deployed from another Cloudflare account is not touched", () => {
     run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 2) });
     writeFileSync(local("owned-relay-t.json"), JSON.stringify({ worker: "relay-t", accountId: "acct-other", hosts: ["api.owner.test", "app.owner.test"] }));
-    expect(run(["confirm-fingerprint"]).out).toContain("step=worker-pin result=fail reason=different_cloudflare_account");
+    expect(confirm().out).toContain("step=worker-pin result=fail reason=different_cloudflare_account");
     expect(calls()).toEqual(["whoami --json"]);
   });
 
@@ -221,7 +235,7 @@ describe.skipIf(process.platform === "win32")("device-key setup (offline)", () =
     expect(env().GATEWAY_KEY_VERSION).toBe("1");
     expect(run(["secrets"]).out).toContain("reason=fingerprint_not_confirmed");
     clearCalls();
-    const c = run(["confirm-fingerprint"]);
+    const c = confirm();
     expect(c.out).toContain("replaced=previous_pin");
     expect(c.out).toContain("step=worker-pin result=ok");
     expect(JSON.parse(readFileSync(join(dir, "fake.stdin"), "utf8"))).toEqual({ GATEWAY_PINNED_FINGERPRINT: fingerprintOf(KEY_B), GATEWAY_KEY_VERSION: "2", GATEWAY_MODE: "device_key" });
@@ -308,7 +322,7 @@ describe.skipIf(process.platform === "win32")("CARO vet fixes", () => {
     writeFileSync(join(dir, "fake.worker"), "GATEWAY_PASSPHRASE\n");
     run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 2) });
     deployed();
-    const c = run(["confirm-fingerprint"], { FAKE_BULK_DROPS: "1" });
+    const c = confirm({ FAKE_BULK_DROPS: "1" });
     expect(c.out).toContain("step=worker-pin result=fail");
     expect(c.out).toContain("absent=GATEWAY_PINNED_FINGERPRINT,GATEWAY_KEY_VERSION,GATEWAY_MODE removed_passphrase=no_pin_not_listed");
     expect(calls().some((x) => x.startsWith("secret delete"))).toBe(false);
@@ -321,9 +335,16 @@ describe.skipIf(process.platform === "win32")("CARO vet fixes", () => {
     expect(run(["keys"]).out).toContain("next=show_GATEWAY_PASSPHRASE_then_enter_it_in_the_app");
     expect(run(["secrets", "--dry-run"]).out).toContain("owner_next=show_GATEWAY_PASSPHRASE_then_enter_it_in_the_app");
     expect(run(["status"]).out).toContain("owner_next=show_GATEWAY_PASSPHRASE_then_enter_it_in_the_app");
-    const sh = run(["show", "GATEWAY_PASSPHRASE"]); // fake zenity: shown on screen
+    const sh = run(["show", "GATEWAY_PASSPHRASE"]); // non-interactive: the value stays off stdout and the prompt file
     expect(sh.out).toContain("shown=on_screen_only");
+    const phrase = "Type this into the SMS Gateway app";
     expect(sh.out).not.toContain(env()["GATEWAY_PASSPHRASE"]);
+    expect(sh.out).not.toContain(phrase);
+    if (existsSync(join(dir, "prompt.txt"))) {
+      const captured = promptText();
+      expect(captured).not.toContain(env()["GATEWAY_PASSPHRASE"]);
+      expect(captured).not.toContain(phrase);
+    }
     expect(run(["status"]).out).not.toContain("owner_next=");
     expect(run(["secrets", "--dry-run"]).out).not.toContain("owner_next=");
   });
@@ -344,7 +365,10 @@ describe.skipIf(process.platform === "win32")("CARO vet fixes", () => {
     run(["keys"], w);
     expect(run(["smoke", "--dry-run"], { ...w, RELAY_DRYRUN_DEVICES: dev(KEY_A, 1) }).out).toContain("step=smoke-gateway result=ok mode=passphrase");
     expect(run(["status"], w).out).toContain("owner_next=show_GATEWAY_PASSPHRASE");
-    expect(run(["show", "GATEWAY_PASSPHRASE"], w).out).toContain("shown=on_screen_only"); // fake powershell.exe
+    const shown = run(["show", "GATEWAY_PASSPHRASE"], w);
+    expect(shown.out).toContain("shown=on_screen_only");
+    expect(shown.out).not.toContain("Type this into the SMS Gateway app");
+    expect(existsSync(join(dir, "fake.pwsh"))).toBe(false);
     expect(run(["status"], w).out).not.toContain("owner_next=");
   });
 });
@@ -377,18 +401,22 @@ describe.skipIf(process.platform === "win32")("Windows parity", () => {
       expect(sh).toMatch(new RegExp(`\\b${step}\\b[^\\n]*\\)\\s*$`, "m"));
     }
   });
-  it("on win32: the dialog goes through powershell.exe stdin and the Worker push through npx.cmd", () => {
+  it("on win32: confirm uses the injected prompt, does not spawn powershell, and the Worker push goes through npx.cmd", () => {
     writeFileSync(join(dir, "fake.worker"), "GATEWAY_PASSPHRASE\n");
     const w = { FAKE_PLATFORM: "win32", ComSpec: "cmd.exe" };
     expect(run(["gateway-check"], { ...w, FAKE_DEVICES: dev(KEY_A, 4) }).out).toContain("reason=device_key");
     deployed();
-    const c = run(["confirm-fingerprint"], w);
+    const c = confirm(w);
     expect(c.out).toContain("step=worker-pin result=ok");
     expect(c.out).toContain("removed_passphrase=yes");
     const g = fingerprintOf(KEY_A).split(":");
-    const ps = readFileSync(join(dir, "fake.pwsh"), "utf8");
-    expect(ps).toContain(`${g[0]}  ${g[1]}   ...   ${g[14]}  ${g[15]}`);
-    expect(ps).toContain("'Yes, it matches'");
+    const shown = promptText();
+    expect(shown).toContain(`${g[0]}  ${g[1]}   ...   ${g[14]}  ${g[15]}`);
+    expect(shown).toContain("Reject unless you just set up this device.");
+    expect(existsSync(join(dir, "fake.pwsh"))).toBe(false);
+    const script = winDialogScript({ prompt: "Does this match the Key fingerprint in the SMS Gateway app?", hidden: false, show: shown, buttons: ["No, different", "Yes, it matches"] });
+    expect(script).toContain("'Yes, it matches'");
+    expect(script).toContain("$f.AcceptButton=$b0");
     expect(JSON.parse(readFileSync(join(dir, "fake.stdin"), "utf8")).GATEWAY_KEY_VERSION).toBe("4");
     expect(c.out).not.toContain(fingerprintOf(KEY_A));
   });
@@ -509,15 +537,18 @@ describe.skipIf(process.platform === "win32")("EL gateway-mode safety fixes", ()
 
   it("B3: the fingerprint confirm shows the device id and name", () => {
     run(["gateway-check"], { FAKE_DEVICES: JSON.stringify([{ id: "test-device-1", name: "Test Phone", publicKey: KEY_A, keyVersion: 1 }]) });
-    const c = run(["confirm-fingerprint"]); // zenity fake records its argv
+    const c = confirm(); // prompt text is written to the injected file, not a native dialog
     expect(c.out).toContain("step=confirm-fingerprint result=ok");
-    const shown = readFileSync(join(dir, "fake.zenity"), "utf8");
+    const shown = promptText();
     expect(shown).toContain("Device: Test Phone");
     expect(shown).toContain("Device id: test-device-1");
     expect(shown).toContain(fingerprintOf(KEY_A));
     expect(env()).not.toHaveProperty("PENDING_DEVICE_ID");
     expect(env()).not.toHaveProperty("PENDING_DEVICE_NAME");
     expect(confirmText("AAAA:BBBB:CCCC:DDDD", "id-1", undefined)).toContain("Device: (no name listed)");
+    expect(shown).toContain("Expected fingerprint from the gateway-check step, stored in .relay-local/secrets.env (PENDING_FINGERPRINT).");
+    expect(shown).toContain("Reject unless you just set up this device.");
+    expect(c.out).not.toContain("Reject unless you just set up this device.");
   });
 
   it("B5: status and secrets warn when the Worker holds both passphrase and pin secrets", () => {
@@ -526,7 +557,7 @@ describe.skipIf(process.platform === "win32")("EL gateway-mode safety fixes", ()
     expect(bothModesListed(["GATEWAY_PASSPHRASE"])).toBe(false);
     expect(bothModesListed(["GATEWAY_PINNED_FINGERPRINT", "GATEWAY_KEY_VERSION"])).toBe(false);
     run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 1) });
-    run(["confirm-fingerprint"]);
+    confirm();
     run(["keys"]);
     deployed(); claimedNow();
     writeFileSync(join(dir, "fake.worker"), ["GATEWAY_PASSPHRASE", "GATEWAY_PINNED_FINGERPRINT", "GATEWAY_KEY_VERSION", "GATEWAY_MODE"].join("\n") + "\n");
@@ -545,11 +576,54 @@ describe.skipIf(process.platform === "win32")("EL gateway-mode safety fixes", ()
 
   it("B5: one mode's secrets only: no warning", () => {
     run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 1) });
-    run(["confirm-fingerprint"]);
+    confirm();
     run(["keys"]);
     deployed(); claimedNow();
     writeFileSync(join(dir, "fake.worker"), ["GATEWAY_PINNED_FINGERPRINT", "GATEWAY_KEY_VERSION", "GATEWAY_MODE"].join("\n") + "\n");
     expect(run(["status"]).out).not.toContain("result=warn");
     expect(run(["secrets", "--dry-run"]).out).not.toContain("result=warn");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("native dialogs never spawn under test", () => {
+  function arm(name: string) {
+    writeFileSync(join(dir, "bin", name), `#!/bin/sh\ntouch "$FAKE_LOG.${name}"\nexit 0\n`);
+    chmodSync(join(dir, "bin", name), 0o755);
+  }
+  it.each([
+    ["darwin", "osascript"],
+    ["linux", "zenity"],
+    ["win32", "powershell.exe"],
+  ])("FAKE_PLATFORM=%s blocks %s before it can run", (platform, cmd) => {
+    arm(cmd);
+    run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 1) });
+    const c = run(["confirm-fingerprint"], { FAKE_PLATFORM: platform, SETUP_NONINTERACTIVE: "", ComSpec: "cmd.exe" });
+    expect(c.code).not.toBe(0);
+    expect(c.out).toContain(`reason=native_dialog_blocked:${cmd}`);
+    expect(existsSync(join(dir, `fake.${cmd}`))).toBe(false);
+    expect(env()).not.toHaveProperty("GATEWAY_PINNED_FINGERPRINT");
+  });
+
+  it("empty SETUP_ANSWER and an empty stdin both reject the fingerprint", () => {
+    run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 1) });
+    const empty = run(["confirm-fingerprint"], { SETUP_ANSWER: "" });
+    expect(empty.out).toContain("reason=fingerprint_mismatch");
+    expect(env()).not.toHaveProperty("GATEWAY_PINNED_FINGERPRINT");
+    const eof = run(["confirm-fingerprint"], {}, "");
+    expect(eof.out).toContain("reason=fingerprint_mismatch");
+    expect(env()).not.toHaveProperty("GATEWAY_PINNED_FINGERPRINT");
+  });
+
+  it("an injected stdin line can still confirm, and the prompt file holds the source line", () => {
+    run(["gateway-check"], { FAKE_DEVICES: dev(KEY_A, 1) });
+    const c = run(["confirm-fingerprint"], {}, "Yes, it matches\n");
+    expect(c.out).toContain("pinned=yes");
+    expect(c.out).not.toContain(fingerprintOf(KEY_A));
+    expect(c.out).not.toContain("Type this into the SMS Gateway app");
+    const shown = promptText();
+    expect(shown).toContain("Reject unless you just set up this device.");
+    expect(shown).toContain("PENDING_FINGERPRINT");
+    expect(existsSync(join(dir, "fake.zenity"))).toBe(false);
+    expect(existsSync(join(dir, "fake.osascript"))).toBe(false);
   });
 });

@@ -15,7 +15,7 @@ const run = (args: string[], env: Record<string, string> = {}) => {
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "relay-contacts-"));
   mkdirSync(join(dir, "scripts")); mkdirSync(join(dir, "bin"));
-  for (const f of ["setup-lib.mjs", "is-main.mjs"]) copyFileSync(join(ROOT, "scripts", f), join(dir, "scripts", f));
+  for (const f of ["setup-lib.mjs", "is-main.mjs", "no-tty-guard.mjs"]) copyFileSync(join(ROOT, "scripts", f), join(dir, "scripts", f));
   copyFileSync(join(ROOT, "wrangler.toml"), join(dir, "wrangler.toml"));
   for (const n of ["xdg-open", "open"]) { writeFileSync(join(dir, "bin", n), `#!/bin/sh\necho "$@" >> "$FAKE_LOG.opened"\n`); chmodSync(join(dir, "bin", n), 0o755); }
 });
