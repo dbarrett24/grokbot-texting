@@ -1508,6 +1508,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     const accts = this.googleLabels();
     const lastErr = this.sql.exec("SELECT ms, detail FROM log WHERE event IN ('contacts_sync','contacts_sync_failed','contacts_snapshot') ORDER BY seq DESC LIMIT 1").toArray()[0] as { ms: number; detail: string } | undefined;
     const errCodeOf = lastErr?.detail?.match(/reason=([a-zA-Z0-9_]+)/)?.[1];
+    const lastOkMs = this.sql.exec("SELECT ms FROM log WHERE event='contacts_sync' ORDER BY seq DESC LIMIT 1").toArray()[0]?.["ms"];
     const q = new URL(req.url).searchParams;
     const synced = q.get("synced");
     const gErr = q.get("google_error");
@@ -1525,6 +1526,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
       hashKeyMissing: !key,
       google: await this.googlePanel(),
       googleError: gErr && /^[a-z0-9_]{1,80}$/.test(gErr) ? gErr : null,
+      lastSync: typeof lastOkMs === "number" ? this.fmtTime(lastOkMs) : null,
     });
     return new Response(html, {
       headers: {

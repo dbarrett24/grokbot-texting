@@ -1,8 +1,9 @@
 // Contacts page (APPROVE_HOST /contacts*): pure helpers and the page itself. Owner-only by construction:
 // every write takes an `Owner`, and only Relay.requireOwner (Access JWT verified) can make one.
 import type { SignInMethod } from "./access";
-import { Refuse } from "./rules";
+import { contactsLiveScript } from "./contacts-live";
 import { HARBOR_CSS, pickerLiveScript } from "./harbor";
+import { Refuse } from "./rules";
 
 declare const OWNER_BRAND: unique symbol;
 /** Proof that Access verified the owner for this request. Not constructible outside requireOwner (type-level). */
@@ -151,21 +152,23 @@ export interface PageModel {
   google: GooglePanel;
   /** Error line from ?google_error= (already a code; the fix text is looked up here). */
   googleError: string | null;
+  /** When the last successful contacts_sync finished (fmtTime), or null if none has. */
+  lastSync: string | null;
 }
 
-/** "Google accounts" panel: accounts with Reconnect/Disconnect, and one Connect Google button. The client id and secret are not on this page. */
+/** "Google accounts" panel: lives in the sync disclosure. Quiet text actions, one bordered Connect button. The client id and secret are not on this page. */
 export function renderGooglePanel(g: GooglePanel, csrf: string, googleError: string | null): string {
   const canConnect = g.tokenKey === "ok" && g.client !== null;
-  const rows = g.accounts.map((x) => `<li><b>${esc(x.label)}</b>: ${x.stored ? `Connected${x.connected ? " " + esc(x.connected) : ""}` : x.fromSeed ? "from secret GOOGLE_RT_" + esc(x.label) + " (legacy)" : "not connected"}
-<form method=post action="/contacts/google/start" class=inl><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button${canConnect ? "" : " disabled"}>Reconnect</button></form>${x.stored ? `<form method=post action="/contacts/google/disconnect" class=inl data-confirm="Stop syncing ${esc(x.label)}? Its contacts are removed from the list, and Google access is revoked."><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button>Disconnect</button></form>` : ""}</li>`).join("");
+  const rows = g.accounts.map((x) => `<li><b>${esc(x.label)}</b><span class=when>${x.stored ? `Connected${x.connected ? " " + esc(x.connected) : ""}` : x.fromSeed ? "from secret GOOGLE_RT_" + esc(x.label) + " (legacy)" : "not connected"}</span>
+<form method=post action="/contacts/google/start" class=inl><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button class=link aria-label="Reconnect ${esc(x.label)}"${canConnect ? "" : " disabled"}>Reconnect</button></form>${x.stored ? `<form method=post action="/contacts/google/disconnect" class=inl data-confirm="Stop syncing ${esc(x.label)}? Its contacts are removed from the list, and Google access is revoked."><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button class="link danger" aria-label="Disconnect ${esc(x.label)}">Disconnect</button></form>` : ""}</li>`).join("");
   const keyWarn = g.tokenKey === "ok" ? "" : `<p class=warn>GOOGLE_TOKEN_KEY is ${g.tokenKey === "missing" ? "not set" : "not valid"}, so Google sign-in can't store anything. Run setup step <code>keys</code>, then <code>secrets</code>.</p>`;
   const clientLine = g.client === "secrets" ? "Google client: from the GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET secrets." : "Google client: not set up yet. Run <code>node scripts/google-client.mjs --file=client.json --config=.relay-local/wrangler.toml</code> (README).";
-  return `<section id=google aria-labelledby=gh><h2 id=gh>Google accounts</h2>
+  return `<section id=google aria-label="Google accounts">
 ${googleError ? `<p class=warn role=alert>Google: <code>${esc(googleError)}</code>. ${esc(googleErrorFix(googleError))}</p>` : ""}${keyWarn}
 ${g.leftovers.map((l) => `<p class=warn>${esc(l)} was disconnected here and no longer syncs, but it is still set up the old way. Remove it from <code>GOOGLE_ACCOUNTS</code> in wrangler.toml, deploy, and run <code>npx wrangler secret delete GOOGLE_RT_${esc(l)}</code>.</p>`).join("")}
 ${g.keyStatus.onOld > 0 ? `<p class=warn id=gkeys>${g.keyStatus.onOld} of ${g.keyStatus.total} stored Google sign-ins are still on the old GOOGLE_TOKEN_KEY. Press Sync now (and reload this page); keep GOOGLE_TOKEN_KEY_OLD until this reads 0.</p>` : g.keyStatus.total ? `<p class=ro id=gkeys>All ${g.keyStatus.total} stored Google sign-ins are on the current GOOGLE_TOKEN_KEY.</p>` : ""}
 <ul id=gaccts>${rows || "<li>No Google accounts yet.</li>"}</ul>
-<form method=post action="/contacts/google/start" class=bar id=gconnect><input type=hidden name=csrf value="${csrf}"><label for=glabel>Account name</label><input type=text id=glabel name=label required maxlength=32 pattern="[A-Za-z0-9_]+" placeholder="work" autocomplete=off><button${canConnect ? "" : " disabled"}>Connect Google</button></form>
+<form method=post action="/contacts/google/start" class=bar id=gconnect><input type=hidden name=csrf value="${csrf}"><label for=glabel>Add account</label><input type=text id=glabel name=label required maxlength=32 pattern="[A-Za-z0-9_]+" placeholder="work" autocomplete=off><button${canConnect ? "" : " disabled"}>Connect Google</button></form>
 <p class=ro>${clientLine}</p>
 </section>`;
 }
@@ -173,48 +176,44 @@ ${g.keyStatus.onOld > 0 ? `<p class=warn id=gkeys>${g.keyStatus.onOld} of ${g.ke
 /** Server-rendered shell + one inline module. No framework, no third-party origin, numbers never in HTML. */
 export function renderContactsPage(m: PageModel): string {
   const err = m.lastError ? `<p class=warn>Last sync error: <code>${esc(m.lastError.code)}</code> (${esc(m.lastError.when)}). ${esc(syncFix(m.lastError.code))}</p>` : "";
+  const stored = m.google.accounts.filter((a) => a.stored).length;
+  const needsAttention = m.googleError !== null || m.lastError !== null || m.google.tokenKey !== "ok" || m.google.leftovers.length > 0 || m.google.keyStatus.onOld > 0 || !m.canSync;
+  const syncText = !m.canSync
+    ? "No Google accounts yet. Add one below to load contacts."
+    : `${stored} Google account${stored === 1 ? "" : "s"}${m.lastSync ? ` · Last synced ${esc(m.lastSync)}` : " · Not synced yet"}`;
+  const seg = (["All", "On", "Off"] as const).map((f, i) => `<button type=button data-s="${f}" aria-pressed="${i === 0}">${f}<span class=n id="n-${f}"></span></button>`).join("");
+  const filters = ([["starred", "Starred"], ["migrated", "Migrated"], ["new", "New since last visit"]] as const).map(([k, t]) => `<label><input type=checkbox data-x="${k}">${t}<span class=n id="n-${k}"></span></label>`).join("");
   return `<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>GrokBot Texting</title>
 <style nonce="${m.nonce}">
 ${HARBOR_CSS}
 </style>
 ${m.leaves ?? ""}<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=96 height=96><h1 class=product>GrokBot Texting</h1></header>
 <p>Switch on the people this bot may text. New people start off.</p>
+<section class=syncbox aria-label="Sync">
+<div class=syncline>${m.canSync ? `<span class=dot aria-hidden=true></span>` : ""}<span class=t>${syncText}</span>${m.canSync ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${m.csrf}"><input type=hidden name=from value=contacts><button id=sync>Sync now</button></form>` : ""}</div>
+${err}
+<details${needsAttention ? " open" : ""}><summary>Google accounts <span class=ro>${stored} connected</span></summary>
+${renderGooglePanel(m.google, m.csrf, m.googleError)}
+</details>
+</section>
 ${m.hashKeyMissing ? `<p class=warn>LOG_HASH_KEY is missing or short, so the list can't be shown. Run setup step keys, then secrets.</p>` : ""}
-${m.migratedOn > 0 ? `<div class=banner id=banner role=status><b>${m.migratedOn}</b> people were reachable before this update and are still on. Review them. <button id=review>Review migrated</button> <button id=migoff>Turn all migrated off</button></div>` : ""}
+${m.migratedOn > 0 ? `<div class=banner id=banner role=status><p><b>${m.migratedOn}</b> people were reachable before this update and are still on.</p><div class=acts><button type=button id=review class=link>Review them</button><button type=button id=migoff>Turn all migrated off</button></div></div>` : ""}
 <h2>Contacts</h2>
 <label for=q class=ro>Search by name</label><input type=search id=q autocomplete=off>
-<div class=bar role=group aria-label="Filter">${["All", "On", "Off", "Starred", "Migrated", "New"].map((f, i) => `<button data-f="${f}" aria-pressed="${i === 0}">${f === "New" ? "New since last visit" : f}</button>`).join("")}</div>
-<div class=bar><button id=enall>Enable all shown</button><span id=count class=ro></span><span class=per><label class=ro for=per>Per page</label><select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select></span><button id=prev>Previous</button><button id=next>Next</button><span id=page class=ro></span></div>
+<div class=tools>
+<div class=seg role=group aria-label="Show">${seg}</div>
+<details class=more><summary>Filters <span class=badge id=fcount hidden></span></summary><div class=menu role=group aria-label="More filters">
+${filters}
+<button type=button class="link clear" id=fclear>Clear filters</button></div></details>
+</div>
+<div class=meta><span id=count aria-live=polite></span><button type=button id=enall class=link hidden>Turn all on</button></div>
 <ul id=list aria-label="People"></ul>
-<h2>Sync</h2>
-<form method=post action="/direct/sync" class=bar>${m.canSync ? `<input type=hidden name=csrf value="${m.csrf}"><input type=hidden name=from value=contacts><button id=sync>Sync now</button>` : "<span>No Google accounts yet: use Connect Google below.</span>"}</form>
-${err}
-${renderGooglePanel(m.google, m.csrf, m.googleError)}
+<nav class=pager aria-label="Pages"><button type=button id=prev aria-label="Previous page">&#8249;</button><span id=page></span><button type=button id=next aria-label="Next page">&#8250;</button><span class=per><label class=ro for=per>Per page</label><select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select></span></nav>
+<div id=live class=vh aria-live=polite></div>
+<dialog class=ask id=ask aria-modal=true aria-labelledby=ask-h><h2 id=ask-h>Turn all on</h2><p id=ask-p></p><div class=dlg-acts><button type=button id=ask-no>Cancel</button><button type=button id=ask-yes>Turn all on</button></div></dialog>
 <div id=toast role=status aria-live=polite></div>
 <script type=module nonce="${m.nonce}">
-const CSRF=${JSON.stringify(m.csrf)};let rows=[],filter="All",page=0;const $=(s)=>document.querySelector(s);
-const toast=(t)=>{const e=$("#toast");e.textContent=t;e.style.display="block";clearTimeout(toast.t);toast.t=setTimeout(()=>e.style.display="none",4000)};
-const post=async(p,b)=>{const r=await fetch(p,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({csrf:CSRF,...b})});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.message||j.error||("http_"+r.status));return j};
-const shown=()=>{const q=$("#q").value.trim().toLowerCase();return rows.filter(r=>(!q||r.name.toLowerCase().includes(q))&&(filter==="All"||(filter==="On"&&r.enabled)||(filter==="Off"&&!r.enabled)||(filter==="Starred"&&r.starred)||(filter==="Migrated"&&r.migrated)||(filter==="New"&&r.new)))};
-const per=()=>{const n=Number($("#per").value);return n===10||n===25||n===50||n===100?n:25};
-function render(){const L=$("#list");L.textContent="";const s=shown();const size=per();const pages=Math.max(1,Math.ceil(s.length/size));if(page>pages-1)page=pages-1;if(page<0)page=0;const view=s.slice(page*size,(page+1)*size);$("#count").textContent=s.length+" shown";$("#page").textContent=s.length?(page*size+1)+"-"+(page*size+view.length)+" of "+s.length:"";$("#prev").disabled=page<=0;$("#next").disabled=page+1>=pages;for(const r of view){const li=document.createElement("li");
-const w=document.createElement("div");w.className="who";w.textContent=r.name;const sm=document.createElement("small");sm.textContent=r.label+" \\u2022\\u2022\\u2022\\u2022 "+r.last4+(r.migrated?" \\u00b7 migrated":"");w.append(sm);
-if(r.readonly){const b=document.createElement("span");b.className="ro";b.textContent="always on (ALLOWLIST)";li.append(w,b);L.append(li);continue}
-const st=document.createElement("button");st.className="star";st.textContent=r.starred?"\\u2605":"\\u2606";st.setAttribute("aria-pressed",String(r.starred));st.setAttribute("aria-label",(r.starred?"Unstar ":"Star ")+r.name);
-st.onclick=async()=>{try{await post("/contacts/prefs",{changes:[{key:r.key,starred:!r.starred}]});r.starred=!r.starred;toast(r.starred?"Starred "+r.name:"Unstarred "+r.name);sort();render()}catch(e){toast("Error: "+e.message)}};
-const sw=document.createElement("button");sw.className="sw";sw.setAttribute("role","switch");sw.setAttribute("aria-checked",String(r.enabled));sw.textContent=r.enabled?"On":"Off";sw.setAttribute("aria-label","Bot may text "+r.name);
-sw.onclick=async()=>{const on=!r.enabled;if(on&&!confirm("Text "+r.name+" at \\u2022\\u2022\\u2022\\u2022 "+r.last4+"?"))return;try{await post("/contacts/prefs",{changes:[{key:r.key,enabled:on}]});r.enabled=on;r.migrated=false;toast((on?"On: ":"Off: ")+r.name);render()}catch(e){toast("Error: "+e.message)}};
-li.append(st,w,sw);L.append(li)}}
-const sort=()=>rows.sort((a,b)=>(b["starred"]-a.starred)||a.name.localeCompare(b.name));
-async function load(){const r=await fetch("/contacts/list");if(!r.ok){toast("Could not load the list");return}rows=(await r.json()).people;sort();render()}
-$("#q").oninput=()=>{page=0;render()};document.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{filter=b.dataset.f;page=0;document.querySelectorAll("[data-f]").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));render()});
-$("#per").onchange=()=>{page=0;render()};$("#prev").onclick=()=>{page=Math.max(0,page-1);render()};$("#next").onclick=()=>{page++;render()};
-$("#enall").onclick=async()=>{const s=shown().filter(r=>!r.readonly&&!r.enabled);if(!s.length){toast("Everyone shown is already on");return}if(!confirm("Turn on "+s.length+" people? The bot can then text them."))return;
-try{const j=await post("/contacts/enable-all",{keys:s.map(r=>r.key),confirm_count:s.length});toast("Turned on "+j.updated+(j.skipped_example?" ("+j.skipped_example+" example numbers skipped)":""));await load()}catch(e){toast("Error: "+e.message)}};
-const rv=$("#review");if(rv)rv.onclick=()=>document.querySelector('[data-f="Migrated"]').click();
-const mo=$("#migoff");if(mo)mo.onclick=async()=>{const n=rows.filter(r=>r.migrated&&r.enabled).length;if(!confirm("Turn off all "+n+" migrated people?"))return;try{const j=await post("/contacts/migrated-off",{confirm_count:n});toast("Turned off "+j.updated);$("#banner").remove();await load()}catch(e){toast("Error: "+e.message)}};
-document.querySelectorAll("form[data-confirm]").forEach(f=>f.addEventListener("submit",(ev)=>{if(!confirm(f.dataset.confirm))ev.preventDefault()}));
+${contactsLiveScript(m.csrf, m.toast)}
 ${pickerLiveScript()}
-${m.toast ? `toast(${JSON.stringify(m.toast)});` : ""}load();
 </script></html>`;
 }

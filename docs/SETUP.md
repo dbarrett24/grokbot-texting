@@ -557,7 +557,7 @@ The standard web client this Worker needs (`….apps.googleusercontent.com`) is 
 6. From this repo: `node scripts/google-client.mjs --file=<that-file.json> --config=.relay-local/wrangler.toml`. `--config=<path>` is one argument and is required: there is no default path, so both puts go to the Worker in that file and cannot land on a different one. It runs `npx wrangler secret put` for `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`, passing that same `--config=<path>` to both and each value on stdin. A missing or unreadable config fails before any put and the JSON stays. It deletes the JSON only after both puts succeed. If a put fails, the JSON stays, the script names that secret and the retry (`node scripts/google-client.mjs --file=<path> --config=<path>`), does not print the secret, and exits non-zero. `GOOGLE_TOKEN_KEY` from Step 3 must already be set.
 7. Open the Contacts page and press **Connect Google**. Allow read-only contacts only. Anything else is revoked.
 8. Press Sync now. A daily sync runs after that. A failed sync keeps the last good list.
-9. Turn on the people the bot may text. Turning someone on asks you to confirm the last 4 digits.
+9. Turn on the people the bot may text. A switch applies immediately and shows Undo for 5 seconds. Turn all on asks you to confirm the count first.
 
 Error codes and the fix text on the page are DEPLOY.md section 9. `default_country_code_invalid` is Step 2's `DEFAULT_COUNTRY_CODE`.
 

@@ -70,5 +70,6 @@ export function installPicker(doc: PickerDoc, form: PickerForm | null, fields: n
 }
 
 export function pickerLiveScript(): string {
-  return `${applyPickerChoice.toString()}\n${installPicker.toString()}\ninstallPicker(document,document.querySelector("#hb-bg"),FormData,fetch);`;
+  // fetch throws Illegal invocation unless its receiver is the window.
+  return `${applyPickerChoice.toString()}\n${installPicker.toString()}\ninstallPicker(document,document.querySelector("#hb-bg"),FormData,fetch.bind(globalThis));`;
 }
