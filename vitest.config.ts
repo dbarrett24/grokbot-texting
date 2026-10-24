@@ -54,7 +54,7 @@ export default defineConfig({
       },
       {
         // Independent checks with Node's own crypto (not the Worker runtime).
-        test: { name: "node", include: ["test-node/**/*.test.ts"], environment: "node" },
+        test: { name: "node", include: ["test-node/**/*.test.ts"], environment: "node", setupFiles: ["test-node/no-tty.setup.ts"] },
       },
     ],
   },
