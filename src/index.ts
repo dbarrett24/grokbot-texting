@@ -7,4 +7,8 @@ export default {
     const stub = env.RELAY.get(env.RELAY.idFromName("relay"));
     return stub.fetch(req);
   },
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    const stub = env.RELAY.get(env.RELAY.idFromName("relay"));
+    ctx.waitUntil(stub.fetch(new Request("https://internal/cron", { method: "POST" })));
+  },
 } satisfies ExportedHandler<Env>;

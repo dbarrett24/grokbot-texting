@@ -40,6 +40,9 @@ export interface Env {
   GOOGLE_TOKEN_KEY?: string; // secret: 32 random bytes (base64 or 64 hex; setup step keys makes it). Seals in-app Google sign-ins (AES-GCM) in the DO. Unset = in-app connect off; GOOGLE_* secrets still work
   GOOGLE_TOKEN_KEY_OLD?: string; // secret, rotation only: the previous GOOGLE_TOKEN_KEY, accepted for decrypt; rows are re-sealed under the new key on next use
   LOG_HASH_KEY?: string; // secret, 32+ chars: HMAC key for number and body hashes. Missing = direct send refused (direct_config_invalid); tap log rows fall back to plain SHA-256
+  LOG_ENC_KEY?: string; // secret, 32 bytes (64 hex or base64): AES-GCM key for the messages table (number and body). Never the same value as LOG_HASH_KEY. Missing = bodies are not stored and inbound capture refuses; outbound still sends and may keep last-4 only
+  STORE_MESSAGE_BODIES?: string; // "1" = encrypt and store message bodies. Unset/""/"0" = off. Anything else = every route refuses (store_message_bodies_invalid)
+  CAPTURE_INBOUND?: string; // "1" = POST /messages may record an inbound text. Unset/""/"0" = off (capture_inbound_off). Anything else = every route refuses (capture_inbound_invalid)
   DIRECT_ALLOWLIST?: string; // DEPRECATED secret, JSON {"+<E.164>":"name"}: imported ONCE as the ALLOWLIST_LEGACY source (flagged), then ignored. Delete it after review
   // ---- secrets (wrangler secret put) ----
   REQUEST_TOKEN: string; // request-only bearer token used by the bot

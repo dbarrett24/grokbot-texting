@@ -1,7 +1,7 @@
 // The Everyday Harbor look: one plain CSS file (src/harbor.css) inlined into each page's existing <style>, plus the
 // Source Serif 4 heading font (OFL 1.1, Latin subset, src/assets/) served by the Worker itself. No CDN, no CSP change:
-// /contacts already allows same-origin fonts (default-src 'self'); /direct and /approve/* (default-src 'none') get the
-// CSS without the @font-face, so their headings use the Georgia fallback.
+// /contacts allows same-origin fonts (default-src 'self'). Approve, Direct and Log use a nonce CSP with
+// font-src 'self' and img-src 'self', so they get the font and the photo backdrops too.
 import css from "./harbor.css";
 import font from "./assets/source-serif-4-latin-600.woff2";
 import logo from "./assets/grokbot-logo.svg";
@@ -47,10 +47,10 @@ export function harborLogo(): Response {
 
 // Leaf backdrop mockups (draft): original inline SVG (src/harbor-leaves.ts), so no fetch and no CSP change on any page.
 // Photo variants (?leaves=photo-corners|photo-vines|photo-scatter): self-served WebP behind a token-coloured scrim.
-// Images need an img source in the CSP. /contacts has one (default-src 'self'); /direct and /approve/* have
-// default-src 'none', which blocks every image (data: URIs too), so there the photo option falls back to the
-// matching SVG option. The picker offers the photos only (the SVG layouts are not choices). The default is the
-// vines photo; pages that cannot load images fall back to the vines SVG. Preview any layout with ?leaves=.
+// Images need an img source in the CSP. /contacts has one (default-src 'self'). Approve, Direct and Log allow
+// img-src 'self'. Pass images=true on those pages so the photo option renders; images=false falls back to the
+// matching SVG. The picker offers the photos only (the SVG layouts are not choices). The default is the vines
+// photo. Preview any layout with ?leaves=.
 type PhotoOption = `photo-${LeavesOption}`;
 export const HARBOR_LEAVES_DEFAULT: LeavesOption | PhotoOption | "none" = "photo-vines";
 const isLeaves = (v: string | null): v is LeavesOption => v !== null && Object.hasOwn(HARBOR_LEAVES, v);
@@ -79,7 +79,7 @@ export function leavesFor(req: Request, images = false): string {
 // ---------- Background picker ----------
 // POST /harbor/background stores the pick in a cookie and 303s back. The page reads the cookie server-side, so the
 // right background is in the first paint. /contacts also paints the new choice in place on change (src/harbor-picker.ts)
-// and posts the same form with fetch. /direct and /approve/* allow no scripts, so the tile itself submits the form.
+// and posts the same form with fetch. Approve, Direct and Log do the same (nonce'd script, radios).
 // form-action 'self' is already in every CSP.
 export const BG_COOKIE = "hb_bg";
 // SVG layouts (corners, vines, scatter) stay in HARBOR_LEAVES for the no-image fallback and ?leaves= preview.
@@ -91,7 +91,7 @@ function bgCookie(req: Request): string | null {
   const m = /(?:^|;\s*)hb_bg=([a-z-]{1,20})(?:;|$)/.exec(req.headers.get("cookie") ?? "");
   return m && isBg(m[1]) ? (m[1] ?? null) : null;
 }
-const BACK = /^\/(?:contacts|direct|approve\/[a-f0-9]{32})$/;
+const BACK = /^\/(?:contacts|direct|log|approve|approve\/[a-f0-9]{32})$/;
 const LABELS: Record<BgOption, string> = {
   none: "None", "photo-corners": "Corners", "photo-vines": "Vines", "photo-scatter": "Scatter",
 };
@@ -109,10 +109,9 @@ function thumb(o: BgOption, images: boolean): string {
   return `<span class=hb-th><svg viewBox="0 0 64 36" fill="#a3b04e" fill-opacity=".6">${MINI[base]}</svg></span>`;
 }
 /**
- * The picker. `images` is true only on /contacts, which can run a nonce'd script and load images:
- * radios (visually hidden, still in the tab and accessibility order) post on change. Other pages
- * have default-src 'none', so each tile is a submit button: one click posts, with no separate Apply.
- * A noscript Apply remains on /contacts for a browser that has scripts turned off.
+ * The picker. `images` is true on pages whose CSP can load images and run a nonce'd script
+ * (Contacts, Approve, Direct, Log): radios post on change. Otherwise each tile is a submit button.
+ * A noscript Apply remains when images is true, for a browser that has scripts turned off.
  */
 export function pickerFor(req: Request, back: string, images = false): string {
   const q = new URL(req.url).searchParams.get("leaves");

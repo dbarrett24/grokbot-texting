@@ -6,6 +6,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { harness, API, BASE, OWNER, FRIEND, type Harness } from "./helpers";
 import type { Relay } from "../src/relay";
 import { isContactsPath, isExampleNumber, ownerFromAccess, type Owner } from "../src/contacts";
+import { SUPPORT_LABEL, SUPPORT_URL } from "../src/pages";
 
 const RILEY = "+447700900142", RILEY_NEW = "+447700900143", SAM = "+447700900151", ALEX = "+447700900161", EXAMPLE = "+15555550123";
 const snap = (contacts: unknown[]) => ({ generated_at: "2026-10-19T19:00:00Z", contacts });
@@ -167,7 +168,7 @@ describe("owner-only: guards", () => {
   });
 
   it.each([
-    ["missing Access", { jwt: null }, 403, "forbidden"],
+    ["missing Access", { jwt: null }, 401, "forbidden"],
     ["wrong Origin", { origin: "https://evil.example.test" }, 403, "bad_origin"],
     ["missing Origin", { origin: null }, 403, "bad_origin"],
     ["non-JSON", { ct: "text/plain" }, 415, "contacts_must_be_json"],
@@ -216,8 +217,10 @@ describe("owner-only: guards", () => {
     expect(csp).toMatch(/default-src 'self'; script-src 'self' 'nonce-[a-f0-9]{32}'/);
     expect(csp).toContain("frame-ancestors 'none'");
     expect(html).not.toMatch(/src="https?:/); // nothing loads from another origin
-    // The console checklist left this page, so no off-site link remains.
-    expect([...html.matchAll(/href="(https?:[^"]*)"/g)]).toEqual([]);
+    expect([...html.matchAll(/href="(https?:[^"]*)"/g)].map((m) => m[1])).toEqual([SUPPORT_URL]);
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain(`<footer><a class=support href="${SUPPORT_URL}" rel="noopener noreferrer"><span aria-hidden=true>☕</span> ${SUPPORT_LABEL.slice(SUPPORT_LABEL.indexOf(" ") + 1)}</a></footer>`);
+    expect(html).not.toMatch(/cocoa|coffee|hot chocolate|hot-chocolate/i);
     for (const n of [RILEY, SAM, ALEX, EXAMPLE]) expect(html).not.toContain(n.slice(-4));
     expect(html).toContain('<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=96 height=96><h1 class=product>GrokBot Texting</h1></header>');
     expect(html).not.toMatch(/<a[^>]*>[\s\S]*?<img class=brand-logo/);
@@ -394,7 +397,7 @@ describe("Sync now from the page", () => {
     const { csrf } = await page();
     const form = (c: string) => h.relay.fetch(`${BASE}/direct/sync`, { method: "POST", redirect: "manual", headers: { "Cf-Access-Jwt-Assertion": "", "content-type": "application/x-www-form-urlencoded", Origin: BASE }, body: new URLSearchParams({ csrf: c, from: "contacts" }).toString() });
     const withJwt = async (c: string) => h.relay.fetch(`${BASE}/direct/sync`, { method: "POST", redirect: "manual", headers: { "Cf-Access-Jwt-Assertion": await h.jwt(), "content-type": "application/x-www-form-urlencoded", Origin: BASE }, body: new URLSearchParams({ csrf: c, from: "contacts" }).toString() });
-    expect((await form(csrf)).status).toBe(403);
+    expect((await form(csrf)).status).toBe(401);
     expect((await withJwt("0".repeat(32))).status).toBe(403);
     const r = await withJwt(csrf);
     expect(r.status).toBe(303);

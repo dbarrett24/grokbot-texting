@@ -3,6 +3,7 @@
 import type { SignInMethod } from "./access";
 import { contactsLiveScript } from "./contacts-live";
 import { HARBOR_CSS, pickerLiveScript } from "./harbor";
+import { renderNav, renderSupport } from "./pages";
 import { Refuse } from "./rules";
 
 declare const OWNER_BRAND: unique symbol;
@@ -188,6 +189,7 @@ export function renderContactsPage(m: PageModel): string {
 ${HARBOR_CSS}
 </style>
 ${m.leaves ?? ""}<header class=brand><img class=brand-logo src="/harbor/grokbot-logo.svg" alt="" width=96 height=96><h1 class=product>GrokBot Texting</h1></header>
+${renderNav("contacts")}
 <p>Switch on the people this bot may text. New people start off.</p>
 <section class=syncbox aria-label="Sync">
 <div class=syncline>${m.canSync ? `<span class=dot aria-hidden=true></span>` : ""}<span class=t>${syncText}</span>${m.canSync ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${m.csrf}"><input type=hidden name=from value=contacts><button id=sync>Sync now</button></form>` : ""}</div>
@@ -209,6 +211,7 @@ ${filters}
 <div class=meta><span id=count aria-live=polite></span><button type=button id=enall class=link hidden>Turn all on</button></div>
 <ul id=list aria-label="People"></ul>
 <nav class=pager aria-label="Pages"><button type=button id=prev aria-label="Previous page">&#8249;</button><span id=page></span><button type=button id=next aria-label="Next page">&#8250;</button><span class=per><label class=ro for=per>Per page</label><select id=per><option value=10>10</option><option value=25 selected>25</option><option value=50>50</option><option value=100>100</option></select></span></nav>
+${renderSupport()}
 <div id=live class=vh aria-live=polite></div>
 <dialog class=ask id=ask aria-modal=true aria-labelledby=ask-h><h2 id=ask-h>Turn all on</h2><p id=ask-p></p><div class=dlg-acts><button type=button id=ask-no>Cancel</button><button type=button id=ask-yes>Turn all on</button></div></dialog>
 <div id=toast role=status aria-live=polite></div>
