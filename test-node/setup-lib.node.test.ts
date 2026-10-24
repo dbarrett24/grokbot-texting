@@ -3,7 +3,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 // @ts-expect-error plain .mjs script, no types
-import { accountFrom, statusLine, parseEnv, formatEnv, typeablePassphrase, renderConfig, leftoverPlaceholders, buildPayload, requiredSecrets, fingerprintOf, ASKABLE, TEST_BODY } from "../scripts/setup-lib.mjs";
+import { accountFrom, statusLine, parseEnv, formatEnv, typeablePassphrase, renderConfig, leftoverPlaceholders, buildPayload, requiredSecrets, fingerprintOf, ASKABLE, TEST_BODY, buttonAnswer, defaultButton, linuxDialogArgs, readPromptRaw, confirmText, winDialogScript } from "../scripts/setup-lib.mjs";
 
 const TEMPLATE = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
 const BASE = { worker: "sms-relay-test", apiHost: "t-api.example.test", appHost: "t-app.example.test", team: "test-team", country: "+1", timezone: "America/Edmonton", startDate: "2026-10-01", google: "primary", delivery: "android", groupMms: "0" };
@@ -123,5 +123,31 @@ describe("signed-in Cloudflare account (wrangler whoami --json)", () => {
   it("refuses to pick when there are several accounts or none", () => {
     expect(accountFrom({ status: 0, stdout: JSON.stringify({ loggedIn: true, accounts: [{ id: "a" }, { id: "b" }] }) })).toEqual({ reason: "several_accounts" });
     expect(accountFrom({ status: 0, stdout: JSON.stringify({ loggedIn: true, accounts: [] }) })).toEqual({ reason: "no_account" });
+  });
+});
+
+describe("fingerprint confirm defaults to reject", () => {
+  const buttons = ["No, different", "Yes, it matches"];
+  it("names the gateway-check file and tells the owner to reject unless they just set the device up", () => {
+    const text = confirmText("aa:bb:cc:dd", "id-1", "Test Phone");
+    expect(text).toContain("Expected fingerprint from the gateway-check step, stored in .relay-local/secrets.env (PENDING_FINGERPRINT).");
+    expect(text).toContain("Reject unless you just set up this device.");
+  });
+  it("empty input and EOF select No, different", () => {
+    expect(defaultButton(buttons)).toBe("No, different");
+    expect(buttonAnswer(buttons, null)).toEqual({ value: "No, different" });
+    expect(buttonAnswer(buttons, "")).toEqual({ value: "No, different" });
+    expect(buttonAnswer(buttons, "   \n")).toEqual({ value: "No, different" });
+    expect(buttonAnswer(buttons, "Yes, it matches\n")).toEqual({ value: "Yes, it matches" });
+  });
+  it("refuses to read a TTY stdin", () => {
+    expect(() => readPromptRaw({ stdin: { isTTY: true } })).toThrow(/refusing_tty_stdin/);
+  });
+  it("native dialogs default to the reject button", () => {
+    const text = confirmText("aa:bb", "id-1", "Test Phone");
+    expect(linuxDialogArgs({ prompt: "p", show: text, buttons, hidden: false })).toContain("--default-cancel");
+    const ps = winDialogScript({ prompt: "p", hidden: false, show: text, buttons });
+    expect(ps).toContain("$f.AcceptButton=$b0");
+    expect(ps).toContain("Reject unless you just set up this device.");
   });
 });
