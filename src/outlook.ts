@@ -1,5 +1,5 @@
 // Outlook / Microsoft 365 contacts over Microsoft Graph, read-only. Mirrors src/google.ts: per-label refresh
-// tokens sealed with AES-GCM under GOOGLE_TOKEN_KEY (one token key for every provider; distinct associated data),
+// tokens sealed with AES-GCM under their own MS_TOKEN_KEY (MS_TOKEN_KEY_OLD decrypts only, while rotating; never GOOGLE_TOKEN_KEY),
 // a web sign-in with state + PKCE, and an exact scope check. The OAuth client is the MS_CLIENT_ID and
 // MS_CLIENT_SECRET Worker secrets. Pure helpers only; the Relay owns the tables. Errors are codes, never values.
 import { phoneLabel, toE164, type PhoneLabel, type SnapshotContact } from "./direct";
@@ -116,10 +116,10 @@ export function graphToContacts(value: unknown, cc: string | null): SnapshotCont
   return out;
 }
 
-/** Only Graph's own https host may be followed for @odata.nextLink. */
+/** Only Graph's own v1.0 API may be followed for @odata.nextLink: https, graph.microsoft.com, default port, /v1.0/ path, no userinfo. */
 export function safeNextLink(v: unknown): string | null {
   if (typeof v !== "string" || !v) return null;
   const u = new URL(v);
-  if (u.protocol !== "https:" || u.hostname !== "graph.microsoft.com" || u.username || u.password) throw new Error("outlook_foreign_next_link");
+  if (u.protocol !== "https:" || u.hostname !== "graph.microsoft.com" || u.port !== "" || !u.pathname.startsWith("/v1.0/") || u.username || u.password) throw new Error("outlook_foreign_next_link");
   return u.toString();
 }

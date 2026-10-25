@@ -1835,7 +1835,7 @@ export class Relay extends DurableObject<Env> {
     if (!tr.ok) throw new Error(`outlook_token_status_${tr.status}`);
     const tok = decodeMsTokenReply(await jsonOr(tr, "outlook_token_bad_json"));
     if (!tok.accessToken) throw new Error("outlook_token_missing");
-    if (tok.scope !== undefined && !msScopeIsExact(tok.scope)) throw new Error("outlook_scope_not_exact");
+    if (!msScopeIsExact(tok.scope)) throw new Error("outlook_scope_not_exact"); // a reply without scope is refused too
     if (tok.refreshToken && tok.refreshToken !== refreshToken && this.sql.exec("SELECT 1 FROM ms_accounts WHERE label=?", label).toArray().length) {
       const row = decodeMsAccountRow(this.sql.exec("SELECT * FROM ms_accounts WHERE label=?", label).toArray()[0]);
       await this.saveMsAccount(label, tok.refreshToken, row.scope, row.connected_ms); // Microsoft rotates refresh tokens

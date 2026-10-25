@@ -125,6 +125,16 @@ describe("Outlook sync", () => {
     expect(await inRelay(h, (relay) => relay.msRefreshToken("WORK"))).toBe(RT2);
   });
 
+  it.each([["omits scope", undefined], ["widens scope", `${GRAPH_SCOPE} User.Read`]])("refuses a refresh reply that %s", async (_why, scope) => {
+    await connect();
+    ms.tokenReply.body = { token_type: "Bearer", access_token: AT, refresh_token: RT1, ...(scope === undefined ? {} : { scope }) };
+    const r = await sync();
+    expect(r.updated).toEqual([]);
+    expect(JSON.stringify(r.failed)).toContain("OUTLOOK_WORK");
+    expect(ms.graphAuth).toEqual([]);
+    expect(await sql("SELECT account FROM contact_sources")).toEqual([]);
+  });
+
   it("does not widen who can be texted: synced numbers stay OFF", async () => {
     await connect();
     await sync();
@@ -190,6 +200,9 @@ describe("Outlook helpers", () => {
   it("nextLink must stay on graph.microsoft.com over https", () => {
     expect(() => safeNextLink("https://evil.example.test/v1.0/me/contacts")).toThrow("outlook_foreign_next_link");
     expect(() => safeNextLink("http://graph.microsoft.com/x")).toThrow("outlook_foreign_next_link");
+    for (const bad of ["https://graph.microsoft.com:8443/v1.0/me/contacts", "https://graph.microsoft.com/beta/me/contacts", "https://graph.microsoft.com/v1.0", "https://graph.microsoft.com/v1.0x/me", "https://u:p@graph.microsoft.com/v1.0/me/contacts", "https://graph.microsoft.com.evil.example.test/v1.0/me"])
+      expect(() => safeNextLink(bad), bad).toThrow("outlook_foreign_next_link");
+    expect(safeNextLink("https://graph.microsoft.com:443/v1.0/me/contacts?$skip=10")).toBe("https://graph.microsoft.com/v1.0/me/contacts?$skip=10");
     expect(safeNextLink(undefined)).toBeNull();
   });
   it("graph contacts: dedupes numbers, skips nameless and numberless", () => {
