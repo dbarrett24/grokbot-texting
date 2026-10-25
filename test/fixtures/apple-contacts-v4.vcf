@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:4.0
+FN:Casey Placeholder
+N:Placeholder;Casey;;;
+TEL;VALUE=uri;TYPE="cell,voice";PREF=1:tel:+1-202-555-0106
+TEL;VALUE=uri;TYPE=home:tel:+1-202-555-0107;ext=12
+item1.TEL;VALUE=uri:tel:+1-202-555-0108
+item1.X-ABLabel:_$!<Work>!$_
+PHOTO:data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8U
+ QUFBQUFBQUFBQUFBQUFB:QUFBQUFB
+END:VCARD

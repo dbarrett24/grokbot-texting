@@ -14,10 +14,11 @@ import { E164, Refuse, hasLink, localDate, maskNumber, parseAllowlist, parseCoun
 import {
   aadBody, aadNumber, captureInboundOn, importMessageKey, INBOUND_KEEP_MS, migrateMessages, openField, OUTBOUND_KEEP_MS, parseInbound, parseMessageKeyBytes, parsePurge, readMessageRow, sealField, storeBodiesOn, type MessageRow,
 } from "./messages";
+import { IMPORT_SOURCE, PROPOSAL_TTL_MS, parseImport, parseImportBody, proposeDiff } from "./import";
 import { approveScript, countsLine, logScript, pageHeaders, renderApproveList, renderApproveOne, renderLog, renderShell, type ApproveItem, type LogItem } from "./pages";
 import {
   insideHours, matchName, parseRequiredLimit, minuteOfDay, normalizeName, parseHours, parseNotifyEach, parseOptionalLimit, parseSnapshot,
-  safeName, switchOnUnlessZero, switchOnlyIfOne, validateBody, parseAccounts, parseCountryCode, peopleToContacts, UPLOAD_SOURCE, type ContactRow, type SnapshotContact,
+  safeName, looksLikePhone, MAX_SNAPSHOT_NUMBERS, switchOnUnlessZero, switchOnlyIfOne, validateBody, parseAccounts, parseCountryCode, peopleToContacts, UPLOAD_SOURCE, type ContactRow, type SnapshotContact,
   echoName, entryRefuse, parseGroupMms, parseMultiList, type MultiField,
 } from "./direct";
 import {
@@ -101,6 +102,12 @@ async function tokenEquals(a: string, b: string): Promise<boolean> {
  * Log-safe error code: our own errors are snake_case codes; anything else (a runtime or network message,
  * which could quote a response body) becomes "unexpected_error". Never a snippet of a gateway reply.
  */
+/** One SQL row of the contacts / contact_sources shape, read column by column (no cast). */
+function contactRowOf(r: Record<string, SqlStorageValue>): ContactRow {
+  const t = (k: string) => { const v = r[k]; return typeof v === "string" ? v : ""; };
+  return { name: t("name"), name_norm: t("name_norm"), given_norm: t("given_norm"), first_norm: t("first_norm"), e164: t("e164"), label: t("label") };
+}
+
 export function errCode(e: unknown): string {
   const m = e instanceof Error ? e.message : "";
   return /^[a-z][a-z0-9_]{0,79}$/.test(m) ? m : "unexpected_error";
@@ -180,6 +187,11 @@ export class Relay extends DurableObject<Env> {
     // Retired paste-form client. The table stays so an old row can be deleted; nothing writes it.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_client(id INTEGER PRIMARY KEY CHECK (id = 1), blob_ct TEXT NOT NULL, blob_iv TEXT NOT NULL, key_ver TEXT NOT NULL, saved_ms INTEGER NOT NULL)`);
     this.clearStoredGoogleClient();
+    // Allowlist proposals from a drag-in import or a one-person add request (bot side). adds/removes are JSON
+    // arrays of person_keys (number HMACs, never numbers). Nothing in contact_prefs changes until the owner
+    // confirms on /approve/import/<id>; deny or expiry changes nothing. key_fp pins the hash key it was made under.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS allowlist_proposals(id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL,
+      csrf TEXT NOT NULL, adds TEXT NOT NULL, removes TEXT NOT NULL, state TEXT NOT NULL, key_fp TEXT NOT NULL, decided_ms INTEGER, by TEXT)`);
     try {
       this.sql.exec("ALTER TABLE contacts ADD COLUMN account TEXT");
     } catch {
@@ -333,6 +345,10 @@ export class Relay extends DurableObject<Env> {
         // Request API host: never serves approve or log routes.
         if (req.method === "POST" && path === "/request") return await this.createRequest(req);
         if (req.method === "POST" && path === "/send") return await this.direct(req);
+        if (req.method === "POST" && path === "/import-contacts") return await this.importContacts(req);
+        if (req.method === "POST" && path === "/allowlist-request") return await this.allowlistRequest(req);
+        const pm = path.match(/^\/allowlist-request\/([a-f0-9]{32})$/);
+        if (req.method === "GET" && pm) return await this.proposalStatus(req, pm[1]);
         if (isDevice(delivery) && req.method === "POST" && path === "/device/next") return await this.deviceNext(req);
         if (isDevice(delivery) && req.method === "POST" && path === "/device/result") return await this.deviceResult(req);
         const m = path.match(/^\/request\/([a-f0-9]{32})$/);
@@ -346,6 +362,9 @@ export class Relay extends DurableObject<Env> {
           return new Response(null, { status: 302, headers: { location: "/contacts", "cache-control": "no-store" } });
         }
         if (req.method === "GET" && path === "/approve") return await this.approveList(req);
+        const proposalId = path.match(/^\/approve\/import\/([a-f0-9]{32})$/)?.[1];
+        if (proposalId && req.method === "GET") return await this.proposalPage(req, proposalId);
+        if (proposalId && req.method === "POST") return await this.decideProposal(req, proposalId);
         const approveId = path.match(/^\/approve\/([a-f0-9]{32})$/)?.[1];
         if (approveId && req.method === "GET") return await this.approvePage(req, approveId);
         if (approveId && req.method === "POST") return await this.decide(req, approveId);
@@ -1011,6 +1030,185 @@ export class Relay extends DurableObject<Env> {
     if (origin !== new URL(req.url).origin) throw new Refuse("bad_origin", 403);
   }
 
+  // ---------- drag-in import + allowlist proposals (bot files, owner confirms) ----------
+
+  /**
+   * POST /import-contacts (REQUEST_HOST, bot token) {filename, content, allowlist?: "add"|"replace"|"none"}.
+   * Adds the file's people to the address book (source IMPORT, additive, deduped by E.164 against every source;
+   * new numbers start OFF). If anyone's switch would change, files ONE proposal for the owner to confirm.
+   * The answer has counts and a link only, never a number.
+   */
+  private async importContacts(req: Request): Promise<Response> {
+    await this.requireRequestToken(req);
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      throw new Refuse("body_not_json");
+    }
+    const imp = parseImportBody(body);
+    const cc = parseCountryCode(this.env.DEFAULT_COUNTRY_CODE);
+    const { contacts, stats, numbers } = parseImport(imp, cc);
+    if (!numbers) throw new Refuse("import_no_numbers", 422);
+    const key = await this.contactsKey();
+    const snap = parseSnapshot({ generated_at: new Date(this.clock()).toISOString().replace(/\.\d+Z$/, "Z"), contacts });
+    const known = new Set((this.sql.exec("SELECT DISTINCT e164 FROM contact_sources").toArray() as { e164: string }[]).map((r) => r.e164));
+    const prior = this.sql.exec("SELECT name,name_norm,given_norm,first_norm,e164,label FROM contact_sources WHERE account=? ORDER BY rowid", IMPORT_SOURCE).toArray().map(contactRowOf);
+    const fresh = snap.rows.filter((r) => !known.has(r.e164));
+    if (prior.length + fresh.length > MAX_SNAPSHOT_NUMBERS) throw new Refuse("import_too_many_numbers", 413);
+    const now = this.clock();
+    if (fresh.length) {
+      this.ctx.storage.transactionSync(() => {
+        this.replaceSource(IMPORT_SOURCE, [...prior, ...fresh], now);
+        this.rebuildContacts();
+      });
+      await this.ensureContactHashes(key);
+    }
+    this.log("contacts_import", { detail: `format=${imp.format} numbers=${snap.rows.length} added=${fresh.length} already_known=${snap.rows.length - fresh.length} duplicates=${stats.duplicates} unreadable=${stats.invalid} dropped_fax_pager=${stats.droppedType} mode=${imp.allowlist}` });
+    const fileKeys = await Promise.all(snap.rows.map((r) => this.numHash(key, r.e164)));
+    const proposal = await this.fileProposal("import", imp.allowlist, fileKeys, snap.rows.map((r) => r.e164), key);
+    return json(200, {
+      imported: { contacts: snap.contacts, numbers: snap.rows.length, added: fresh.length, already_known: snap.rows.length - fresh.length, duplicates: stats.duplicates, unreadable: stats.invalid, dropped_fax_pager: stats.droppedType },
+      proposal,
+    });
+  }
+
+  /**
+   * POST /allowlist-request (REQUEST_HOST, bot token) {to_name}: ask the owner to switch ONE address-book contact on.
+   * The name must match exactly one contact. Until the owner approves, that person stays off (not sendable).
+   */
+  private async allowlistRequest(req: Request): Promise<Response> {
+    await this.requireRequestToken(req);
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      throw new Refuse("body_not_json");
+    }
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new Refuse("body_must_be_object");
+    if (Object.keys(body).some((k) => k !== "to_name")) throw new Refuse("allowlist_request_unknown_field");
+    const toName: unknown = (body as { to_name?: unknown }).to_name;
+    if (typeof toName !== "string" || !toName.trim() || toName.length > 200 || looksLikePhone(toName)) throw new Refuse("to_name_invalid");
+    const key = await this.contactsKey();
+    const rows = this.sql.exec("SELECT name,name_norm,given_norm,first_norm,e164,e164_sha,label FROM contacts").toArray().map((r) => ({ ...contactRowOf(r), e164_sha: typeof r["e164_sha"] === "string" ? r["e164_sha"] : "" }));
+    const hits = matchName(rows, toName);
+    const people = new Set(hits.map((h) => h.e164_sha));
+    if (people.size === 0) throw new Refuse("contact_not_found", 404);
+    if (people.size > 1) throw new Refuse("contact_ambiguous", 409);
+    const hit = hits[0];
+    if (!hit) throw new Refuse("contact_not_found", 404);
+    if (isExampleNumber(hit.e164)) throw new Refuse("example_number", 422);
+    const proposal = await this.fileProposal("single", "add", [hit.e164_sha], [hit.e164], key);
+    if (!proposal) return json(200, { state: "already_on", name: safeName(hit.name) });
+    return json(202, { ...proposal, name: safeName(hit.name) });
+  }
+
+  /** Make (or skip, when nothing would change) a pending proposal and tell the owner where to confirm it. */
+  private async fileProposal(kind: "import" | "single", mode: "add" | "replace" | "none", fileKeys: string[], fileNumbers: string[], key: CryptoKey) {
+    await this.ensureContactHashes(key);
+    const enabled = new Set((this.sql.exec("SELECT p.person_key FROM contact_prefs p JOIN contacts c ON c.e164_sha=p.person_key WHERE p.enabled=1").toArray()).map((r) => r["person_key"] as string));
+    const always = this.env.ALLOWLIST ? parseAllowlist(this.env.ALLOWLIST) : new Map<string, string>();
+    const blocked = new Set(fileKeys.filter((_, i) => { const n = fileNumbers[i] ?? ""; return isExampleNumber(n) || always.has(n); }));
+    const diff = proposeDiff(mode, fileKeys, enabled, blocked);
+    if (!diff.adds.length && !diff.removes.length) return null;
+    const now = this.clock();
+    const id = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const csrf = hex(crypto.getRandomValues(new Uint8Array(16)));
+    this.sql.exec("DELETE FROM allowlist_proposals WHERE expires_ms < ?", now - GONE_KEEP_MS);
+    this.sql.exec(
+      "INSERT INTO allowlist_proposals(id,kind,created_ms,expires_ms,csrf,adds,removes,state,key_fp) VALUES(?,?,?,?,?,?,?,'pending',?)",
+      id, kind, now, now + PROPOSAL_TTL_MS, csrf, JSON.stringify(diff.adds), JSON.stringify(diff.removes), await hmacHex(key, "fingerprint"),
+    );
+    this.log("allowlist_proposed", { request_id: id, detail: `kind=${kind} adds=${diff.adds.length} removes=${diff.removes.length}` });
+    const url = `https://${this.env.APPROVE_HOST}/approve/import/${id}`;
+    let notified = false;
+    try {
+      await this.deliverToOwner(`SMS relay: allowlist change waiting (${diff.adds.length} on, ${diff.removes.length} off), ref ${id.slice(0, 8)}. Review: ${url}`, "SMS relay allowlist");
+      notified = true;
+    } catch (e) {
+      this.log("notify_failed", { request_id: id, detail: errCode(e) });
+    }
+    return { id, state: "pending", adds: diff.adds.length, removes: diff.removes.length, approve_url: url, expires_ms: now + PROPOSAL_TTL_MS, notified };
+  }
+
+  private proposal(id: string) {
+    const r = this.sql.exec("SELECT * FROM allowlist_proposals WHERE id=?", id).toArray()[0] as
+      | { id: string; kind: string; created_ms: number; expires_ms: number; csrf: string; adds: string; removes: string; state: string; key_fp: string }
+      | undefined;
+    if (!r) return null;
+    const state = r.state === "pending" && this.clock() >= r.expires_ms ? "expired" : r.state;
+    return { ...r, state, addKeys: JSON.parse(r.adds) as string[], removeKeys: JSON.parse(r.removes) as string[] };
+  }
+
+  /** GET /allowlist-request/<id> (bot token): state and counts only. */
+  private async proposalStatus(req: Request, id: string): Promise<Response> {
+    await this.requireRequestToken(req);
+    const p = this.proposal(id);
+    if (!p) return json(404, { error: "not_found" });
+    return json(200, { id, state: p.state, adds: p.addKeys.length, removes: p.removeKeys.length });
+  }
+
+  /** GET /approve/import/<id> (owner, Access): the diff with names and last 4 digits, and one Approve button. */
+  private async proposalPage(req: Request, id: string): Promise<Response> {
+    await this.requireOwner(req, "allowlist_page");
+    const p = this.proposal(id);
+    if (!p) return json(404, { error: "not_found" });
+    const who = (keys: string[]) =>
+      keys.map((k) => this.sql.exec("SELECT name, label, e164 FROM contacts WHERE e164_sha=? LIMIT 1", k).toArray()[0] as { name: string; label: string; e164: string } | undefined)
+        .map((r) => (r ? `<li>${esc(safeName(r.name))} · ${esc(r.label)} · ends ${esc(last4(r.e164))}</li>` : `<li>(no longer in the address book)</li>`)).join("");
+    const open = p.state === "pending";
+    const n = p.addKeys.length, m = p.removeKeys.length;
+    const form = open
+      ? `<form method=post><input type=hidden name=csrf value="${p.csrf}"><button name=action value=approve>Approve these ${n + m}</button> <button name=action value=deny>Deny</button></form>`
+      : "";
+    const body = `<h2>Allowlist change</h2><article data-card><p>${p.kind === "single" ? "The bot asked to switch on one person." : "From a contacts file the bot imported."} Nothing changes until you approve.</p>`
+      + (n ? `<h3>Switch on (${n})</h3><ul id=adds>${who(p.addKeys)}</ul>` : "")
+      + (m ? `<h3>Switch off (${m})</h3><ul id=removes>${who(p.removeKeys)}</ul>` : "")
+      + `<p><small>ref ${id.slice(0, 8)} · state: ${esc(p.state)}</small></p>${form}</article>`;
+    const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const html = renderShell({ nonce, css: HARBOR_CSS, leaves: leavesFor(req, true) + pickerFor(req, `/approve/import/${id}`, true), current: "approve", body, script: approveScript() });
+    return new Response(html, { headers: pageHeaders(nonce) });
+  }
+
+  /** POST /approve/import/<id> {csrf, action}: approve applies the stored diff once; deny or expiry changes nothing. */
+  private async decideProposal(req: Request, id: string): Promise<Response> {
+    const who = await this.requireOwner(req, "allowlist_decide");
+    if (req.headers.get("Origin") !== new URL(req.url).origin) throw new Refuse("bad_origin", 403);
+    const form = await formOf(req);
+    const p = this.proposal(id);
+    if (!p) return json(404, { error: "not_found" });
+    if (form.get("csrf") !== p.csrf) throw new Refuse("bad_csrf", 403);
+    if (p.state === "expired") throw new Refuse("expired", 410);
+    if (p.state !== "pending") throw new Refuse("already_used", 409);
+    const now = this.clock();
+    const action = form.get("action");
+    if (action === "deny") {
+      this.sql.exec("UPDATE allowlist_proposals SET state='denied', decided_ms=?, by=? WHERE id=?", now, who.email, id);
+      this.log("allowlist_denied", { request_id: id, detail: `method=${who.method} by=${who.email}` });
+      return json(200, { id, state: "denied" });
+    }
+    if (action !== "approve") throw new Refuse("bad_action");
+    const key = await this.contactsKey();
+    if ((await hmacHex(key, "fingerprint")) !== p.key_fp) throw new Refuse("proposal_stale", 409);
+    let on = 0, off = 0, skipped = 0;
+    this.ctx.storage.transactionSync(() => {
+      for (const k of p.addKeys) {
+        const e164 = this.numberOf(k);
+        if (!e164 || isExampleNumber(e164)) { skipped++; continue; }
+        this.sql.exec("UPDATE contact_prefs SET enabled=1, migrated=0, updated_ms=?, by=? WHERE person_key=?", now, who.email, k);
+        on++;
+      }
+      for (const k of p.removeKeys) {
+        this.sql.exec("UPDATE contact_prefs SET enabled=0, migrated=0, updated_ms=?, by=? WHERE person_key=?", now, who.email, k);
+        off++;
+      }
+      this.sql.exec("UPDATE allowlist_proposals SET state='approved', decided_ms=?, by=? WHERE id=?", now, who.email, id);
+      this.sql.exec("DELETE FROM candidates");
+      this.log("allowlist_approved", { request_id: id, detail: `enabled=${on} disabled=${off} skipped=${skipped} method=${who.method} by=${who.email}` });
+    });
+    return json(200, { id, state: "approved", enabled: on, disabled: off, skipped });
+  }
+
   /** POST /contacts (approve host, Access): replace the whole snapshot. Used by scripts/import-contacts.mjs. */
   private async uploadContacts(req: Request): Promise<Response> {
     const who = await this.requireOwner(req, "contacts");
@@ -1059,7 +1257,7 @@ export class Relay extends DurableObject<Env> {
    * Outstanding candidate ids are retired, since the list they were drawn from changed.
    */
   private rebuildContacts() {
-    const order = [...this.googleLabels(), ICLOUD_SOURCE, ...this.msLabels().map(msSource), UPLOAD_SOURCE, LEGACY_SOURCE];
+    const order = [...this.googleLabels(), ICLOUD_SOURCE, ...this.msLabels().map(msSource), UPLOAD_SOURCE, IMPORT_SOURCE, LEGACY_SOURCE];
     this.sql.exec("DELETE FROM contacts");
     this.setMeta("hash_key_fp", null); // pref rows follow the new list on the next read
     this.sql.exec("DELETE FROM candidates");
@@ -1184,7 +1382,7 @@ export class Relay extends DurableObject<Env> {
       }
     }
     // A label removed from GOOGLE_ACCOUNTS (or disconnected, or iCloud secrets deleted): its stored list is deleted, not just left out of the merge.
-    const keep = new Set([...valid, ...(icloudOn ? [ICLOUD_SOURCE] : []), ...msValid.map(msSource), UPLOAD_SOURCE, LEGACY_SOURCE]);
+    const keep = new Set([...valid, ...(icloudOn ? [ICLOUD_SOURCE] : []), ...msValid.map(msSource), UPLOAD_SOURCE, IMPORT_SOURCE, LEGACY_SOURCE]);
     const gone = (this.sql.exec("SELECT DISTINCT account FROM contact_sources").toArray().map((r) => r.account as string)).filter((a) => !keep.has(a));
     this.ctx.storage.transactionSync(() => {
       for (const a of gone) {
@@ -1998,7 +2196,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
   }
 
   // ---------- Access side (the owner) ----------
-  private async requireOwner(req: Request, route: "page" | "decide" | "log" | "contacts" | "direct" | "resume" | "sync" | "contacts_page" | "prefs" | "preview" | "google" | "home" | "approve_list" | "messages" | "purge"): Promise<Owner> {
+  private async requireOwner(req: Request, route: "page" | "decide" | "log" | "contacts" | "direct" | "resume" | "sync" | "contacts_page" | "prefs" | "preview" | "google" | "home" | "approve_list" | "messages" | "purge" | "allowlist_page" | "allowlist_decide"): Promise<Owner> {
     // Token split: the bot's request token must never work here, so refuse any Authorization header.
     if (req.headers.get("Authorization")) throw new Error("access_bearer_not_allowed");
     const who = await verifyAccess(

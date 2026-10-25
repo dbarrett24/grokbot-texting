@@ -48,6 +48,12 @@ By default the bot texts only people you have switched on. One text can go to on
 
 By default there is no tap on your phone. You agree in the chat, and the text goes out. The checks, in order, are the decision table in [SETTINGS.md](SETTINGS.md#how-a-direct-send-is-checked).
 
+## Drop in a contacts file
+
+Drop a vCard (`.vcf`, one or many people) or a CSV export (Google, Outlook, or plain `name,phone`) into the chat. The bot sends it to `POST /import-contacts`. Everyone in it lands in your address book switched **off**, deduped by number (numbers without a `+` use `DEFAULT_COUNTRY_CODE`). If anyone would be switched on or off, you get one link: `/approve/import/<id>` lists the names with the last 4 digits and a single **Approve these N** button. Nothing on the allowlist changes until you tap it; Deny or 24 hours unanswered changes nothing.
+
+The bot can also ask to switch on **one** person already in your contacts (`POST /allowlist-request` with `to_name`). Same page, same one tap. Until you approve, the bot still can't text them. Details: [DEPLOY.md section 11](DEPLOY.md#11-connect-your-bot) and [.agents/skills/import-dropped-contacts](.agents/skills/import-dropped-contacts/SKILL.md).
+
 ## Group MMS
 
 A shared group thread is off until you turn it on, and it works only from an Android phone. Live-test it before you rely on it. The rules are in [SETTINGS.md](SETTINGS.md#group-mms-group-true-behind-group_mms-default-off).

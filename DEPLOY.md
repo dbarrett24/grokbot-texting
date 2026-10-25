@@ -248,7 +248,7 @@ The same codes show next to **Sync** on the Contacts page, with this fix text.
 - Numbers like `555-0100`…`555-0199`, and 555 followed by `1234`, are documentation examples, and the page refuses to turn them on.
 - **Upgrading an existing relay:** everyone who could be texted before the update stays on and is flagged as migrated. A banner says how many; **Review them** filters to them, and **Turn all migrated off** switches them all off at once. Nothing is turned on by the upgrade that wasn't textable before.
 - **`DIRECT_ALLOWLIST` is deprecated.** On the first request after the update its entries are imported once as the `ALLOWLIST_LEGACY` source and flagged: on only when this is an upgrade of a Worker that had already run and `CONTACTS_SNAPSHOT_ONLY` was `"0"` (the old default, so they were textable); off otherwise. A fresh deploy never switches anyone on. After that the secret is ignored. Review them on the page, then delete it: `npx wrangler -c .relay-local/wrangler.toml secret delete DIRECT_ALLOWLIST`. `CONTACTS_SNAPSHOT_ONLY` is only read by that one-time import; leave it as shipped for this release.
-- The page only reads from Google (`contacts.readonly`) and stores everything in your own Worker. It loads nothing from other sites. The bot's token gets 404 for every `/contacts` path on `<API_HOST>`, so the bot can never turn anyone on.
+- The page only reads from Google (`contacts.readonly`) and stores everything in your own Worker. It loads nothing from other sites. The bot's token gets 404 for every `/contacts` path on `<API_HOST>`, so the bot can never turn anyone on. It can only *propose* a change (a dropped contacts file, or a one-person add request) that you confirm with one tap on `/approve/import/<id>`.
 
 | You see | Fix |
 |---|---|
@@ -312,6 +312,8 @@ unset RT CID
    - Up to 3 people per text, sent as **separate copies**, and the read-back says "separate copies". A group thread (`"group": true`) only if you turned on `GROUP_MMS` and asked for a group. Not on the iPhone paths: there a group request is refused (`group_mms_unsupported_delivery`).
    - Follow the formatting rule in section 10.
    - Stop and tell you on anything other than `sent`. On a partial multi-send, say who got it and who didn't; never retry by itself.
+   - A `.vcf` or `.csv` file you drop into the chat: send it as-is to `POST /import-contacts` `{filename, content, allowlist}` (`allowlist` is `add` by default, `replace` only if you said the file is the whole list, `none` if you only want them in the address book). Report the counts and the `approve_url`. Never say anyone is switched on until you approved.
+   - To text someone who is in your contacts but off: offer `POST /allowlist-request` `{to_name}`, send you its `approve_url`, and wait. Check `GET /allowlist-request/<id>`; text only after it says `approved`. `denied` or `expired` means stop.
 3. Have the bot run the section 10 test now.
 
 **Check:** the bot's section 10 test passes: it reads the test back, waits for your yes, sends it, and the text arrives.
