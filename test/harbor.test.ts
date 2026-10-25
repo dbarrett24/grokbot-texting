@@ -122,7 +122,7 @@ describe("Harbor look", () => {
     const csp = r.headers.get("content-security-policy") ?? "";
     const nonce = /'nonce-([a-f0-9]{32})'/.exec(csp)?.[1];
     expect(html).toContain(`<style nonce="${nonce}">\n${HARBOR_CSS}\n</style>`);
-    expect(csp).toBe(`default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com; base-uri 'none'`);
+    expect(csp).toBe(`default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com https://login.microsoftonline.com; base-uri 'none'`);
   });
 });
 

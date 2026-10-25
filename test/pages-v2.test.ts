@@ -194,14 +194,14 @@ describe("Approve, Direct and Log pages", () => {
     expect(approveCsp).toBe(pageCsp(nonce));
     const contactsCsp = pages[0]?.headers.get("content-security-policy") ?? "";
     const contactsNonce = /'nonce-([a-f0-9]{32})'/.exec(contactsCsp)?.[1] ?? "";
-    expect(contactsCsp).toBe(`default-src 'self'; script-src 'self' 'nonce-${contactsNonce}'; style-src 'nonce-${contactsNonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com; base-uri 'none'`);
+    expect(contactsCsp).toBe(`default-src 'self'; script-src 'self' 'nonce-${contactsNonce}'; style-src 'nonce-${contactsNonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com https://login.microsoftonline.com; base-uri 'none'`);
   });
 
   it("the contacts CSP stays the contacts policy", async () => {
     const r = await h.relay.fetch(`${BASE}/contacts`, { headers: await jwtHeaders() });
     const csp = r.headers.get("content-security-policy") ?? "";
     const nonce = /'nonce-([a-f0-9]{32})'/.exec(csp)?.[1] ?? "";
-    expect(csp).toBe(`default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com; base-uri 'none'`);
+    expect(csp).toBe(`default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com https://login.microsoftonline.com; base-uri 'none'`);
   });
 });
 

@@ -5,9 +5,10 @@ import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./pass
 import { verifyAccess, type Net } from "./access";
 import { HARBOR_CSS, HARBOR_FONT_PATH, HARBOR_LOGO_PATH, harborFont, harborLogo, harborPhoto, leavesFor, HARBOR_PHOTO_PREFIX, pickerFor, setBackground } from "./harbor";
 import { ICLOUD_ROOT, ICLOUD_SOURCE, MAX_ADDRESSBOOKS, PROPFIND_BOOKS, PROPFIND_HOME, PROPFIND_PRINCIPAL, REPORT_CARDS, addressBooks, addressData, basicAuth, parseICloudCreds, propHref, safeUrl, splitCards, vcardToContact, type ICloudCreds } from "./icloud";
+import { MS_CONTACTS_URL, MS_MAX_PAGES, MS_SCOPE, MS_STATE_TTL_MS, MS_TOKEN_URL, buildMsAuthUrl, decodeMsAccountRow, decodeMsTokenReply, graphToContacts, isMsLabel, msAad, msScopeIsExact, msSource, parseMsAccounts, parseMsLabelInput, safeNextLink } from "./outlook";
 import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, importTokenKey, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
-  CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
+  CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, type GooglePanel, type MsPanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
 } from "./contacts";
 import { E164, Refuse, hasLink, localDate, maskNumber, parseAllowlist, parseCount, parseSwitch, parseTapConfig, parseTimezone, sendCap, validateRequestBody, validateTapText, type TapConfig } from "./rules";
 import {
@@ -167,6 +168,9 @@ export class Relay extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_accounts(label TEXT PRIMARY KEY, email TEXT, rt_ct TEXT NOT NULL, rt_iv TEXT NOT NULL, scope TEXT NOT NULL, connected_ms INTEGER NOT NULL, key_ver TEXT NOT NULL)`);
     // One row per sign-in in flight: single use, 10 minutes, bound to the Access identity that started it.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_oauth_state(state TEXT PRIMARY KEY, label TEXT NOT NULL, verifier TEXT NOT NULL, email TEXT NOT NULL, expires_ms INTEGER NOT NULL)`);
+    // Outlook connect (src/outlook.ts): same shape as google_accounts / google_oauth_state, sealed under GOOGLE_TOKEN_KEY.
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS ms_accounts(label TEXT PRIMARY KEY, rt_ct TEXT NOT NULL, rt_iv TEXT NOT NULL, scope TEXT NOT NULL, connected_ms INTEGER NOT NULL, key_ver TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS ms_oauth_state(state TEXT PRIMARY KEY, label TEXT NOT NULL, verifier TEXT NOT NULL, email TEXT NOT NULL, expires_ms INTEGER NOT NULL)`);
     // Retired paste-form client. The table stays so an old row can be deleted; nothing writes it.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_client(id INTEGER PRIMARY KEY CHECK (id = 1), blob_ct TEXT NOT NULL, blob_iv TEXT NOT NULL, key_ver TEXT NOT NULL, saved_ms INTEGER NOT NULL)`);
     this.clearStoredGoogleClient();
@@ -1049,7 +1053,7 @@ export class Relay extends DurableObject<Env> {
    * Outstanding candidate ids are retired, since the list they were drawn from changed.
    */
   private rebuildContacts() {
-    const order = [...this.googleLabels(), ICLOUD_SOURCE, UPLOAD_SOURCE, LEGACY_SOURCE];
+    const order = [...this.googleLabels(), ICLOUD_SOURCE, ...this.msLabels().map(msSource), UPLOAD_SOURCE, LEGACY_SOURCE];
     this.sql.exec("DELETE FROM contacts");
     this.setMeta("hash_key_fp", null); // pref rows follow the new list on the next read
     this.sql.exec("DELETE FROM candidates");
@@ -1146,8 +1150,35 @@ export class Relay extends DurableObject<Env> {
         }
       }
     }
-    // A label removed from GOOGLE_ACCOUNTS (or iCloud secrets deleted): its stored list is deleted, not just left out of the merge.
-    const keep = new Set([...valid, ...(icloudOn ? [ICLOUD_SOURCE] : []), UPLOAD_SOURCE, LEGACY_SOURCE]);
+    // Outlook / Microsoft 365 (Graph, Contacts.Read): same rules as Google. Rows go to contact_sources only;
+    // contact_prefs stays OFF for new numbers, so a sync never widens who can be texted.
+    const msBad = parseMsAccounts(this.env.MS_ACCOUNTS).invalid;
+    failed.push(...msBad.map((l) => ({ account: msSource(l), reason: "invalid_label" })));
+    const msValid = this.msLabels();
+    for (const label of msValid) {
+      const acct = msSource(label);
+      if (ccError !== null) {
+        failed.push({ account: acct, reason: ccError });
+        continue;
+      }
+      try {
+        const rt = await this.msRefreshToken(label);
+        if (!rt) throw new Error(`missing_secret_MS_RT_${label}`);
+        const { contacts } = await this.fetchMsContacts(label, rt, cc);
+        const snap = parseSnapshot({ generated_at: new Date(now).toISOString(), contacts });
+        if (!snap.rows.length) throw new Error("outlook_empty_result");
+        this.ctx.storage.transactionSync(() => {
+          this.replaceSource(acct, snap.rows, now);
+          this.setMeta(`acct:${acct}:dropped`, null);
+          this.log("contacts_sync", { detail: `account=${acct} contacts=${snap.contacts} numbers=${snap.rows.length} dropped_fax_pager=0` });
+        });
+        updated.push(acct);
+      } catch (e) {
+        failed.push({ account: acct, reason: e instanceof Refuse ? e.code : errCode(e) });
+      }
+    }
+    // A label removed from GOOGLE_ACCOUNTS (or disconnected, or iCloud secrets deleted): its stored list is deleted, not just left out of the merge.
+    const keep = new Set([...valid, ...(icloudOn ? [ICLOUD_SOURCE] : []), ...msValid.map(msSource), UPLOAD_SOURCE, LEGACY_SOURCE]);
     const gone = (this.sql.exec("SELECT DISTINCT account FROM contact_sources").toArray().map((r) => r.account as string)).filter((a) => !keep.has(a));
     this.ctx.storage.transactionSync(() => {
       for (const a of gone) {
@@ -1416,6 +1447,179 @@ export class Relay extends DurableObject<Env> {
     return this.toContacts({ disconnected: label, ...(revoke === "ok" ? {} : { revoke: "failed" }) });
   }
 
+  // ---------- Outlook connect (src/outlook.ts): mirrors the Google path above ----------
+  /** MS_ACCOUNTS (legacy seed via MS_RT_<LABEL> secrets), then labels connected on the page, by connect time. */
+  msLabels(): string[] {
+    const stored = this.sql.exec("SELECT label FROM ms_accounts ORDER BY connected_ms, label").toArray().flatMap((r) => (typeof r["label"] === "string" ? [r["label"]] : []));
+    const seed = parseMsAccounts(this.env.MS_ACCOUNTS).valid.filter((l) => stored.includes(l) || this.meta(`msdisc:${l}`) === null);
+    return [...seed, ...stored.filter((x) => !seed.includes(x))];
+  }
+  private msClient(): { id: string; secret: string } | null {
+    const id = this.env.MS_CLIENT_ID, secret = this.env.MS_CLIENT_SECRET;
+    return id && secret ? { id, secret } : null;
+  }
+  private legacyMsRt(label: string): string | undefined {
+    const v: unknown = Reflect.get(this.env, `MS_RT_${label}`);
+    return typeof v === "string" ? v : undefined;
+  }
+  /** The sealed row first (re-sealed under the current key after rotation), else MS_RT_<LABEL>. */
+  async msRefreshToken(label: string): Promise<string | null> {
+    const raw = this.sql.exec("SELECT * FROM ms_accounts WHERE label=?", label).toArray()[0];
+    if (raw) {
+      const row = decodeMsAccountRow(raw);
+      const { cur, old } = await this.tokenKeys();
+      const { plaintext, kid } = await open([cur, old], { ct: row.rt_ct, iv: row.rt_iv, kid: row.key_ver }, msAad(row.label));
+      if (cur && kid !== cur.kid) await this.saveMsAccount(row.label, plaintext, row.scope, row.connected_ms);
+      return plaintext;
+    }
+    return this.legacyMsRt(label) || null;
+  }
+  async saveMsAccount(label: string, refreshToken: string, scope: string, connectedMs = this.clock()): Promise<void> {
+    if (!isMsLabel(label)) throw new Refuse("outlook_label_invalid");
+    if (!refreshToken) throw new Refuse("outlook_no_refresh_token");
+    const k = await this.requireTokenKey();
+    const s = await seal(k, refreshToken, msAad(label));
+    this.sql.exec("INSERT OR REPLACE INTO ms_accounts(label, rt_ct, rt_iv, scope, connected_ms, key_ver) VALUES(?,?,?,?,?,?)", label, s.ct, s.iv, scope, connectedMs, s.kid);
+  }
+  private msRedirectUri(): string {
+    return `https://${this.env.APPROVE_HOST}/contacts/outlook/callback`;
+  }
+  private toContactsMs(q: Record<string, string>): Response {
+    return this.toContacts(q);
+  }
+
+  /** POST /contacts/outlook/start {csrf, label}: state + PKCE, then 302 to Microsoft's sign-in. */
+  private async msStart(req: Request): Promise<Response> {
+    const { who, form } = await this.googleForm(req);
+    let label: string;
+    try {
+      label = parseMsLabelInput(form.get("label"));
+      await this.requireTokenKey();
+    } catch (e) {
+      return this.toContactsMs({ outlook_error: e instanceof Refuse ? e.code : errCode(e) });
+    }
+    const client = this.msClient();
+    if (!client) return this.toContactsMs({ outlook_error: "outlook_client_not_configured" });
+    const now = this.clock();
+    const state = hex(crypto.getRandomValues(new Uint8Array(32)));
+    const { verifier, challenge } = await pkcePair();
+    this.sql.exec("DELETE FROM ms_oauth_state WHERE expires_ms <= ?", now);
+    this.sql.exec("INSERT INTO ms_oauth_state(state,label,verifier,email,expires_ms) VALUES(?,?,?,?,?)", state, label, verifier, who.email.toLowerCase(), now + MS_STATE_TTL_MS);
+    this.log("outlook_connect_started", { detail: `label=${label}` });
+    return new Response(null, { status: 302, headers: { location: buildMsAuthUrl({ clientId: client.id, redirectUri: this.msRedirectUri(), state, challenge }), "cache-control": "no-store", "referrer-policy": "no-referrer" } });
+  }
+  private takeMsState(state: string | null, who: Owner): { label: string; verifier: string } {
+    if (!state || !/^[a-f0-9]{64}$/.test(state)) throw new Error("outlook_state_invalid");
+    const row = this.sql.exec("SELECT label, verifier, email, expires_ms FROM ms_oauth_state WHERE state=?", state).toArray()[0];
+    this.sql.exec("DELETE FROM ms_oauth_state WHERE state=?", state);
+    if (!row) throw new Error("outlook_state_invalid");
+    if (Number(row["expires_ms"]) <= this.clock()) throw new Error("outlook_state_expired");
+    if (row["email"] !== who.email.toLowerCase()) throw new Error("outlook_state_wrong_identity");
+    const label = row["label"], verifier = row["verifier"];
+    if (typeof label !== "string" || typeof verifier !== "string") throw new Error("outlook_state_invalid");
+    return { label, verifier };
+  }
+  /** GET /contacts/outlook/callback?state&code: code + PKCE verifier + client secret → tokens; exact scope; seal. */
+  private async msCallback(req: Request): Promise<Response> {
+    const who = await this.requireOwner(req, "google");
+    const q = new URL(req.url).searchParams;
+    let label = "";
+    try {
+      const st = this.takeMsState(q.get("state"), who);
+      label = st.label;
+      if (q.get("error")) throw new Error("outlook_consent_denied");
+      const code = q.get("code");
+      if (!code) throw new Error("outlook_code_missing");
+      const client = this.msClient();
+      if (!client) throw new Error("outlook_client_not_configured");
+      const tr = await this.net(new Request(MS_TOKEN_URL, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ code, client_id: client.id, client_secret: client.secret, redirect_uri: this.msRedirectUri(), grant_type: "authorization_code", scope: MS_SCOPE, code_verifier: `${st.verifier}` }).toString(),
+      }));
+      if (!tr.ok) throw new Error(`outlook_token_status_${tr.status}`);
+      const tok = decodeMsTokenReply(await jsonOr(tr, "outlook_token_bad_json"));
+      if (!msScopeIsExact(tok.scope)) {
+        // Microsoft has no app-side refresh-token revoke for Contacts.Read; the token is dropped, never stored.
+        this.log("outlook_connect_refused", { detail: `label=${label} reason=outlook_scope_not_exact` });
+        throw new Error("outlook_scope_not_exact");
+      }
+      await this.saveMsAccount(label, tok.refreshToken ?? "", MS_SCOPE);
+      this.setMeta(`msdisc:${label}`, null);
+      this.log("outlook_connected", { detail: `label=${label}` });
+      return this.toContactsMs({ connected: msSource(label) });
+    } catch (e) {
+      const c = e instanceof Refuse ? e.code : errCode(e);
+      if (c !== "outlook_scope_not_exact") this.log("outlook_connect_failed", { detail: `label=${label || "?"} reason=${c}` });
+      return this.toContactsMs({ outlook_error: c });
+    }
+  }
+  /** POST /contacts/outlook/disconnect {csrf, label}: delete the sealed token and that label's contacts. */
+  private async msDisconnect(req: Request): Promise<Response> {
+    const { form } = await this.googleForm(req);
+    let label: string;
+    try {
+      label = parseMsLabelInput(form.get("label"));
+    } catch (e) {
+      return this.toContactsMs({ outlook_error: errCode(e) });
+    }
+    if (!this.sql.exec("SELECT 1 FROM ms_accounts WHERE label=?", label).toArray().length) return this.toContactsMs({ outlook_error: "outlook_not_connected" });
+    const acct = msSource(label);
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec("DELETE FROM ms_accounts WHERE label=?", label);
+      this.setMeta(`msdisc:${label}`, String(this.clock()));
+      this.sql.exec("DELETE FROM contact_sources WHERE account=?", acct);
+      this.sql.exec("DELETE FROM meta WHERE k LIKE ?", `acct:${acct}:%`);
+      this.rebuildContacts();
+      this.log("outlook_disconnected", { detail: `label=${label}` });
+    });
+    return this.toContactsMs({ disconnected: acct, revoke: "failed" }); // no app-side revoke: the page points at account.microsoft.com
+  }
+  /** What the Outlook panel shows; never a secret. */
+  private async msPanel(): Promise<MsPanel> {
+    let tokenKey: MsPanel["tokenKey"] = "missing";
+    try {
+      tokenKey = (await importTokenKey(this.env.GOOGLE_TOKEN_KEY)) ? "ok" : "missing";
+    } catch {
+      tokenKey = "invalid";
+    }
+    const when = new Map(this.sql.exec("SELECT label, connected_ms FROM ms_accounts").toArray().flatMap((r) => (typeof r["label"] === "string" && typeof r["connected_ms"] === "number" ? [[r["label"], r["connected_ms"]] as const] : [])));
+    return {
+      tokenKey, client: this.msClient() !== null, redirectUri: this.msRedirectUri(),
+      accounts: this.msLabels().map((label) => { const at = when.get(label); return { label, stored: at !== undefined, fromSeed: at === undefined && !!this.legacyMsRt(label), connected: at === undefined ? null : this.fmtTime(at) }; }),
+    };
+  }
+  /** Refresh (re-sealing a rotated refresh token) → Graph /me/contacts, paged by @odata.nextLink. Errors are codes. */
+  private async fetchMsContacts(label: string, refreshToken: string, cc: string | null) {
+    const client = this.msClient();
+    if (!client) throw new Error("outlook_client_not_configured");
+    const tr = await this.net(new Request(MS_TOKEN_URL, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: client.id, client_secret: client.secret, scope: MS_SCOPE }).toString(),
+    }));
+    if (!tr.ok) throw new Error(`outlook_token_status_${tr.status}`);
+    const tok = decodeMsTokenReply(await jsonOr(tr, "outlook_token_bad_json"));
+    if (!tok.accessToken) throw new Error("outlook_token_missing");
+    if (tok.scope !== undefined && !msScopeIsExact(tok.scope)) throw new Error("outlook_scope_not_exact");
+    if (tok.refreshToken && tok.refreshToken !== refreshToken && this.sql.exec("SELECT 1 FROM ms_accounts WHERE label=?", label).toArray().length) {
+      const row = decodeMsAccountRow(this.sql.exec("SELECT * FROM ms_accounts WHERE label=?", label).toArray()[0]);
+      await this.saveMsAccount(label, tok.refreshToken, row.scope, row.connected_ms); // Microsoft rotates refresh tokens
+    }
+    const all: SnapshotContact[] = [];
+    let next: string | null = `${MS_CONTACTS_URL}?$select=displayName,givenName,surname,mobilePhone,homePhones,businessPhones&$top=500`;
+    for (let i = 0; i < MS_MAX_PAGES && next; i++) {
+      const r = await this.net(new Request(next, { headers: { Authorization: `Bearer ${tok.accessToken}`, Accept: "application/json" }, redirect: "manual" }));
+      if (!r.ok) throw new Error(`outlook_graph_status_${r.status}`);
+      const j: unknown = await jsonOr(r, "outlook_contacts_bad_json");
+      const o = j && typeof j === "object" && !Array.isArray(j) ? (j as Record<string, unknown>) : {};
+      all.push(...graphToContacts(o["value"], cc));
+      next = safeNextLink(o["@odata.nextLink"]);
+    }
+    if (next) throw new Error("outlook_too_many_pages");
+    return { contacts: all };
+  }
+
   /** OAuth refresh → People API connections (names + phone numbers only). Errors are codes, never token values. */
   /**
    * iCloud CardDAV, read-only: PROPFIND current-user-principal → addressbook-home-set → address books (Depth 1),
@@ -1503,8 +1707,8 @@ export class Relay extends DurableObject<Env> {
 ${this.devicePageLine()}
 <p><b>DEFAULT_COUNTRY_CODE:</b> ${(() => { try { return esc(parseCountryCode(this.env.DEFAULT_COUNTRY_CODE) ?? "none (strict E.164)"); } catch { return "NOT SET: contact sync is refused until it is"; } })()}</p>
 <p><b>Direct list:</b> ${snapAt ? `${esc(this.meta("snapshot_numbers") ?? "?")} numbers under ${esc(this.meta("snapshot_names") ?? "?")} distinct names, rebuilt ${esc(this.fmtTime(Number(snapAt)))}` : "empty"}</p>
-<ul>${[...this.googleLabels(), ...(this.env.ICLOUD_APPLE_ID || this.env.ICLOUD_APP_PASSWORD ? [ICLOUD_SOURCE] : []), UPLOAD_SOURCE].map((a) => { const ok = this.meta(`acct:${a}:ok_ms`); return `<li>${esc(a)}: ${ok ? `${esc(this.meta(`acct:${a}:numbers`) ?? "?")} numbers${this.meta(`acct:${a}:dropped`) ? ` (${esc(this.meta(`acct:${a}:dropped`)!)} fax/pager dropped)` : ""}, last good ${esc(this.fmtTime(Number(ok)))}` : "never loaded"}</li>`; }).join("")}</ul>
-${this.googleLabels().length || this.env.ICLOUD_APPLE_ID ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${csrf}"><button>Sync contacts now</button></form>` : "<p>No Google accounts configured (GOOGLE_ACCOUNTS).</p>"}
+<ul>${[...this.googleLabels(), ...(this.env.ICLOUD_APPLE_ID || this.env.ICLOUD_APP_PASSWORD ? [ICLOUD_SOURCE] : []), ...this.msLabels().map(msSource), UPLOAD_SOURCE].map((a) => { const ok = this.meta(`acct:${a}:ok_ms`); return `<li>${esc(a)}: ${ok ? `${esc(this.meta(`acct:${a}:numbers`) ?? "?")} numbers${this.meta(`acct:${a}:dropped`) ? ` (${esc(this.meta(`acct:${a}:dropped`)!)} fax/pager dropped)` : ""}, last good ${esc(this.fmtTime(Number(ok)))}` : "never loaded"}</li>`; }).join("")}</ul>
+${this.googleLabels().length || this.env.ICLOUD_APPLE_ID || this.msLabels().length ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${csrf}"><button>Sync contacts now</button></form>` : "<p>No Google accounts configured (GOOGLE_ACCOUNTS).</p>"}
 ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=csrf value="${csrf}"><button>Resume direct send</button></form>` : ""}`;
     const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
     const html = renderShell({ nonce, css: HARBOR_CSS, leaves: leavesFor(req, true) + pickerFor(req, "/direct", true), current: "direct", body: inner, script: "" });
@@ -1559,6 +1763,9 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     if (req.method === "POST" && path === "/contacts/google/start") return await this.googleStart(req);
     if (req.method === "GET" && path === "/contacts/google/callback") return await this.googleCallback(req);
     if (req.method === "POST" && path === "/contacts/google/disconnect") return await this.googleDisconnect(req);
+    if (req.method === "POST" && path === "/contacts/outlook/start") return await this.msStart(req);
+    if (req.method === "GET" && path === "/contacts/outlook/callback") return await this.msCallback(req);
+    if (req.method === "POST" && path === "/contacts/outlook/disconnect") return await this.msDisconnect(req);
     if (req.method === "POST" && path === "/contacts/google/client") return json(410, { error: "gone" });
     return json(404, { error: "not_found" });
   }
@@ -1611,7 +1818,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     this.setMeta("contacts_last_visit_ms", String(now));
     const csrf = this.mintPageCsrf(who, now);
     const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
-    const accts = this.googleLabels();
+    const accts = [...this.googleLabels(), ...this.msLabels()];
     const lastErr = this.sql.exec("SELECT ms, detail FROM log WHERE event IN ('contacts_sync','contacts_sync_failed','contacts_snapshot') ORDER BY seq DESC LIMIT 1").toArray()[0] as { ms: number; detail: string } | undefined;
     const errCodeOf = lastErr?.detail?.match(/reason=([a-zA-Z0-9_]+)/)?.[1];
     const lastOkMs = this.sql.exec("SELECT ms FROM log WHERE event='contacts_sync' ORDER BY seq DESC LIMIT 1").toArray()[0]?.["ms"];
@@ -1620,6 +1827,7 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
     const gErr = q.get("google_error");
     const connected = q.get("connected"), disconnected = q.get("disconnected");
     const label = (v: string | null) => (v && /^[A-Z0-9_]{1,32}$/.test(v) ? v : null);
+    const oErr = q.get("outlook_error");
     const html = renderContactsPage({
       csrf, nonce, leaves: leavesFor(req, true) + pickerFor(req, "/contacts", true), // /contacts CSP (default-src 'self') allows same-origin images
       migratedOn: key ? (this.sql.exec(`SELECT COUNT(*) AS c FROM contact_prefs WHERE ${MIGRATED_ON}`).one()["c"] as number) : 0,
@@ -1627,17 +1835,19 @@ ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=cs
       canSync: accts.length > 0,
       toast: synced === "ok" ? "Sync finished" : synced === "partial" ? "Sync finished with errors"
         : label(connected) ? `Connected ${label(connected)}. Press Sync now to load its contacts.`
-        : label(disconnected) ? `Disconnected ${label(disconnected)}${q.get("revoke") === "failed" ? " (Google didn't confirm the revoke: remove it at myaccount.google.com/connections)" : ""}`
+        : label(disconnected) ? `Disconnected ${label(disconnected)}${q.get("revoke") === "failed" && label(disconnected)?.startsWith("OUTLOOK_") ? " (to remove the app's access too, go to account.microsoft.com/privacy/app-access)" : q.get("revoke") === "failed" ? " (Google didn't confirm the revoke: remove it at myaccount.google.com/connections)" : ""}`
         : null,
       hashKeyMissing: !key,
       google: await this.googlePanel(),
+      outlook: await this.msPanel(),
+      outlookError: oErr && /^[a-z0-9_]{1,80}$/.test(oErr) ? oErr : null,
       googleError: gErr && /^[a-z0-9_]{1,80}$/.test(gErr) ? gErr : null,
       lastSync: typeof lastOkMs === "number" ? this.fmtTime(lastOkMs) : null,
     });
     return new Response(html, {
       headers: {
         "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-frame-options": "DENY", "referrer-policy": "same-origin", // not no-referrer: Chrome then sends Origin: null on the Sync now form
-        "content-security-policy": `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com; base-uri 'none'`, // Connect Google posts here, then 302s to Google's consent page
+        "content-security-policy": `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; form-action 'self' https://accounts.google.com https://login.microsoftonline.com; base-uri 'none'`, // Connect Google / Outlook post here, then 302 to the provider's consent page
       },
     });
   }

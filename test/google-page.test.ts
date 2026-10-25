@@ -58,10 +58,10 @@ describe("Set up Google checklist", () => {
     expect(GOOGLE_SCOPE).toBe("https://www.googleapis.com/auth/contacts.readonly");
   });
 
-  it("CSP lets the Connect form go on to Google's consent page and nowhere else", async () => {
+  it("CSP lets the Connect forms go on to the Google and Microsoft consent pages and nowhere else", async () => {
     const { res } = await page();
     const csp = must(res.headers.get("content-security-policy"));
-    expect(csp).toContain("form-action 'self' https://accounts.google.com;");
+    expect(csp).toContain("form-action 'self' https://accounts.google.com https://login.microsoftonline.com;");
     expect(csp).not.toMatch(/form-action[^;]*\*/);
   });
 

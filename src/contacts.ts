@@ -137,6 +137,13 @@ export interface GooglePanel {
   keyStatus: { total: number; onOld: number };
 }
 
+export interface MsPanel {
+  tokenKey: "ok" | "missing" | "invalid";
+  client: boolean;
+  redirectUri: string;
+  accounts: { label: string; stored: boolean; fromSeed: boolean; connected: string | null }[];
+}
+
 const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ESC[c] ?? c);
 
@@ -153,6 +160,9 @@ export interface PageModel {
   google: GooglePanel;
   /** Error line from ?google_error= (already a code; the fix text is looked up here). */
   googleError: string | null;
+  outlook?: MsPanel;
+  /** Error line from ?outlook_error= (a code). */
+  outlookError?: string | null;
   /** When the last successful contacts_sync finished (fmtTime), or null if none has. */
   lastSync: string | null;
 }
@@ -171,6 +181,19 @@ ${g.keyStatus.onOld > 0 ? `<p class=warn id=gkeys>${g.keyStatus.onOld} of ${g.ke
 <ul id=gaccts>${rows || "<li>No Google accounts yet.</li>"}</ul>
 <form method=post action="/contacts/google/start" class=bar id=gconnect><input type=hidden name=csrf value="${csrf}"><label for=glabel>Add account</label><input type=text id=glabel name=label required maxlength=32 pattern="[A-Za-z0-9_]+" placeholder="work" autocomplete=off><button${canConnect ? "" : " disabled"}>Connect Google</button></form>
 <p class=ro>${clientLine}</p>
+</section>`;
+}
+
+/** "Outlook accounts" panel (Microsoft Graph, Contacts.Read). Same layout as the Google panel. */
+export function renderMsPanel(o: MsPanel, csrf: string, err: string | null): string {
+  const canConnect = o.tokenKey === "ok" && o.client;
+  const rows = o.accounts.map((x) => `<li><b>${esc(x.label)}</b><span class=when>${x.stored ? `Connected${x.connected ? " " + esc(x.connected) : ""}` : x.fromSeed ? "from secret MS_RT_" + esc(x.label) + " (legacy)" : "not connected"}</span>
+<form method=post action="/contacts/outlook/start" class=inl><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button class=link aria-label="Reconnect Outlook ${esc(x.label)}"${canConnect ? "" : " disabled"}>Reconnect</button></form>${x.stored ? `<form method=post action="/contacts/outlook/disconnect" data-confirm="Stop syncing Outlook ${esc(x.label)}? Its contacts are removed from the list." class=inl><input type=hidden name=csrf value="${csrf}"><input type=hidden name=label value="${esc(x.label)}"><button class="link danger" aria-label="Disconnect Outlook ${esc(x.label)}">Disconnect</button></form>` : ""}</li>`).join("");
+  return `<section id=outlook aria-label="Outlook accounts">
+${err ? `<p class=warn role=alert>Outlook: <code>${esc(err)}</code>.</p>` : ""}${o.tokenKey === "ok" ? "" : `<p class=warn>GOOGLE_TOKEN_KEY is ${o.tokenKey === "missing" ? "not set" : "not valid"}; Outlook sign-in uses the same key. Run setup step <code>keys</code>, then <code>secrets</code>.</p>`}
+<ul id=oaccts>${rows || "<li>No Outlook accounts yet.</li>"}</ul>
+<form method=post action="/contacts/outlook/start" class=bar id=oconnect><input type=hidden name=csrf value="${csrf}"><label for=olabel>Add account</label><input type=text id=olabel name=label required maxlength=24 pattern="[A-Za-z0-9_]+" placeholder="work" autocomplete=off><button${canConnect ? "" : " disabled"}>Connect Outlook</button></form>
+<p class=ro>${o.client ? "Microsoft client: from the MS_CLIENT_ID / MS_CLIENT_SECRET secrets." : "Microsoft client: not set up yet (README, Outlook contacts)."} Redirect URI: <code>${esc(o.redirectUri)}</code></p>
 </section>`;
 }
 
@@ -197,6 +220,9 @@ ${err}
 <details${needsAttention ? " open" : ""}><summary>Google accounts <span class=ro>${stored} connected</span></summary>
 ${renderGooglePanel(m.google, m.csrf, m.googleError)}
 </details>
+${m.outlook ? `<details${m.outlookError ? " open" : ""}><summary>Outlook accounts <span class=ro>${m.outlook.accounts.filter((a) => a.stored).length} connected</span></summary>
+${renderMsPanel(m.outlook, m.csrf, m.outlookError ?? null)}
+</details>` : ""}
 </section>
 ${m.hashKeyMissing ? `<p class=warn>LOG_HASH_KEY is missing or short, so the list can't be shown. Run setup step keys, then secrets.</p>` : ""}
 ${m.migratedOn > 0 ? `<div class=banner id=banner role=status><p><b>${m.migratedOn}</b> people were reachable before this update and are still on.</p><div class=acts><button type=button id=review class=link>Review them</button><button type=button id=migoff>Turn all migrated off</button></div></div>` : ""}

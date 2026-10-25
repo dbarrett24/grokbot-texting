@@ -45,9 +45,10 @@ const M = [
   ["upload_unknown_fields", "src/direct.ts", 'if (Object.keys(o).some((k) => k !== "name" && k !== "given" && k !== "numbers")) bad("unknown_field");', ""],
   // contacts sync
   ["sync_empty_keeps_old", "src/relay.ts", 'if (!snap.rows.length) throw new Error("empty_result");', ""],
-  ["sync_name_precedence", "src/relay.ts", "const order = [...this.googleLabels(), ICLOUD_SOURCE, UPLOAD_SOURCE, LEGACY_SOURCE];", "const order = [...this.googleLabels().reverse(), ICLOUD_SOURCE, UPLOAD_SOURCE, LEGACY_SOURCE];"],
+  ["sync_name_precedence", "src/relay.ts", "const order = [...this.googleLabels(), ICLOUD_SOURCE, ...this.msLabels().map(msSource), UPLOAD_SOURCE, LEGACY_SOURCE];", "const order = [...this.googleLabels().reverse(), ICLOUD_SOURCE, ...this.msLabels().map(msSource), UPLOAD_SOURCE, LEGACY_SOURCE];"],
   ["icloud_empty_keeps_old", "src/relay.ts", 'if (!snap.rows.length) throw new Error("icloud_empty_result");', ""],
   ["icloud_foreign_host", "src/icloud.ts", 'if (u.protocol !== "https:" || !HOST_RE.test(u.hostname) || u.username || u.password) throw new Error("icloud_foreign_host");', ""],
+  ["outlook_scope_exact", "src/relay.ts", "if (!msScopeIsExact(tok.scope)) {", "if (false) {"],
   ["sync_missing_secret", "src/relay.ts", "if (!rt) {\n        failed.push", "if (false) {\n        failed.push"],
   ["sync_label_charset", "src/direct.ts", "if (!/^[A-Z0-9_]+$/.test(label) ||", "if ("],
   // review round
@@ -376,7 +377,7 @@ const M = [
   ["gc2_bad_key_redirects", "src/relay.ts", "return this.toContacts({ google_error: e instanceof Refuse ? e.code : errCode(e) }); // e.g. a malformed", "throw e; // e.g. a malformed"],
   ["gc2_disconnect_sources", "src/relay.ts", 'this.sql.exec("DELETE FROM contact_sources WHERE account=?", label);', ""],
   // google-connect PR 3: /contacts Google panel (paste form, Connect button, deep links)
-  ["gc3_csp_form_action", "src/relay.ts", "form-action 'self' https://accounts.google.com; base-uri 'none'", "form-action 'self'; base-uri 'none'"],
+  ["gc3_csp_form_action", "src/relay.ts", "form-action 'self' https://accounts.google.com https://login.microsoftonline.com; base-uri 'none'", "form-action 'self'; base-uri 'none'"],
   ["gc3_error_code_only", "src/relay.ts", "googleError: gErr && /^[a-z0-9_]{1,80}$/.test(gErr) ? gErr : null,", "googleError: gErr,"],
   ["gc3_toast_label_only", "src/relay.ts", "const label = (v: string | null) => (v && /^[A-Z0-9_]{1,32}$/.test(v) ? v : null);", "const label = (v: string | null) => v;"],
   ["gc3_connect_needs_client", "src/contacts.ts", 'const canConnect = g.tokenKey === "ok" && g.client !== null;', "const canConnect = true;"],

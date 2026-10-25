@@ -359,7 +359,7 @@ export function buildPayload(s, m) {
     else if (m.has(k)) p[k] = m.get(k);
     else missing.push(k);
   }
-  for (const k of ["GOOGLE_TOKEN_KEY", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ICLOUD_APPLE_ID", "ICLOUD_APP_PASSWORD"]) if (m.has(k)) p[k] = m.get(k);
+  for (const k of ["GOOGLE_TOKEN_KEY", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ICLOUD_APPLE_ID", "ICLOUD_APP_PASSWORD", "MS_CLIENT_ID", "MS_CLIENT_SECRET"]) if (m.has(k)) p[k] = m.get(k);
   return { payload: p, missing: [...new Set(missing)] };
 }
 export function renderConfig(template, s) {

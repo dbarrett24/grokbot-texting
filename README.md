@@ -62,6 +62,16 @@ The bot can read your iCloud contacts into its address book. It only reads them,
 
 If you see `icloud_auth_failed`, make a new app-specific password and set it again. If only one of the two secrets is set, you see `icloud_secret_missing`. To stop syncing, delete both secrets. The next sync then deletes the iCloud list.
 
+## Outlook contacts
+
+Optional, read-only address-book sync from Outlook.com or Microsoft 365 through Microsoft Graph. It works like the Google sync: you sign in on the contacts page, and the refresh token is sealed with `GOOGLE_TOKEN_KEY` before it is stored. Synced numbers go into the address book only. They start OFF and never widen who can be texted.
+
+1. In the Microsoft Entra admin center, register an app for "accounts in any organizational directory and personal Microsoft accounts". Add a Web redirect URI, which the contacts page shows (`https://<approve host>/contacts/outlook/callback`). Add the delegated Graph permissions `Contacts.Read` and `offline_access`, and nothing else.
+2. Create a client secret, then run `wrangler secret put MS_CLIENT_ID` and `wrangler secret put MS_CLIENT_SECRET`.
+3. On the contacts page, open **Outlook accounts**, enter a label (for example `work`), and connect. Contacts are listed as `OUTLOOK_<LABEL>`.
+
+`MS_ACCOUNTS` (a var) plus an `MS_RT_<LABEL>` secret are only needed to seed an account without the page, like `GOOGLE_ACCOUNTS`. Disconnect deletes the stored token and that account's contacts. Microsoft has no app-side revoke for this scope, so also remove the app at account.microsoft.com/privacy/app-access.
+
 ## A few safety notes
 
 - Anyone who has the bot's token can text anyone on your list. Treat that token like a password. How to stop sending is in [DEPLOY.md section 13](DEPLOY.md#13-kill-switch-and-rollback).

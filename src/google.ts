@@ -91,7 +91,7 @@ export function decodeAccountRow(v: unknown): GoogleAccountRow {
 
 /** Same rule as GOOGLE_ACCOUNTS labels (src/direct.ts parseAccounts): A-Z 0-9 _, 1..32, not UPLOAD. */
 export function isLabel(l: string): boolean {
-  return /^[A-Z0-9_]{1,32}$/.test(l) && l !== "UPLOAD" && l !== "ALLOWLIST_LEGACY" && l !== "ICLOUD";
+  return /^[A-Z0-9_]{1,32}$/.test(l) && l !== "UPLOAD" && l !== "ALLOWLIST_LEGACY" && l !== "ICLOUD" && !l.startsWith("OUTLOOK_");
 }
 
 // ---- google-connect PR 2: web sign-in (start/callback), state + PKCE, exact scope, revoke ----
