@@ -52,7 +52,8 @@ describe("pii-scan term list", () => {
     expect(r.stderr).toContain("FAIL: no term list");
   });
   it("a terms.example entry in a file is caught, and only redacted in output", () => {
-    const term = readFileSync(EXAMPLE, "utf8").split("\n").find((l) => l && !l.startsWith("#"))!;
+    const term = readFileSync(EXAMPLE, "utf8").split("\n").find((l) => l && !l.startsWith("#")) ?? "";
+    expect(term).not.toBe("");
     commit("b.md", `owner is ${term} here\n`);
     for (const env of [{ PII_TERMS_FILE: EXAMPLE }, { PII_TERMS: term }] as Record<string, string>[]) {
       const r = scan(env);
