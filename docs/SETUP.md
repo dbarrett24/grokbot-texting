@@ -101,7 +101,7 @@ The bot holds the relay token and speaks to you. The relay does not.
 ### Step 1.7 Get the code
 
 ```sh
-git clone <TEMPLATE_REPO_URL> texting-relay && cd texting-relay
+git clone <TEMPLATE_REPO_URL> texting-relay && cd texting-relay   # <TEMPLATE_REPO_URL>: this repo's clone URL (DEPLOY.md, Placeholders)
 npm ci --legacy-peer-deps
 npm test && npm run typecheck
 ```
@@ -270,7 +270,7 @@ Type or paste the value when Wrangler asks. Do not put it on the command line, i
 
 The first `secret put` can ask: `There doesn't seem to be a Worker called "sms-relay". Do you want to create a new Worker with that name and add secrets to it?` The quoted name is the `name` in your local file. Answer yes. Wrangler creates an empty placeholder Worker. Step 4's deploy replaces it. Later `secret put` commands do not ask again. (Seen in Wrangler 4.151.1, the version this repo installs.)
 
-Generate a value you must hand to the bot in your own terminal (`openssl rand -hex 32`), paste it into the hidden prompt, then close that terminal. Generate a value you never need to see (`LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`) the same way: `openssl rand -base64 32`, paste at the prompt, close the terminal. Do not pipe the value into `wrangler`. The one exception is Step 7.10: `node scripts/google-client.mjs --file=<client.json> --config=.relay-local/wrangler.toml` pipes the client id and secret on stdin and discards wrangler's output, so the secret is not printed. `--config=<path>` is required (there is no default Worker) and is passed to both secret puts. It deletes the JSON only after both secret puts succeed. If a put fails, the JSON stays, the script names the secret and how to retry, and it exits non-zero.
+Generate a value you must hand to the bot in your own terminal (`openssl rand -hex 32`), paste it into the hidden prompt, then close that terminal. Generate a value you never need to see (`LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`, `LOG_ENC_KEY`) the same way: `openssl rand -base64 32`, paste at the prompt, close the terminal. Do not pipe the value into `wrangler`. The one exception is Step 7.10: `node scripts/google-client.mjs --file=<client.json> --config=.relay-local/wrangler.toml` pipes the client id and secret on stdin and discards wrangler's output, so the secret is not printed. `--config=<path>` is required (there is no default Worker) and is passed to both secret puts. It deletes the JSON only after both secret puts succeed. If a put fails, the JSON stays, the script names the secret and how to retry, and it exits non-zero.
 
 Set these now. Gateway secrets wait until Step 7.2, because the values come from the phone.
 
@@ -283,6 +283,7 @@ Set these now. Gateway secrets wait until Step 7.2, because the values come from
 | `ALLOWLIST` | JSON object `{"+447700900123":"Example Owner"}`. The value is the label Step 7.4 resolves. One entry for your own number is enough for the test text. |
 | `LOG_HASH_KEY` | 32+ characters. HMAC key for number and body hashes. Direct send refuses without it (`direct_config_invalid`). |
 | `GOOGLE_TOKEN_KEY` | 32 random bytes. Seals the Google client and sign-ins the Worker stores (AES-GCM). Step 7.10 needs it. |
+| `LOG_ENC_KEY` | 32 random bytes (`openssl rand -base64 32`), never the same value as `LOG_HASH_KEY`. AES-GCM key for stored texts. Optional: only needed if you set `CAPTURE_INBOUND` or `STORE_MESSAGE_BODIES` to `"1"`; without it those fail closed. `npx wrangler -c .relay-local/wrangler.toml secret put LOG_ENC_KEY`. |
 | `GATEWAY_MODE` | Type `passphrase` at the prompt (this guide). `device_key` is the opt-in in DEPLOY.md. |
 
 Check, after those prompts:
@@ -291,7 +292,7 @@ Check, after those prompts:
 npx wrangler -c .relay-local/wrangler.toml secret list
 ```
 
-You should see `REQUEST_TOKEN`, `ACCESS_AUD`, `APPROVER_EMAIL`, `OWNER_NUMBER`, `ALLOWLIST`, `LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`, `GATEWAY_MODE`. Not yet: `GATEWAY_USER`, `GATEWAY_PASS`, `GATEWAY_DEVICE_ID`, `GATEWAY_PASSPHRASE`.
+You should see `REQUEST_TOKEN`, `ACCESS_AUD`, `APPROVER_EMAIL`, `OWNER_NUMBER`, `ALLOWLIST`, `LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`, `GATEWAY_MODE` (and `LOG_ENC_KEY` if you set it). Not yet: `GATEWAY_USER`, `GATEWAY_PASS`, `GATEWAY_DEVICE_ID`, `GATEWAY_PASSPHRASE`.
 
 ### Every other secret the code reads
 
