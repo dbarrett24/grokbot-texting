@@ -5,7 +5,8 @@
 // Term list, first found wins, NEVER committed: PII_TERMS (comma/newline list; the CI secret), PII_TERMS_FILE
 // (a path), or .pii-terms at the repo root (gitignored). scripts/ci/pii-terms.example shows the format with fake entries.
 // Scans every tracked file; with --range also the patch text, commit messages and author/committer of those commits,
-// and rejects any author or committer email ending in @gmail.com (use your users.noreply.github.com address).
+// (merge commits included; author/committer names and emails), and rejects any author or committer email at gmail.com
+// after normalising case, whitespace, brackets and trailing dots (use your users.noreply.github.com address).
 // Any +1 number outside the fictional 555-01xx range fails, with or without terms.
 // Hits print a redacted match (first 2 characters + ***), never the term.
 // The @gmail.com email rule has no bypass. No term list: PII_REQUIRE_TERMS=1 (CI; PII_REQUIRED=1 still works) fails closed; otherwise a loud WARNING and go on.
@@ -33,10 +34,27 @@ const range = i > 0 ? process.argv[i + 1] : undefined;
 const hits = [];
 /** @param {string} s */
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const alnum = /[a-z0-9]/;
+/**
+ * Blank out (same length, so nothing glues together) each public string that starts on a token boundary.
+ * Whatever follows a public prefix stays in place and is still scanned, e.g. "<public url>surname".
+ * @param {string} low
+ */
+const maskPublic = (low, pub = PUBLIC) => {
+  const out = low.split("");
+  for (const p of pub) {
+    for (let at = low.indexOf(p); at >= 0; at = low.indexOf(p, at + 1)) {
+      if (at > 0 && alnum.test(low[at - 1] ?? "") && alnum.test(p[0] ?? "")) continue;
+      for (let k = at; k < at + p.length; k++) out[k] = " ";
+    }
+  }
+  return out.join("");
+};
+/** Trim, lowercase, drop <>/quotes and trailing dots, so "Someone@GMail.com." is still gmail. @param {string} e */
+const normEmail = (e) => e.trim().toLowerCase().replace(/^[<"']+|[>"']+$/g, "").replace(/\.+$/, "").trim();
 /** @param {string} where @param {string} text */
 const scan = (where, text) => {
-  let low = text.toLowerCase();
-  for (const p of PUBLIC) low = low.split(p).join("");
+  const low = maskPublic(text.toLowerCase());
   terms.forEach((t, n) => { if (new RegExp(`(^|[^a-z0-9])${esc(t)}([^a-z0-9]|$)`, "m").test(low)) hits.push(`${where}: matches personal-data term #${n + 1} (${redact(t)})`); });
   for (const m of text.matchAll(/\+1[ -]?\(?(\d{3})\)?[ -]?(\d{3})[ -]?(\d{4})\b/g)) {
     if (!(m[2] === "555" && (m[3] ?? "").startsWith("01"))) hits.push(`${where}: phone-shaped ${m[0].slice(0, 5)}… is not a fictional 555-01xx number`);
@@ -68,15 +86,16 @@ for (const f of git("ls-files").split("\n").filter(Boolean)) {
   scan(f, text);
 }
 if (range !== undefined) {
-  scan(`patch ${range}`, git("log", "-p", "--no-merges", "--format=", range));
-  scan(`messages ${range}`, git("log", "--no-merges", "--format=%B", range)); // merge commits: GitHub-made (PR ref), author = PR opener
-  const people = git("log", "--no-merges", "--format=%h%x09%ae%x09%ce", range);
-  scan(`authors ${range}`, people);
+  // Merge commits included: their messages and people are scanned too (-m/--cc so a merge's own changes show).
+  scan(`patch ${range}`, git("log", "-p", "--cc", "--format=", range));
+  scan(`messages ${range}`, git("log", "--format=%B", range));
+  const people = git("log", "--format=%h%x09%ae%x09%ce%x09%an%x09%cn", range);
+  scan(`authors ${range}`, people); // emails and author/committer names
   for (const line of people.split("\n").filter(Boolean)) {
     const [sha, ae = "", ce = ""] = line.split("\t");
     for (const [role, e] of [["author", ae], ["committer", ce]]) {
-      const low = e.toLowerCase();
-      if (low.endsWith("@gmail.com") && !low.endsWith("users.noreply.github.com")) hits.push(`commit ${sha}: ${role} email ${redact(low)}@gmail.com is a personal address; use your users.noreply.github.com address`);
+      const low = normEmail(e);
+      if (/@(gmail|googlemail)\.com$/.test(low)) hits.push(`commit ${sha}: ${role} email ${redact(low)}@gmail.com is a personal address; use your users.noreply.github.com address`);
     }
   }
 }
