@@ -161,11 +161,11 @@ npx wrangler -c .relay-local/wrangler.toml secret put ALLOWLIST            # {"+
 openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put LOG_HASH_KEY   # made and stored without showing it
 openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY   # seals Google sign-ins stored by the Worker (section 9)
 openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put MS_TOKEN_KEY   # optional, only for Outlook contacts (README): seals Outlook sign-ins with their own key, never GOOGLE_TOKEN_KEY
-openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put LOG_ENC_KEY   # 32 bytes; encrypts stored texts (only used if CAPTURE_INBOUND/STORE_MESSAGE_BODIES = "1"); must differ from LOG_HASH_KEY
+openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put LOG_ENC_KEY   # 32 bytes; once set, every stored text row (each send, and inbound when CAPTURE_INBOUND = "1") keeps the number AES-GCM sealed; bodies only with STORE_MESSAGE_BODIES = "1"; must differ from LOG_HASH_KEY
 ```
 Device-key mode (opt-in): don't type the pin: run `gateway-check` then `confirm-fingerprint` (section 1, step 9). They store `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` for you (on the Worker too, once it's deployed); `secrets` sends them otherwise.
 
-**Check:** `npx wrangler -c .relay-local/wrangler.toml secret list` shows these names (values are never shown): REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, GATEWAY_MODE, GATEWAY_PASSPHRASE (device-key mode: GATEWAY_PINNED_FINGERPRINT and GATEWAY_KEY_VERSION instead), OWNER_NUMBER, ALLOWLIST, LOG_HASH_KEY, GOOGLE_TOKEN_KEY.
+**Check:** `npx wrangler -c .relay-local/wrangler.toml secret list` shows these names (values are never shown): REQUEST_TOKEN, ACCESS_AUD, APPROVER_EMAIL, GATEWAY_USER, GATEWAY_PASS, GATEWAY_DEVICE_ID, GATEWAY_MODE, GATEWAY_PASSPHRASE (device-key mode: GATEWAY_PINNED_FINGERPRINT and GATEWAY_KEY_VERSION instead), OWNER_NUMBER, ALLOWLIST, LOG_HASH_KEY, GOOGLE_TOKEN_KEY, LOG_ENC_KEY.
 
 ## 7. First deploy
 ```sh
@@ -242,6 +242,7 @@ The same codes show next to **Sync** on the Contacts page, with this fix text.
 `https://<APPROVE_HOST>/contacts`, behind Access like the rest of that host. The title is **GrokBot Texting**, with the logo beside it. It lists everyone from Google sync, the manual upload and the old `DIRECT_ALLOWLIST`, with name, label and **only the last 4 digits**, 25 at a time (10/25/50/100). **Turn all on** still means the current search and filter, not only the page on screen. The page is the contact list and a one-line sync status (**Sync now**). Google accounts sit behind a disclosure that opens itself when a sync or sign-in needs attention. Per-account counts stay on `/direct`. The bot can text a person only when they are switched **on** here, or listed in the `ALLOWLIST` secret (shown read-only, **Always on**, once).
 
 - **New people start off.** That includes a new number added to someone who is already on: each number is its own switch.
+- **A number that comes back starts off too.** If a number leaves every contact source (every sync and upload) and returns within 30 days, it comes back switched off and needs your approval again, even if it was on before. After 30 days it is simply new, so also off.
 - **Turning someone on or off** applies immediately. That row shows **Undo** for 5 seconds; Undo sends the reverse change. A failed change puts the switch back and shows the error on the row. **Turn all on** acts on the current search and filter, and asks with the count in a dialog before anything changes. **Turn all migrated off** and **Disconnect** still ask first.
 - **Star** the people you text most: they sort first and get a **Starred** filter. A star never turns anyone on.
 - **Sync now** pulls Google right away; the daily sync keeps running. The last sync error, when there is one, is shown next to **Sync** with its fix. Per-account counts stay on `/direct`.

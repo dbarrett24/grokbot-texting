@@ -283,7 +283,7 @@ Set these now. Gateway secrets wait until Step 7.2, because the values come from
 | `ALLOWLIST` | JSON object `{"+447700900123":"Example Owner"}`. The value is the label Step 7.4 resolves. One entry for your own number is enough for the test text. |
 | `LOG_HASH_KEY` | 32+ characters. HMAC key for number and body hashes. Direct send refuses without it (`direct_config_invalid`). |
 | `GOOGLE_TOKEN_KEY` | 32 random bytes. Seals the Google client and sign-ins the Worker stores (AES-GCM). Step 7.10 needs it. |
-| `LOG_ENC_KEY` | 32 random bytes (`openssl rand -base64 32`), never the same value as `LOG_HASH_KEY`. AES-GCM key for stored texts. Optional: only needed if you set `CAPTURE_INBOUND` or `STORE_MESSAGE_BODIES` to `"1"`; without it those fail closed. `npx wrangler -c .relay-local/wrangler.toml secret put LOG_ENC_KEY`. |
+| `LOG_ENC_KEY` | 32 random bytes (`openssl rand -base64 32`), never the same value as `LOG_HASH_KEY`. AES-GCM key for stored texts. Once it is set, every stored text row is sealed with it: each send keeps the number as ciphertext (plus the last 4 digits), and so does each inbound text when `CAPTURE_INBOUND = "1"`; the body is stored, sealed, only when `STORE_MESSAGE_BODIES = "1"`. Unset: a send keeps only the last 4 digits, `POST /messages` refuses (`message_enc_key_missing`), and with `STORE_MESSAGE_BODIES = "1"` sends refuse too. A malformed value, or one equal to `LOG_HASH_KEY`, refuses every route (`message_enc_key_invalid` / `message_enc_key_reused`). `npx wrangler -c .relay-local/wrangler.toml secret put LOG_ENC_KEY`. |
 | `GATEWAY_MODE` | Type `passphrase` at the prompt (this guide). `device_key` is the opt-in in DEPLOY.md. |
 
 Check, after those prompts:
@@ -292,7 +292,7 @@ Check, after those prompts:
 npx wrangler -c .relay-local/wrangler.toml secret list
 ```
 
-You should see `REQUEST_TOKEN`, `ACCESS_AUD`, `APPROVER_EMAIL`, `OWNER_NUMBER`, `ALLOWLIST`, `LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`, `GATEWAY_MODE` (and `LOG_ENC_KEY` if you set it). Not yet: `GATEWAY_USER`, `GATEWAY_PASS`, `GATEWAY_DEVICE_ID`, `GATEWAY_PASSPHRASE`.
+You should see `REQUEST_TOKEN`, `ACCESS_AUD`, `APPROVER_EMAIL`, `OWNER_NUMBER`, `ALLOWLIST`, `LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`, `GATEWAY_MODE`, `LOG_ENC_KEY`. Not yet: `GATEWAY_USER`, `GATEWAY_PASS`, `GATEWAY_DEVICE_ID`, `GATEWAY_PASSPHRASE`.
 
 ### Every other secret the code reads
 
