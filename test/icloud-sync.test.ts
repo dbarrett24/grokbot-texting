@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { runInDurableObject } from "cloudflare:test";
-import type { Relay } from "../src/relay";
+import { inRelay, sql as sqlOf, type Row } from "./google-fixture";
 import { harness, API, BASE, type Harness } from "./helpers";
 import { vcardToContact, parseICloudCreds, safeUrl, addressBooks, propHref } from "../src/icloud";
 import { isLabel } from "../src/google";
@@ -17,9 +16,8 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 
 let h: Harness;
 let dav: { status?: number; cards: string[][]; books?: number; seen: { method: string; url: string; depth: string | null; auth: string | null }[] };
-const runIn = runInDurableObject as unknown as (s: unknown, f: (i: any) => Promise<any>) => Promise<any>;
-const sql = (q: string, ...a: unknown[]) => runIn(h.relay, async (i) => i.ctx.storage.sql.exec(q, ...a).toArray()) as Promise<any[]>;
-const sync = () => runInDurableObject(h.relay, (i: Relay) => i.syncContacts({ alert: false }));
+const sql = (q: string): Promise<Row[]> => sqlOf(h, q);
+const sync = () => inRelay(h, (r) => r.syncContacts({ alert: false }));
 
 beforeEach(async () => {
   h = await harness();
@@ -30,11 +28,11 @@ beforeEach(async () => {
       card(["FN:Neighbor Bo", "N:Bo;Neighbor;;;", "item1.TEL:(555) 555-0122", "item1.X-ABLabel:_$!<Mobile>!$_"]),
     ], [card(["FN:Coach Cy", "N:Cy;Coach;;;", "TEL;TYPE=IPHONE:tel:+15555550123"]), card(["FN:No Phone", "EMAIL:x@example.test"])]],
   };
-  await runIn(h.relay, async (inst) => {
+  await inRelay(h, (inst) => {
     const base = inst.net;
     inst.net = async (req: Request) => {
       const u = new URL(req.url);
-      if (!/contacts\.icloud\.com$/.test(u.host)) return base(req);
+      if (!u.host.endsWith("contacts.icloud.com")) return base(req);
       dav.seen.push({ method: req.method, url: req.url, depth: req.headers.get("Depth"), auth: req.headers.get("Authorization") });
       if (req.headers.get("Authorization") !== `Basic ${btoa(`${APPLE_ID}:${APP_PW}`)}`) return new Response("no", { status: 401 });
       if (dav.status) return new Response("err", { status: dav.status });
@@ -73,7 +71,7 @@ describe("iCloud CardDAV sync", () => {
       { account: "ICLOUD", name: "Coach Cy", e164: "+15555550123", label: "iphone" },
     ]);
     expect(dav.seen.map((s) => s.method)).toEqual(["PROPFIND", "PROPFIND", "PROPFIND", "REPORT", "REPORT"]); // never PUT/DELETE
-    expect((await sql("SELECT detail FROM log WHERE event='contacts_sync'"))[0].detail).toBe("account=ICLOUD contacts=3 numbers=3 dropped_fax_pager=1");
+    expect((await sql("SELECT detail FROM log WHERE event='contacts_sync'"))[0]?.detail).toBe("account=ICLOUD contacts=3 numbers=3 dropped_fax_pager=1");
   });
 
   it("does not widen who can be texted: synced numbers stay OFF until the owner turns them on", async () => {
@@ -101,13 +99,13 @@ describe("iCloud CardDAV sync", () => {
     } finally {
       Object.assign(console, orig);
     }
-    const dump: string[] = await runIn(h.relay, async (i) => {
+    const dump: string[] = await inRelay(h, async (_r, st) => {
       const s: string[] = [];
-      for (const t of i.ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE type='table'").toArray()) {
-        if (String(t.name).startsWith("_cf") || String(t.name).startsWith("sqlite")) continue;
-        s.push(JSON.stringify(i.ctx.storage.sql.exec(`SELECT * FROM "${t.name}"`).toArray()));
+      for (const t of st.storage.sql.exec<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table'").toArray()) {
+        if (t.name.startsWith("_cf") || t.name.startsWith("sqlite")) continue;
+        s.push(JSON.stringify(st.storage.sql.exec(`SELECT * FROM "${t.name}"`).toArray()));
       }
-      s.push(JSON.stringify([...(await i.ctx.storage.list()).entries()]));
+      s.push(JSON.stringify([...(await st.storage.list()).entries()]));
       return s;
     });
     const all = [...out, ...dump].join("\n");
@@ -120,14 +118,14 @@ describe("iCloud CardDAV sync", () => {
     dav.status = 503;
     const r = await sync();
     expect(r.failed).toEqual([{ account: "ICLOUD", reason: "icloud_principal_status_503" }]);
-    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0].c).toBe(3);
+    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.c).toBe(3);
   });
 
   it("an empty address book keeps the previous list", async () => {
     await sync();
     dav.cards = [[], []];
     expect((await sync()).failed).toEqual([{ account: "ICLOUD", reason: "icloud_empty_result" }]);
-    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0].c).toBe(3);
+    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.c).toBe(3);
   });
 
   it("wrong password = icloud_auth_failed; one secret alone = icloud_secret_missing; removing both purges the list", async () => {
@@ -136,10 +134,10 @@ describe("iCloud CardDAV sync", () => {
     expect((await sync()).failed).toEqual([{ account: "ICLOUD", reason: "icloud_auth_failed" }]);
     await h.setEnv({ ICLOUD_APP_PASSWORD: "" });
     expect((await sync()).failed).toEqual([{ account: "ICLOUD", reason: "icloud_secret_missing" }]);
-    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0].c).toBe(3);
+    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.c).toBe(3);
     await h.setEnv({ ICLOUD_APPLE_ID: "" });
     expect(await sync()).toEqual({ updated: [], failed: [] });
-    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0].c).toBe(0);
+    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.c).toBe(0);
   });
 
   it("refuses to follow an href off iCloud's contacts hosts", () => {

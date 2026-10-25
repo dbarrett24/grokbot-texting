@@ -90,8 +90,8 @@ export const ASKABLE = {
   GOOGLE_CLIENT_ID: { prompt: "Google Cloud: the Client ID", hidden: false, ok: (v) => /\.apps\.googleusercontent\.com$/.test(v) },
   GOOGLE_CLIENT_SECRET: { prompt: "Google Cloud: the Client secret", hidden: true, ok: (v) => /^\S{10,200}$/.test(v) },
   // iCloud contacts (optional): the Apple ID, then an app-specific password from appleid.apple.com, on a masked card.
-  ICLOUD_APPLE_ID: { prompt: "iCloud contacts: your Apple ID email", hidden: false, ok: (v) => /^[^\s@:]+@[^\s@:]+\.[^\s@:]+$/.test(v) },
-  ICLOUD_APP_PASSWORD: { prompt: "iCloud contacts: an app-specific password from appleid.apple.com (Sign-In and Security, App-Specific Passwords)", hidden: true, ok: (v) => /^[a-z]{4}-?[a-z]{4}-?[a-z]{4}-?[a-z]{4}$/.test(v) },
+  ICLOUD_APPLE_ID: { prompt: "iCloud contacts: your Apple ID email", hidden: false, ok: /** @param {string} v */ (v) => /^[^\s@:]+@[^\s@:]+\.[^\s@:]+$/.test(v) },
+  ICLOUD_APP_PASSWORD: { prompt: "iCloud contacts: an app-specific password from appleid.apple.com (Sign-In and Security, App-Specific Passwords)", hidden: true, ok: /** @param {string} v */ (v) => /^[a-z]{4}-?[a-z]{4}-?[a-z]{4}-?[a-z]{4}$/.test(v) },
   NTFY_TOKEN: { prompt: "ntfy: your access token", hidden: true, ok: (v) => /^\S{10,200}$/.test(v) },
   // Only when the app ALREADY has a passphrase (no device key): type that one in, so setup never replaces it.
   GATEWAY_PASSPHRASE: { prompt: "SMS Gateway app: the passphrase already set under Settings, Encryption", hidden: true, ok: (v) => v.length >= 32 && v.length <= 256 && !/[\r\n]/.test(v) },
