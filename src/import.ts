@@ -211,7 +211,8 @@ export function parseImport(req: Pick<ImportRequest, "format" | "content">, cc: 
 export interface AllowlistDiff { adds: string[]; removes: string[] }
 /**
  * add: every imported person not already on. replace: also switch off everyone on now who isn't in the file.
- * none: no change. Example numbers are never proposed; ALLOWLIST (always on) entries are never in it.
+ * none: no change. Example numbers are never proposed. The caller leaves ALLOWLIST-secret numbers out of enabledKeys,
+ * so a replace never proposes them for OFF.
  */
 export function proposeDiff(mode: AllowlistMode, fileKeys: string[], enabledKeys: Set<string>, blocked: Set<string>): AllowlistDiff {
   if (mode === "none") return { adds: [], removes: [] };

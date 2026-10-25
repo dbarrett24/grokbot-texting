@@ -333,7 +333,7 @@ describe("key rotation and deletes", () => {
     expect(await sendable(RILEY)).toBe(true);
   });
 
-  it("deleted then re-added within 30 days → old state back; after 30 days → off", async () => {
+  it("deleted then re-added within 30 days → back OFF (no silent re-enable); after 30 days → off", async () => {
     await upload();
     await setPref({ key: await keyOf("Riley Moore"), enabled: true });
     const without = snap(BASE_SNAP.contacts.slice(1));
@@ -341,6 +341,8 @@ describe("key rotation and deletes", () => {
     expect(await sendable(RILEY)).toBe(false);
     h.setNow(Date.parse("2026-10-30T12:00:00-06:00"));
     await upload();
+    expect(await sendable(RILEY)).toBe(false);
+    await setPref({ key: await keyOf("Riley Moore"), enabled: true });
     expect(await sendable(RILEY)).toBe(true);
     await upload(without);
     await sendable(SAM);

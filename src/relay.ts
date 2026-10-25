@@ -170,7 +170,7 @@ export class Relay extends DurableObject<Env> {
       event TEXT, request_id TEXT, recipient TEXT, sha256 TEXT, detail TEXT)`);
     // Contacts page. contact_prefs: one row per number, keyed by HMAC(LOG_HASH_KEY, number) (= e164_sha), so a
     // re-sync, rename or source change can't flip anyone on. enabled defaults to 0 (off). gone_ms = number left
-    // every source; the row is kept 30 days so a quick re-add gets its old state back.
+    // every source; the row (star kept) lasts 30 days, and a re-add in that window comes back OFF.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS contact_prefs(person_key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0,
       starred INTEGER NOT NULL DEFAULT 0, updated_ms INTEGER, by TEXT, migrated INTEGER NOT NULL DEFAULT 0, first_seen_ms INTEGER, gone_ms INTEGER)`);
     // Numbers to switch on (enabled=1) or flag (enabled=0) once a hash key is available. Filled by the upgrade migration.
@@ -188,10 +188,10 @@ export class Relay extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_client(id INTEGER PRIMARY KEY CHECK (id = 1), blob_ct TEXT NOT NULL, blob_iv TEXT NOT NULL, key_ver TEXT NOT NULL, saved_ms INTEGER NOT NULL)`);
     this.clearStoredGoogleClient();
     // Allowlist proposals from a drag-in import or a one-person add request (bot side). adds/removes are JSON
-    // arrays of person_keys (number HMACs, never numbers). Nothing in contact_prefs changes until the owner
+    // arrays of person_keys (number HMACs, never numbers); kept = ALLOWLIST-secret numbers a replace leaves on. Nothing in contact_prefs changes until the owner
     // confirms on /approve/import/<id>; deny or expiry changes nothing. key_fp pins the hash key it was made under.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS allowlist_proposals(id TEXT PRIMARY KEY, kind TEXT NOT NULL, created_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL,
-      csrf TEXT NOT NULL, adds TEXT NOT NULL, removes TEXT NOT NULL, state TEXT NOT NULL, key_fp TEXT NOT NULL, decided_ms INTEGER, by TEXT)`);
+      csrf TEXT NOT NULL, adds TEXT NOT NULL, removes TEXT NOT NULL, kept TEXT NOT NULL DEFAULT '[]', state TEXT NOT NULL, key_fp TEXT NOT NULL, decided_ms INTEGER, by TEXT)`);
     try {
       this.sql.exec("ALTER TABLE contacts ADD COLUMN account TEXT");
     } catch {
@@ -606,10 +606,13 @@ export class Relay extends DurableObject<Env> {
     });
   }
 
-  /** A pref row for every number on the merged list (new ones OFF); numbers that left every source age out after 30 days. */
+  /**
+   * A pref row for every number on the merged list (new ones OFF); numbers that left every source age out after 30 days.
+   * A number that comes back inside that window returns OFF: switching it on again takes a new approval.
+   */
   private syncPrefRows(now: number) {
     for (const r of this.sql.exec("SELECT DISTINCT e164_sha FROM contacts WHERE e164_sha IS NOT NULL").toArray())
-      this.sql.exec("INSERT INTO contact_prefs(person_key,enabled,starred,migrated,first_seen_ms) VALUES(?,0,0,0,?) ON CONFLICT(person_key) DO UPDATE SET gone_ms=NULL", r["e164_sha"] as string, now);
+      this.sql.exec("INSERT INTO contact_prefs(person_key,enabled,starred,migrated,first_seen_ms) VALUES(?,0,0,0,?) ON CONFLICT(person_key) DO UPDATE SET enabled=CASE WHEN gone_ms IS NULL THEN enabled ELSE 0 END, gone_ms=NULL", r["e164_sha"] as string, now);
     this.sql.exec("UPDATE contact_prefs SET gone_ms=? WHERE gone_ms IS NULL AND person_key NOT IN (SELECT e164_sha FROM contacts WHERE e164_sha IS NOT NULL)", now);
     this.sql.exec("DELETE FROM contact_prefs WHERE gone_ms IS NOT NULL AND gone_ms < ?", now - GONE_KEEP_MS);
   }
@@ -1106,18 +1109,24 @@ export class Relay extends DurableObject<Env> {
   /** Make (or skip, when nothing would change) a pending proposal and tell the owner where to confirm it. */
   private async fileProposal(kind: "import" | "single", mode: "add" | "replace" | "none", fileKeys: string[], fileNumbers: string[], key: CryptoKey) {
     await this.ensureContactHashes(key);
-    const enabled = new Set((this.sql.exec("SELECT p.person_key FROM contact_prefs p JOIN contacts c ON c.e164_sha=p.person_key WHERE p.enabled=1").toArray()).map((r) => r["person_key"] as string));
     const always = this.env.ALLOWLIST ? parseAllowlist(this.env.ALLOWLIST) : new Map<string, string>();
+    // Numbers in the ALLOWLIST secret are sendable whatever their switch says (directList), so a replace never
+    // proposes them for OFF; the page lists them as staying on instead.
+    const enabled = new Set<string>(), alwaysOn = new Set<string>();
+    for (const r of this.sql.exec("SELECT DISTINCT p.person_key, c.e164 FROM contact_prefs p JOIN contacts c ON c.e164_sha=p.person_key WHERE p.enabled=1").toArray())
+      (always.has(r["e164"] as string) ? alwaysOn : enabled).add(r["person_key"] as string);
     const blocked = new Set(fileKeys.filter((_, i) => { const n = fileNumbers[i] ?? ""; return isExampleNumber(n) || always.has(n); }));
     const diff = proposeDiff(mode, fileKeys, enabled, blocked);
     if (!diff.adds.length && !diff.removes.length) return null;
+    const inFile = new Set(fileKeys);
+    const kept = mode === "replace" ? [...alwaysOn].filter((k) => !inFile.has(k)) : [];
     const now = this.clock();
     const id = hex(crypto.getRandomValues(new Uint8Array(16)));
     const csrf = hex(crypto.getRandomValues(new Uint8Array(16)));
     this.sql.exec("DELETE FROM allowlist_proposals WHERE expires_ms < ?", now - GONE_KEEP_MS);
     this.sql.exec(
-      "INSERT INTO allowlist_proposals(id,kind,created_ms,expires_ms,csrf,adds,removes,state,key_fp) VALUES(?,?,?,?,?,?,?,'pending',?)",
-      id, kind, now, now + PROPOSAL_TTL_MS, csrf, JSON.stringify(diff.adds), JSON.stringify(diff.removes), await hmacHex(key, "fingerprint"),
+      "INSERT INTO allowlist_proposals(id,kind,created_ms,expires_ms,csrf,adds,removes,kept,state,key_fp) VALUES(?,?,?,?,?,?,?,?,'pending',?)",
+      id, kind, now, now + PROPOSAL_TTL_MS, csrf, JSON.stringify(diff.adds), JSON.stringify(diff.removes), JSON.stringify(kept), await hmacHex(key, "fingerprint"),
     );
     this.log("allowlist_proposed", { request_id: id, detail: `kind=${kind} adds=${diff.adds.length} removes=${diff.removes.length}` });
     const url = `https://${this.env.APPROVE_HOST}/approve/import/${id}`;
@@ -1133,11 +1142,11 @@ export class Relay extends DurableObject<Env> {
 
   private proposal(id: string) {
     const r = this.sql.exec("SELECT * FROM allowlist_proposals WHERE id=?", id).toArray()[0] as
-      | { id: string; kind: string; created_ms: number; expires_ms: number; csrf: string; adds: string; removes: string; state: string; key_fp: string }
+      | { id: string; kind: string; created_ms: number; expires_ms: number; csrf: string; adds: string; removes: string; kept: string; state: string; key_fp: string }
       | undefined;
     if (!r) return null;
     const state = r.state === "pending" && this.clock() >= r.expires_ms ? "expired" : r.state;
-    return { ...r, state, addKeys: JSON.parse(r.adds) as string[], removeKeys: JSON.parse(r.removes) as string[] };
+    return { ...r, state, addKeys: JSON.parse(r.adds) as string[], removeKeys: JSON.parse(r.removes) as string[], keptKeys: JSON.parse(r.kept) as string[] };
   }
 
   /** GET /allowlist-request/<id> (bot token): state and counts only. */
@@ -1164,6 +1173,7 @@ export class Relay extends DurableObject<Env> {
     const body = `<h2>Allowlist change</h2><article data-card><p>${p.kind === "single" ? "The bot asked to switch on one person." : "From a contacts file the bot imported."} Nothing changes until you approve.</p>`
       + (n ? `<h3>Switch on (${n})</h3><ul id=adds>${who(p.addKeys)}</ul>` : "")
       + (m ? `<h3>Switch off (${m})</h3><ul id=removes>${who(p.removeKeys)}</ul>` : "")
+      + (p.keptKeys.length ? `<h3>Stays on (secret ALLOWLIST) (${p.keptKeys.length})</h3><ul id=kept>${who(p.keptKeys)}</ul>` : "")
       + `<p><small>ref ${id.slice(0, 8)} · state: ${esc(p.state)}</small></p>${form}</article>`;
     const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
     const html = renderShell({ nonce, css: HARBOR_CSS, leaves: leavesFor(req, true) + pickerFor(req, `/approve/import/${id}`, true), current: "approve", body, script: approveScript() });

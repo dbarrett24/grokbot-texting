@@ -314,7 +314,10 @@ const M = [
   ["setup_dry_names_listed_only", "scripts/setup-lib.mjs", "stale.filter((k) => listed.includes(k))", "stale"],
   // contacts page (spec: the 10 gate targets, each must kill)
   ["contacts_enabled_filter", "src/relay.ts", ' WHERE p.enabled=1").toArray() as unknown as (ContactRow', '").toArray() as unknown as (ContactRow'],
-  ["contacts_new_row_off", "src/relay.ts", "VALUES(?,0,0,0,?) ON CONFLICT(person_key) DO UPDATE SET gone_ms=NULL", "VALUES(?,1,0,0,?) ON CONFLICT(person_key) DO UPDATE SET gone_ms=NULL"],
+  ["contacts_new_row_off", "src/relay.ts", "VALUES(?,0,0,0,?) ON CONFLICT(person_key) DO UPDATE SET enabled=", "VALUES(?,1,0,0,?) ON CONFLICT(person_key) DO UPDATE SET enabled="],
+  ["gone_returns_off", "src/relay.ts", "enabled=CASE WHEN gone_ms IS NULL THEN enabled ELSE 0 END", "enabled=CASE WHEN gone_ms IS NULL THEN enabled ELSE enabled END"],
+  ["replace_keeps_allowlist_secret", "src/relay.ts", "(always.has(r[\"e164\"] as string) ? alwaysOn : enabled)", "(false ? alwaysOn : enabled)"],
+  ["proposal_page_kept", "src/relay.ts", "(p.keptKeys.length ? `", "(false ? `"],
   ["contacts_migration_once", "src/relay.ts", 'if (this.meta("contacts_prefs_v1") !== null) return;', ""],
   ["contacts_prefs_origin", "src/relay.ts", 'this.sameOrigin(req, false);\n    if ((req.headers.get("content-type") || "").split(";")[0]?.trim().toLowerCase() !== "application/json") throw new Refuse("contacts_must_be_json", 415);\n    let raw', 'if ((req.headers.get("content-type") || "").split(";")[0]?.trim().toLowerCase() !== "application/json") throw new Refuse("contacts_must_be_json", 415);\n    let raw'],
   ["contacts_csrf", "src/relay.ts", 'if (!row || row.email !== who.email.toLowerCase() || row.expires_ms <= this.clock()) throw new Refuse("bad_csrf", 403);', ""],

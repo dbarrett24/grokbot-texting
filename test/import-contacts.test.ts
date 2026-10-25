@@ -2,7 +2,9 @@
 // one-person add request (POST /allowlist-request). Numbers: UK +44 7700 900xxx (fiction range) for people who
 // may be switched on, 555-01xx for the example-number guard. All TEST-ONLY.
 import { describe, it, expect, beforeEach } from "vitest";
+import { runInDurableObject } from "cloudflare:test";
 import { harness, API, BASE, type Harness } from "./helpers";
+import type { Relay } from "../src/relay";
 import appleV3 from "./fixtures/apple-contacts-v3.vcf?raw";
 import appleV4 from "./fixtures/apple-contacts-v4.vcf?raw";
 import outlookCsv from "./fixtures/outlook-contacts.csv?raw";
@@ -35,6 +37,8 @@ async function decide(id: string, action: string, csrf?: string) {
     body: new URLSearchParams({ csrf: c, action }).toString(),
   });
 }
+const sql = (q: string, ...a: unknown[]) =>
+  runInDurableObject(h.relay, (_i: Relay, state: DurableObjectState) => state.storage.sql.exec(q, ...a).toArray());
 const noFullNumbers = (s: string) => { for (const n of [RILEY, SAM, ALEX, JO, "7700900"]) expect(s).not.toContain(n); };
 
 const VCF = "\uFEFFBEGIN:VCARD\r\nVERSION:3.0\r\nFN:Riley\r\n  Moore\r\nN:Moore;Riley;;;\r\nTEL;TYPE=CELL;TYPE=PREF:+44 7700 900142\r\nTEL;TYPE=\"work,voice\":+44 7700\r\n 900151\r\nTEL;TYPE=FAX:+44 7700 900199\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:2.1\r\nN:Ray;Alex\r\nTEL;CELL:+447700900161\r\nitem1.TEL:tel:+447700900142\r\nEND:VCARD\r\n";
@@ -164,6 +168,59 @@ describe("import → address book, allowlist only after confirmation", () => {
     await decide(d.proposal.id, "approve");
     expect(await sendable(JO)).toBe(false);
     expect(await sendable(ALEX)).toBe(true);
+  });
+  it("a number back inside the 30-day gone window returns OFF and needs a new approval", async () => {
+    const a = (await (await imp("c.csv", `Name,Mobile\nAlex Ray,${ALEX}\n`)).json()) as { proposal: { id: string } };
+    await decide(a.proposal.id, "approve");
+    expect(await sendable(ALEX)).toBe(true);
+    // Alex leaves every source; the next sync marks the pref row gone but keeps it (enabled=1) for 30 days
+    await sql("DELETE FROM contact_sources WHERE e164=?", ALEX);
+    await imp("j.csv", `Jo Lin,${JO}\n`, "none");
+    const gone = await sql("SELECT enabled, gone_ms FROM contact_prefs WHERE gone_ms IS NOT NULL");
+    expect(gone).toHaveLength(1);
+    expect(await sendable(ALEX)).toBe(false);
+    h.setNow(now + 86_400_000);
+    const back = (await (await imp("c.csv", `Alex Ray,${ALEX}\n`)).json()) as { proposal: { id: string; adds: number } | null };
+    expect(await sendable(ALEX)).toBe(false); // no silent re-enable
+    expect(back.proposal).toMatchObject({ adds: 1 });
+    expect(await sql("SELECT enabled FROM contact_prefs WHERE gone_ms IS NULL AND enabled=1")).toHaveLength(0);
+    if (!back.proposal) throw new Error("expected a proposal");
+    await decide(back.proposal.id, "approve");
+    expect(await sendable(ALEX)).toBe(true);
+  });
+  it("replace never proposes an ALLOWLIST-secret number for OFF; the page shows it staying on", async () => {
+    const a = (await (await imp("c.csv", `Name,Mobile\nAlex Ray,${ALEX}\nJo Lin,${JO}\n`)).json()) as { proposal: { id: string } };
+    await decide(a.proposal.id, "approve");
+    await h.setEnv({ ALLOWLIST: JSON.stringify({ [JO]: "Jo Lin" }) });
+    const d = (await (await imp("only.csv", `Name,Mobile\nAlex Ray,${ALEX}\nRiley Moore,${RILEY}\n`, "replace")).json()) as { proposal: { id: string; adds: number; removes: number } };
+    expect(d.proposal).toMatchObject({ adds: 1, removes: 0 });
+    const page = await proposalPage(d.proposal.id);
+    expect(page.html).toContain("Stays on (secret ALLOWLIST) (1)");
+    expect(page.html).toMatch(/<ul id=kept><li>Jo Lin · [^<]* · ends 0171<\/li><\/ul>/);
+    expect(page.html).not.toContain("Switch off");
+    expect(page.html).toContain("Approve these 1");
+    noFullNumbers(page.html);
+    await decide(d.proposal.id, "approve");
+    expect(await sendable(JO)).toBe(true);
+    expect(await sendable(RILEY)).toBe(true);
+  });
+  it("allowlist_proposals storage holds only number hashes, never raw numbers", async () => {
+    await imp("c.csv", `Name,Mobile\nAlex Ray,${ALEX}\nJo Lin,${JO}\n`);
+    const b = (await (await imp("c.csv", `Name,Mobile\nRiley Moore,${RILEY}\n`)).json()) as { proposal: { id: string } };
+    await decide(b.proposal.id, "approve");
+    await h.setEnv({ ALLOWLIST: JSON.stringify({ [RILEY]: "Riley Moore" }) });
+    await imp("s.csv", `Sam Lee,${SAM}\n`, "replace");
+    const rows = await sql("SELECT * FROM allowlist_proposals");
+    expect(rows.length).toBe(3);
+    const dump = JSON.stringify(rows);
+    noFullNumbers(dump);
+    expect(dump).not.toMatch(/\+\d{6,}/);
+    for (const r of rows) for (const col of ["adds", "removes", "kept"]) {
+      const keys = JSON.parse(r[col] as string) as string[];
+      for (const k of keys) expect(k).toMatch(/^[a-f0-9]{64}$/);
+    }
+    const last = rows[2]?.["kept"];
+    expect(typeof last === "string" ? (JSON.parse(last) as string[]) : null).toHaveLength(1);
   });
   it("allowlist none files nothing; example numbers are never proposed; needs the bot token", async () => {
     const n = (await (await imp("c.csv", `Alex Ray,${ALEX}\n`, "none")).json()) as { proposal: unknown };
