@@ -147,8 +147,10 @@ The Worker doesn't exist yet, so the **first** `secret put` asks: `There doesn't
 ```sh
 npx wrangler login                 # HUMAN STEP: browser sign-in to the NEW account, with your passkey
 npx wrangler whoami                # must show the new account
-bash scripts/setup-mac.sh keys     # makes the bot token (REQUEST_TOKEN) locally in .relay-local/, never shown
-bash scripts/setup-mac.sh secrets  # stores it on the Worker; you never type or see it
+bash scripts/setup-mac.sh keys        # makes the bot token (REQUEST_TOKEN) locally in .relay-local/, never shown
+bash scripts/setup-mac.sh copy-token  # puts it on the clipboard, not the screen
+npx wrangler -c .relay-local/wrangler.toml secret put REQUEST_TOKEN   # paste at the hidden prompt (this first put creates the placeholder Worker)
+bash scripts/setup-mac.sh clear-clipboard
 npx wrangler -c .relay-local/wrangler.toml secret put ACCESS_AUD           # AUD tag from 3.4
 npx wrangler -c .relay-local/wrangler.toml secret put APPROVER_EMAIL       # email from 2.1
 npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_USER         # from the app (1.6)
@@ -345,7 +347,7 @@ A typo in one of these (a word, `0` where it isn't allowed, a decimal, an out-of
 Any one of these stops texting:
 - **Fastest, no deploy:** Cloudflare dashboard, Workers & Pages, your Worker, Settings, Variables: set `DISABLED` to `1`. Then put `DISABLED = "1"` in wrangler.toml too, or the next deploy turns it back on.
 - `DISABLED = "1"` (everything) or `DIRECT_SEND = "0"` (direct sends only) in `.relay-local/wrangler.toml`, then `npx wrangler deploy -c .relay-local/wrangler.toml`.
-- `bash scripts/setup-mac.sh keys --new-token`, then `bash scripts/setup-mac.sh secrets`. The bot's token stops working at once.
+- `bash scripts/setup-mac.sh keys --new-token`, `copy-token`, paste at the hidden prompt of `npx wrangler -c .relay-local/wrangler.toml secret put REQUEST_TOKEN`, then `clear-clipboard`. The bot's token stops working at once.
 - **On the phone:** tap **Online** so it goes **Offline**, or turn off Cloud Server.
 
 **Rollback** after a bad deploy:
@@ -362,7 +364,7 @@ Rollback doesn't undo secrets or stored data.
 ## 14. Rotating secrets
 | What | How |
 |---|---|
-| Bot token | `bash scripts/setup-mac.sh keys --new-token`, then `bash scripts/setup-mac.sh secrets`, then `copy-token` into the bot's secret prompt and `clear-clipboard` |
+| Bot token | `bash scripts/setup-mac.sh keys --new-token`, `copy-token`, paste at the hidden prompt of `npx wrangler -c .relay-local/wrangler.toml secret put REQUEST_TOKEN`, then `clear-clipboard`; then `copy-token` again into the bot's secret prompt and `clear-clipboard` |
 | Gateway password | Regenerate it in the app's Cloud Server settings, then `npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_PASS` |
 | Passphrase (no device key only) | New `openssl rand -base64 32`. Set it in the app **and** with `npx wrangler -c .relay-local/wrangler.toml secret put GATEWAY_PASSPHRASE` right after. Texts fail until both match |
 | Log key | `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler -c .relay-local/wrangler.toml secret put LOG_HASH_KEY` (stored contacts are re-hashed on the next send) |

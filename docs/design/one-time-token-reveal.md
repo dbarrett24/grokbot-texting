@@ -4,7 +4,7 @@ Status: design only, not built. No build until Dave says go.
 
 Gap 9: in the target design there is no step where the owner generates `REQUEST_TOKEN` by hand and pastes it. Cloudflare generates the token, and an Access-protected page at `text.<domain>/token` shows it once, with a Copy button. A used flag locks the page after that one view; it can only be shown again after a rotate. This is design only: nothing is built until Dave says go.
 
-**Until it ships**, the template falls back to local keys plus copy-token: `setup-mac.sh keys` makes the token locally in `.relay-local/`, `secrets` stores it on the Worker, and `copy-token` puts it on the clipboard for the bot's secret prompt (then `clear-clipboard`). No doc tells the owner to make it by hand.
+**Until it ships**, the template falls back to local keys plus copy-token: `setup-mac.sh keys` makes the token locally in `.relay-local/`, and `copy-token` puts it on the clipboard for the hidden `secret put REQUEST_TOKEN` prompt and the bot's secret prompt (then `clear-clipboard`). No doc tells the owner to make it by hand.
 
 ## Goal
 Cloudflare (the Worker) generates the token and shows it to the owner exactly once on `text.<domain>/token`, so it never touches a terminal, the owner's computer, or shell history, and is never shown again until a rotate.
@@ -31,7 +31,7 @@ Cloudflare (the Worker) generates the token and shows it to the owner exactly on
 
 ## Expiry
 - The reveal offer is open for 15 minutes after the first page load that creates it; after that it must be started again (no token exists until reveal).
-- The revealed token does not expire on its own; it ends on Rotate, on a local-keys rotation (`keys --new-token`, then `secrets`) taking over, or on `DISABLED = "1"`.
+- The revealed token does not expire on its own; it ends on Rotate, on a local-keys rotation (`keys --new-token`, `copy-token`, `secret put REQUEST_TOKEN`) taking over, or on `DISABLED = "1"`.
 
 ## Tests
 - Reveal returns a 64-hex value once; a second `POST /token/reveal` is 409 and returns no value.
