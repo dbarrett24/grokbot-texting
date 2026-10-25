@@ -112,7 +112,7 @@ describe("pii-scan review fixes", () => {
     git(["checkout", "-q", "main"]);
     commit("m.md", "y\n");
     git(["merge", "-q", "--no-ff", "side", "-m", `merge from ${TERM}`], { GIT_AUTHOR_NAME: "A", GIT_AUTHOR_EMAIL: NOREPLY, GIT_COMMITTER_NAME: "C", GIT_COMMITTER_EMAIL: NOREPLY });
-    const r = scan({ PII_TERMS: TERM }, ["--range", `${base}..HEAD`]);
+    const r = scan({ PII_TERMS: TERM }, [`--range`, `${base}..HEAD`]);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("messages ");
   });
