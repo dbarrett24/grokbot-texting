@@ -4,8 +4,8 @@ import { approveLiveScript, logLiveScript } from "./pages-live";
 
 export type NavKey = "contacts" | "approve" | "direct" | "log";
 
-/** Placeholder. Swap either line: the address, or the visible text (emoji, then the words). */
-export const SUPPORT_URL = "https://example.com/drink";
+/** Support link. Swap either line: the address, or the visible text (emoji, then the words). */
+export const SUPPORT_URL = "https://dave-barrett.kit.com/products/buy-me-a-drink";
 export const SUPPORT_LABEL = "☕ Buy me a drink";
 
 // Lucide icons (users, check-check, send, list), 18px, stroke 2. Inline SVG with presentation attributes only, so the CSP is unchanged.

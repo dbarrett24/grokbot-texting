@@ -64,7 +64,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). The commands, endpoints, and send rules 
 
 ## Support
 
-[![☕ Buy me a drink](https://img.shields.io/badge/%E2%98%95%20Buy%20me%20a%20drink-12223a?style=flat)](https://example.com/drink)
+[![☕ Buy me a drink](https://img.shields.io/badge/%E2%98%95%20Buy%20me%20a%20drink-12223a?style=flat)](https://dave-barrett.kit.com/products/buy-me-a-drink)
 
 The Contacts, Approve, Direct, and Log pages include that link in the footer. The text is `SUPPORT_LABEL` and the address is `SUPPORT_URL`, both in `src/pages.ts`.
 
