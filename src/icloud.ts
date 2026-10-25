@@ -52,7 +52,7 @@ export const REPORT_CARDS = `<?xml version="1.0" encoding="utf-8"?><card:address
 // ---------- multistatus reading (no DOMParser in Workers; prefixes vary, so match local names) ----------
 const el = (name: string) => new RegExp(`<(?:[A-Za-z][\\w.-]*:)?${name}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[A-Za-z][\\w.-]*:)?${name}\\s*>`, "g");
 const unxml = (s: string) =>
-  s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d))).replace(/&#x([0-9a-f]+);/gi, (_, x) => String.fromCodePoint(parseInt(x, 16))).replace(/&amp;/g, "&");
+  s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d))).replace(/&#x([0-9a-f]+);/gi, (_, x: string) => String.fromCodePoint(parseInt(x, 16))).replace(/&amp;/g, "&");
 const first = (xml: string, name: string): string | null => {
   const m = el(name).exec(xml);
   return m ? (m[1] ?? "") : null;
