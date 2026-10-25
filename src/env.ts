@@ -38,6 +38,8 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string; // secret
   // GOOGLE_RT_<LABEL>: secret refresh token per account, read dynamically (e.g. GOOGLE_RT_PRIMARY)
   GOOGLE_TOKEN_KEY?: string; // secret: 32 random bytes (base64 or 64 hex; setup step keys makes it). Seals in-app Google sign-ins (AES-GCM) in the DO. Unset = in-app connect off; GOOGLE_* secrets still work
+  ICLOUD_APPLE_ID?: string; // secret: Apple ID email for iCloud CardDAV contact sync (read-only). Set with the setup card or `wrangler secret put ICLOUD_APPLE_ID`
+  ICLOUD_APP_PASSWORD?: string; // secret: app-specific password (appleid.apple.com). Never a var, never logged, never stored in the DO. Both set = sync on; one alone = icloud_secret_missing
   GOOGLE_TOKEN_KEY_OLD?: string; // secret, rotation only: the previous GOOGLE_TOKEN_KEY, accepted for decrypt; rows are re-sealed under the new key on next use
   LOG_HASH_KEY?: string; // secret, 32+ chars: HMAC key for number and body hashes. Missing = direct send refused (direct_config_invalid); tap log rows fall back to plain SHA-256
   LOG_ENC_KEY?: string; // secret, 32 bytes (64 hex or base64): AES-GCM key for the messages table (number and body). Never the same value as LOG_HASH_KEY. Missing = bodies are not stored and inbound capture refuses; outbound still sends and may keep last-4 only

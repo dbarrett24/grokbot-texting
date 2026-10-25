@@ -266,7 +266,7 @@ export function parseAccounts(raw: string | undefined): { valid: string[]; inval
     const t = part.trim();
     if (!t) continue;
     const label = t.toUpperCase();
-    if (!/^[A-Z0-9_]+$/.test(label) || label === UPLOAD_SOURCE || label.length > 32) invalid.push(t.replace(/[^A-Za-z0-9_]/g, "?").slice(0, 32));
+    if (!/^[A-Z0-9_]+$/.test(label) || label === UPLOAD_SOURCE || label === "ICLOUD" || label.length > 32) invalid.push(t.replace(/[^A-Za-z0-9_]/g, "?").slice(0, 32));
     else if (valid.includes(label)) invalid.push(label + "(repeat)");
     else valid.push(label);
   }

@@ -45,7 +45,9 @@ const M = [
   ["upload_unknown_fields", "src/direct.ts", 'if (Object.keys(o).some((k) => k !== "name" && k !== "given" && k !== "numbers")) bad("unknown_field");', ""],
   // contacts sync
   ["sync_empty_keeps_old", "src/relay.ts", 'if (!snap.rows.length) throw new Error("empty_result");', ""],
-  ["sync_name_precedence", "src/relay.ts", "const order = [...this.googleLabels(), UPLOAD_SOURCE, LEGACY_SOURCE];", "const order = [...this.googleLabels().reverse(), UPLOAD_SOURCE, LEGACY_SOURCE];"],
+  ["sync_name_precedence", "src/relay.ts", "const order = [...this.googleLabels(), ICLOUD_SOURCE, UPLOAD_SOURCE, LEGACY_SOURCE];", "const order = [...this.googleLabels().reverse(), ICLOUD_SOURCE, UPLOAD_SOURCE, LEGACY_SOURCE];"],
+  ["icloud_empty_keeps_old", "src/relay.ts", 'if (!snap.rows.length) throw new Error("icloud_empty_result");', ""],
+  ["icloud_foreign_host", "src/icloud.ts", 'if (u.protocol !== "https:" || !HOST_RE.test(u.hostname) || u.username || u.password) throw new Error("icloud_foreign_host");', ""],
   ["sync_missing_secret", "src/relay.ts", "if (!rt) {\n        failed.push", "if (false) {\n        failed.push"],
   ["sync_label_charset", "src/direct.ts", "if (!/^[A-Z0-9_]+$/.test(label) ||", "if ("],
   // review round
