@@ -270,13 +270,13 @@ Type or paste the value when Wrangler asks. Do not put it on the command line, i
 
 The first `secret put` can ask: `There doesn't seem to be a Worker called "sms-relay". Do you want to create a new Worker with that name and add secrets to it?` The quoted name is the `name` in your local file. Answer yes. Wrangler creates an empty placeholder Worker. Step 4's deploy replaces it. Later `secret put` commands do not ask again. (Seen in Wrangler 4.151.1, the version this repo installs.)
 
-Generate a value you must hand to the bot in your own terminal (`openssl rand -hex 32`), paste it into the hidden prompt, then close that terminal. Generate a value you never need to see (`LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`, `LOG_ENC_KEY`) the same way: `openssl rand -base64 32`, paste at the prompt, close the terminal. Do not pipe the value into `wrangler`. The one exception is Step 7.10: `node scripts/google-client.mjs --file=<client.json> --config=.relay-local/wrangler.toml` pipes the client id and secret on stdin and discards wrangler's output, so the secret is not printed. `--config=<path>` is required (there is no default Worker) and is passed to both secret puts. It deletes the JSON only after both secret puts succeed. If a put fails, the JSON stays, the script names the secret and how to retry, and it exits non-zero.
+The bot token (`REQUEST_TOKEN`) is never made by hand: `bash scripts/setup-mac.sh keys` makes it locally in `.relay-local/` and `secrets` stores it, unseen; Step 7.9 copies it with `copy-token`. Generate a value you never need to see (`LOG_HASH_KEY`, `GOOGLE_TOKEN_KEY`, `LOG_ENC_KEY`) the same way: `openssl rand -base64 32`, paste at the prompt, close the terminal. Do not pipe the value into `wrangler`. The one exception is Step 7.10: `node scripts/google-client.mjs --file=<client.json> --config=.relay-local/wrangler.toml` pipes the client id and secret on stdin and discards wrangler's output, so the secret is not printed. `--config=<path>` is required (there is no default Worker) and is passed to both secret puts. It deletes the JSON only after both secret puts succeed. If a put fails, the JSON stays, the script names the secret and how to retry, and it exits non-zero.
 
 Set these now. Gateway secrets wait until Step 7.2, because the values come from the phone.
 
 | Secret | What it is for |
 |---|---|
-| `REQUEST_TOKEN` | Bearer token the bot sends. `openssl rand -hex 32`. This becomes `SMS_RELAY_TOKEN` in Step 7.9. |
+| `REQUEST_TOKEN` | Bearer token the bot sends. Made locally by `setup-mac.sh keys`, not by hand. This becomes `SMS_RELAY_TOKEN` in Step 7.9. |
 | `ACCESS_AUD` | AUD tag from Step 1.4. |
 | `APPROVER_EMAIL` | The email from Step 1.2. The only identity allowed onto the private pages. |
 | `OWNER_NUMBER` | Your own number, `+` and country code, no spaces. Notice target when `NOTIFY_MODE` is `sms`. Also required when `GROUP_MMS = "1"`. Example shape: `+447700900123`. |
@@ -529,7 +529,7 @@ The bot does the same two calls, and it is the one that speaks the draft in Step
 
 ### Step 7.9 Hand the token to Grok Bot
 
-Give the bot the token from Step 3 only through its secret prompt, stored as `SMS_RELAY_TOKEN`. Tell it `https://<API_HOST>`. Close the terminal that showed the token.
+Run `bash scripts/setup-mac.sh copy-token`, paste only into the bot's secret prompt as `SMS_RELAY_TOKEN`, then run `bash scripts/setup-mac.sh clear-clipboard`. Tell it `https://<API_HOST>`.
 
 The bot's rules:
 
@@ -579,7 +579,7 @@ Any one of these stops texting:
 
 - Fastest, no deploy: Cloudflare dashboard, Workers & Pages, your Worker, Settings, Variables, set `DISABLED` to `1`. Then set `DISABLED = "1"` in `.relay-local/wrangler.toml` too, or the next deploy turns it back on.
 - `DISABLED = "1"` (everything) or `DIRECT_SEND = "0"` (direct sends only) in the local file, then `npx wrangler deploy -c .relay-local/wrangler.toml`.
-- `npx wrangler -c .relay-local/wrangler.toml secret put REQUEST_TOKEN` with a new value, typed at the prompt. The bot's old token stops at once. Update `SMS_RELAY_TOKEN` the same way, through the bot's secret prompt.
+- `bash scripts/setup-mac.sh keys --new-token`, then `bash scripts/setup-mac.sh secrets`. The bot's old token stops at once. Update `SMS_RELAY_TOKEN` with `copy-token` into the bot's secret prompt, then `clear-clipboard`.
 - On the phone: tap Online so it goes Offline, or turn off Cloud Server.
 
 Roll back a bad deploy. `-c` must be the file whose `name` you deployed:
