@@ -344,11 +344,14 @@ describe("key rotation and deletes", () => {
     expect(await sendable(RILEY)).toBe(false);
     await setPref({ key: await keyOf("Riley Moore"), enabled: true });
     expect(await sendable(RILEY)).toBe(true);
+    const rileyKey = await keyOf("Riley Moore");
     await upload(without);
     await sendable(SAM);
+    expect(await one("SELECT gone_ms FROM contact_prefs WHERE person_key=? AND gone_ms IS NOT NULL", rileyKey)).toBeDefined();
     h.setNow(Date.parse("2026-12-15T12:00:00-06:00"));
     await upload(snap(BASE_SNAP.contacts.slice(2)));
     await sendable(ALEX); // runs the pref pass (purges rows gone > 30 days)
+    expect(await one("SELECT 1 FROM contact_prefs WHERE person_key=?", rileyKey)).toBeUndefined(); // purged, not kept
     await upload();
     expect(await sendable(RILEY)).toBe(false);
   });
