@@ -1,0 +1,5 @@
+# Format for .pii-terms (gitignored) or the PII_TERMS secret. One term per line, or comma-separated. Lines starting # are ignored.
+# FAKE entries only. Real terms never go in the repo.
+example-owner-surname
+fake-family-name
+owner-house.example.invalid

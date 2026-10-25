@@ -2,7 +2,7 @@
 # Blocking: npm ci, both tsc configs (`npm run typecheck`), `npm test`, gitleaks, `npm run check:ancestors`.
 # Advisory (continue-on-error, so in-flight branches aren't blocked): lint + lint ratchet, strict-next and .mjs
 # typecheck ratchets, env/doc drift. They become blocking in a later PR, once the contacts work has merged.
-# Personal-data scan: blocking. PII_TERMS comes from the repo secret; PII_REQUIRED=1 fails the step if it is missing
+# Personal-data scan: blocking. PII_TERMS comes from the repo secret; PII_REQUIRE_TERMS=1 fails the step if it is missing
 # (so fork and Dependabot PRs, which get no secrets, fail this step by design; none are expected on this repo).
 # Mutation: nightly, on manual dispatch, or when a PR has the `mutation` label. No deploy, no Cloudflare secrets.
 name: ci
@@ -61,7 +61,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           PII_TERMS: ${{ secrets.PII_TERMS }}
-          PII_REQUIRED: "1"
+          PII_REQUIRE_TERMS: "1"
         run: node scripts/ci/pii-scan.mjs --range "origin/${{ github.base_ref }}..HEAD"
   mutation:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'mutation'))

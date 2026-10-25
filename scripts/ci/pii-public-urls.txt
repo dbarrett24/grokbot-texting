@@ -1,0 +1,4 @@
+# Public links and the required noreply commit email the owner chose to ship. pii-scan removes exact matches before the term scan, and skips this file.
+https://dave-barrett.kit.com/products/buy-me-a-drink
+https://github.com/dbarrett24/
+24259143+dbarrett24@users.noreply.github.com

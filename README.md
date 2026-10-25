@@ -72,6 +72,8 @@ If you see `icloud_auth_failed`, make a new app-specific password and set it aga
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The commands, endpoints, and send rules are in [SETTINGS.md](SETTINGS.md).
 
+**Personal-data scan.** `npm run check:pii` (also run by the pre-push hook and CI) reads its term list from `PII_TERMS` (comma or newline list; the CI secret), `PII_TERMS_FILE`, or a gitignored `.pii-terms` at the repo root. The format is in `scripts/ci/pii-terms.example` (fake entries). Real terms are never committed or printed; a hit shows only the first 2 characters plus `***`. With no list, CI fails closed (`PII_REQUIRE_TERMS=1`); a local run prints a loud WARNING and checks only phone numbers and commit emails. A push with an `@gmail.com` author or committer email is rejected: use your `users.noreply.github.com` address.
+
 ## Support
 
 [![☕ Buy me a drink](https://img.shields.io/badge/%E2%98%95%20Buy%20me%20a%20drink-12223a?style=flat)](https://dave-barrett.kit.com/products/buy-me-a-drink)

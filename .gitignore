@@ -7,3 +7,5 @@ node_modules
 .relay-*/
 walk.local.toml
 .walk-state-*/
+# Local personal-data term list (scripts/ci/pii-terms.example)
+.pii-terms

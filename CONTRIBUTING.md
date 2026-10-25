@@ -7,8 +7,8 @@
 5. Run `npm run verify`, and `npm run mutation` if you touched `src/`, `mac/` or `scripts/`.
 6. Open the PR with the **prove-it-works** evidence from `AGENTS.md` pasted in the body.
 
-Setup: `npm ci` (Node 20+). For the PII scan locally, set `PII_TERMS_FILE` to a term list kept **outside** the repo
-(ask the maintainer); without it the term scan is skipped and only the phone-number scan runs.
+Setup: `npm ci` (Node 20+). For the PII scan locally, put the term list in a gitignored `.pii-terms` (format: `scripts/ci/pii-terms.example`),
+or set `PII_TERMS` / `PII_TERMS_FILE` (ask the maintainer). Without it the scan prints a WARNING and checks only phone numbers and commit emails; CI fails closed.
 For agents, the verification skill is `.agents/skills/verify-sms-relay/SKILL.md`.
 
 ## Local contacts walk (`npm run walk`)

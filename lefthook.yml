@@ -28,5 +28,6 @@ pre-push:
       run: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR npm run --silent typecheck
     5_tests:
       run: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR npm test --silent
+    # pii-scan loads .pii-terms (gitignored) or PII_TERMS, and rejects @gmail.com authors/committers in the pushed range.
     6_ancestors-pii:
       run: env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR sh -c 'npm run --silent check:ancestors && node scripts/ci/pii-scan.mjs --range origin/main..HEAD'

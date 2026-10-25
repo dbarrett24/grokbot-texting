@@ -110,6 +110,8 @@ Every test passes and the typecheck is clean before you deploy. Later upgrades, 
 
 Optional helpers `scripts/setup-mac.sh` and `scripts/setup-windows.ps1` run the computer steps one at a time (DEPLOY.md). This guide is the commands themselves. It does not write secrets to disk.
 
+If you change the code: the pre-push hook runs the personal-data scan. Put your own names, emails and hostnames in a gitignored `.pii-terms` file (format: `scripts/ci/pii-terms.example`) or set `PII_TERMS`. Without one it warns loudly and goes on; CI fails closed with `PII_REQUIRE_TERMS=1`. Commit with your `users.noreply.github.com` email: `@gmail.com` authors and committers are rejected.
+
 <a id="step-2"></a>
 
 ## Step 2. Build the local wrangler config
