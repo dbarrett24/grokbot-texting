@@ -42,6 +42,9 @@ describe("pii-scan term list", () => {
     expect(r.status).toBe(0);
     expect(r.stderr).toContain("WARNING: pii-scan has NO TERM LIST");
     expect(r.stderr.split("\n").length).toBeGreaterThan(4);
+    expect(r.stderr).toContain(`Missing file: ${join(dir, ".pii-terms")}`);
+    expect(r.stderr).toContain("cp scripts/ci/pii-terms.example .pii-terms");
+    expect(r.stderr).toContain("PII_TERMS");
   });
   it.each(["PII_REQUIRE_TERMS", "PII_REQUIRED"])("no list with %s=1: fails closed", (k) => {
     const r = scan({ [k]: "1" });
@@ -84,5 +87,10 @@ describe("pii-scan pushed-range emails", () => {
     const r = scan({ PII_TERMS: "zz-unused" }, range());
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("committer email");
+  });
+  it("gmail rule has no env bypass", () => {
+    commit("c.md", "x\n", "someone@gmail.com");
+    const r = scan({ PII_TERMS: "zz-unused", PII_REQUIRE_TERMS: "0", PII_REQUIRED: "0", PII_ALLOW_GMAIL: "1" }, range());
+    expect(r.status).toBe(1);
   });
 });

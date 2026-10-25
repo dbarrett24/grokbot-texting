@@ -8,7 +8,7 @@
 // and rejects any author or committer email ending in @gmail.com (use your users.noreply.github.com address).
 // Any +1 number outside the fictional 555-01xx range fails, with or without terms.
 // Hits print a redacted match (first 2 characters + ***), never the term.
-// No term list: PII_REQUIRE_TERMS=1 (CI; PII_REQUIRED=1 still works) fails closed; otherwise a loud WARNING and go on.
+// The @gmail.com email rule has no bypass. No term list: PII_REQUIRE_TERMS=1 (CI; PII_REQUIRED=1 still works) fails closed; otherwise a loud WARNING and go on.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -50,10 +50,13 @@ if (!terms.length) {
   console.error([
     "",
     "**************************************************************",
-    "* WARNING: pii-scan has NO TERM LIST. Names, emails and hosts *",
-    "* are NOT being checked. Only phone numbers and gmail authors. *",
-    "* Fix: put terms in .pii-terms (gitignored) or set PII_TERMS.  *",
-    "* Format: scripts/ci/pii-terms.example. CI fails closed.       *",
+    "* WARNING: pii-scan has NO TERM LIST. Names, emails and hosts",
+    "* are NOT being checked. Only phone numbers and gmail authors.",
+    `* Missing file: ${localFile}`,
+    "* Setup: cp scripts/ci/pii-terms.example .pii-terms, then",
+    "*        replace the fake lines with the real terms (gitignored),",
+    "*        or set PII_TERMS (comma or newline list).",
+    "* CI fails closed (PII_REQUIRE_TERMS=1).",
     "**************************************************************",
     "",
   ].join("\n"));
