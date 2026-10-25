@@ -71,7 +71,7 @@ describe("iCloud CardDAV sync", () => {
       { account: "ICLOUD", name: "Coach Cy", e164: "+15555550123", label: "iphone" },
     ]);
     expect(dav.seen.map((s) => s.method)).toEqual(["PROPFIND", "PROPFIND", "PROPFIND", "REPORT", "REPORT"]); // never PUT/DELETE
-    expect((await sql("SELECT detail FROM log WHERE event='contacts_sync'"))[0]?.detail).toBe("account=ICLOUD contacts=3 numbers=3 dropped_fax_pager=1");
+    expect((await sql("SELECT detail FROM log WHERE event='contacts_sync'"))[0]?.["detail"]).toBe("account=ICLOUD contacts=3 numbers=3 dropped_fax_pager=1");
   });
 
   it("does not widen who can be texted: synced numbers stay OFF until the owner turns them on", async () => {
@@ -79,7 +79,7 @@ describe("iCloud CardDAV sync", () => {
     await h.relay.fetch(`${BASE}/contacts/list`, { headers: { "Cf-Access-Jwt-Assertion": await h.jwt() } });
     const prefs = await sql("SELECT enabled FROM contact_prefs");
     expect(prefs.length).toBeGreaterThan(0);
-    expect(prefs.every((p) => p.enabled === 0)).toBe(true);
+    expect(prefs.every((p) => p["enabled"] === 0)).toBe(true);
     const res = await h.relay.fetch(`${API}/send`, { method: "POST", headers: { Authorization: "Bearer TEST-ONLY-request-token" }, body: JSON.stringify({ to_name: "Ann Lee", body: "hi" }) });
     const j = await res.json() as { state: string };
     expect(j.state).not.toBe("sent");
@@ -118,14 +118,14 @@ describe("iCloud CardDAV sync", () => {
     dav.status = 503;
     const r = await sync();
     expect(r.failed).toEqual([{ account: "ICLOUD", reason: "icloud_principal_status_503" }]);
-    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.c).toBe(3);
+    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.["c"]).toBe(3);
   });
 
   it("an empty address book keeps the previous list", async () => {
     await sync();
     dav.cards = [[], []];
     expect((await sync()).failed).toEqual([{ account: "ICLOUD", reason: "icloud_empty_result" }]);
-    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.c).toBe(3);
+    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.["c"]).toBe(3);
   });
 
   it("wrong password = icloud_auth_failed; one secret alone = icloud_secret_missing; removing both purges the list", async () => {
@@ -134,10 +134,10 @@ describe("iCloud CardDAV sync", () => {
     expect((await sync()).failed).toEqual([{ account: "ICLOUD", reason: "icloud_auth_failed" }]);
     await h.setEnv({ ICLOUD_APP_PASSWORD: "" });
     expect((await sync()).failed).toEqual([{ account: "ICLOUD", reason: "icloud_secret_missing" }]);
-    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.c).toBe(3);
+    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.["c"]).toBe(3);
     await h.setEnv({ ICLOUD_APPLE_ID: "" });
     expect(await sync()).toEqual({ updated: [], failed: [] });
-    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.c).toBe(0);
+    expect((await sql("SELECT COUNT(*) AS c FROM contact_sources WHERE account='ICLOUD'"))[0]?.["c"]).toBe(0);
   });
 
   it("refuses to follow an href off iCloud's contacts hosts", () => {
