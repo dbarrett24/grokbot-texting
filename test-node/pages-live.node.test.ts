@@ -274,7 +274,9 @@ describe("template flags", () => {
     const pages = readFileSync(new URL("../src/pages.ts", import.meta.url), "utf8");
     const url = /export const SUPPORT_URL = "([^"]+)"/.exec(pages)?.[1] ?? "";
     const label = /export const SUPPORT_LABEL = "([^"]+)"/.exec(pages)?.[1] ?? "";
-    expect(url.startsWith("https://example.com/")).toBe(true);
+    expect(url).toBe("https://dave-barrett.kit.com/products/buy-me-a-drink");
+    expect(pages).not.toContain("example.com");
+    expect(readme).not.toMatch(/example\.com\/drink/);
     expect(label).toBe("☕ Buy me a drink");
     expect(pages).toContain('href="${esc(SUPPORT_URL)}" rel="noopener noreferrer"');
     expect(pages).toContain("SUPPORT_LABEL.slice(gap + 1)");

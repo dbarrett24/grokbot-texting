@@ -181,6 +181,8 @@ describe("Approve, Direct and Log pages", () => {
       expect(r.status).toBe(200);
       const html = await r.text();
       expect(SUPPORT_LABEL).toBe("☕ Buy me a drink");
+      expect(html).toContain('<a class=support href="https://dave-barrett.kit.com/products/buy-me-a-drink"');
+      expect(html).not.toContain("example.com");
       expect(html).toContain(`<h1 class=product>GrokBot Texting</h1><a class=support href="${SUPPORT_URL}" rel="noopener noreferrer"><span aria-hidden=true>☕</span><span>${SUPPORT_LABEL.slice(SUPPORT_LABEL.indexOf(" ") + 1)}</span></a></header>`);
       expect(html.match(/Buy me a drink/g)).toEqual(["Buy me a drink"]);
       expect(html).not.toContain("img.shields.io");
