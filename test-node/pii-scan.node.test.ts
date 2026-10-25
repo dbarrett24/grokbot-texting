@@ -122,6 +122,14 @@ describe("pii-scan review fixes", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("authors ");
   });
+  it("only the pushed range is checked: a term-named author or message before it does not fail", () => {
+    commit("old.md", "x\n", "someone@gmail.com", "someone@gmail.com", TERM, TERM);
+    git(["commit", "-q", "--amend", "-m", `old work by ${TERM}`], { GIT_AUTHOR_NAME: TERM, GIT_AUTHOR_EMAIL: "someone@gmail.com", GIT_COMMITTER_NAME: TERM, GIT_COMMITTER_EMAIL: "someone@gmail.com" });
+    commit("new.md", "y\n");
+    const r = scan({ PII_TERMS: TERM }, range());
+    expect(r.status).toBe(0);
+    expect(scan({ PII_TERMS: TERM }, [`--range`, `${git(["rev-parse", "HEAD~2"])}..HEAD`]).status).toBe(1);
+  });
   describe("allowed public strings", () => {
     const PUB = "https://example.invalid/owner/";
     beforeEach(() => commit("scripts-pub.md", "")); // placeholder so HEAD~1 exists in every case
