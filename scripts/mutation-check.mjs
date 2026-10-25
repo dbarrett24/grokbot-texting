@@ -48,6 +48,7 @@ const M = [
   ["sync_name_precedence", "src/relay.ts", "const order = [...this.googleLabels(), ICLOUD_SOURCE, ...this.msLabels().map(msSource), UPLOAD_SOURCE, LEGACY_SOURCE];", "const order = [...this.googleLabels().reverse(), ICLOUD_SOURCE, ...this.msLabels().map(msSource), UPLOAD_SOURCE, LEGACY_SOURCE];"],
   ["icloud_empty_keeps_old", "src/relay.ts", 'if (!snap.rows.length) throw new Error("icloud_empty_result");', ""],
   ["icloud_foreign_host", "src/icloud.ts", 'if (u.protocol !== "https:" || !HOST_RE.test(u.hostname) || u.username || u.password) throw new Error("icloud_foreign_host");', ""],
+  ["outlook_own_token_key", "src/relay.ts", "cur: await importTokenKey(this.env.MS_TOKEN_KEY), old", "cur: await importTokenKey(this.env.GOOGLE_TOKEN_KEY), old"],
   ["outlook_scope_exact", "src/relay.ts", "if (!msScopeIsExact(tok.scope)) {", "if (false) {"],
   ["sync_missing_secret", "src/relay.ts", "if (!rt) {\n        failed.push", "if (false) {\n        failed.push"],
   ["sync_label_charset", "src/direct.ts", "if (!/^[A-Z0-9_]+$/.test(label) ||", "if ("],

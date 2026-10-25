@@ -306,6 +306,9 @@ Set only the ones that match your setup. Same hidden prompt. Same `-c` flag.
 | `GATEWAY_PINNED_FINGERPRINT` | Device-key mode only. Stored by `confirm-fingerprint`, not typed. |
 | `GATEWAY_KEY_VERSION` | Device-key mode only. Stored with the fingerprint. |
 | `GOOGLE_TOKEN_KEY_OLD` | Only while rotating `GOOGLE_TOKEN_KEY`. DEPLOY.md section 14. |
+| `MS_TOKEN_KEY` | Only for Outlook contacts (README). 32 random bytes, made like `GOOGLE_TOKEN_KEY`. Seals Outlook sign-ins; separate from the Google key. |
+| `MS_TOKEN_KEY_OLD` | Only while rotating `MS_TOKEN_KEY`. DEPLOY.md section 14. |
+| `MS_CLIENT_ID`, `MS_CLIENT_SECRET` | Only for Outlook contacts: your Microsoft Entra app (README). |
 | `GOOGLE_CLIENT_ID` | Set by `node scripts/google-client.mjs` in Step 7.10. Not pasted on the page. |
 | `GOOGLE_CLIENT_SECRET` | Set by the same script, with `GOOGLE_CLIENT_ID`. |
 | `GOOGLE_RT_<LABEL>` | Legacy refresh token, one secret per label in `GOOGLE_ACCOUNTS`. |

@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { API, BASE, harness, type Harness } from "./helpers";
 import { inRelay, must, sql as sqlOf } from "./google-fixture";
 import { graphToContacts, msScopeIsExact, parseMsAccounts, safeNextLink } from "../src/outlook";
-import { isLabel } from "../src/google";
+import { GOOGLE_SCOPE, aadFor, importTokenKey, isLabel, open, seal } from "../src/google";
+import { msAad } from "../src/outlook";
 
 // All values are TEST-ONLY; numbers are in the fictional 555-01xx range, addresses on example.test.
 const KEY = "cd".repeat(32);
@@ -14,6 +15,9 @@ const RT1 = "TEST-ONLY-ms-rt-first";
 const RT2 = "TEST-ONLY-ms-rt-rotated";
 const AT = "TEST-ONLY-ms-access-token";
 const CB = `${BASE}/contacts/outlook/callback`;
+const KEY_G = "ef".repeat(32);
+const KEY_NEW = "a1".repeat(32);
+const G_RT = "TEST-ONLY-google-rt";
 const GRAPH_SCOPE = "https://graph.microsoft.com/Contacts.Read";
 
 type Fake = { tokenCalls: URLSearchParams[]; graphAuth: (string | null)[]; tokenReply: { status: number; body: Record<string, unknown> }; graphStatus: number; pages: Record<string, unknown>[] };
@@ -62,7 +66,7 @@ beforeEach(async () => {
       return base(req);
     };
   });
-  await h.setEnv({ GOOGLE_ACCOUNTS: "", GOOGLE_TOKEN_KEY: KEY, LOG_HASH_KEY: "TEST-ONLY-log-hash-key-not-a-real-secret", MS_CLIENT_ID: CLIENT_ID, MS_CLIENT_SECRET: CLIENT_SECRET, DIRECT_SEND: "1" });
+  await h.setEnv({ GOOGLE_ACCOUNTS: "", GOOGLE_TOKEN_KEY: KEY_G, MS_TOKEN_KEY: KEY, LOG_HASH_KEY: "TEST-ONLY-log-hash-key-not-a-real-secret", MS_CLIENT_ID: CLIENT_ID, MS_CLIENT_SECRET: CLIENT_SECRET, DIRECT_SEND: "1" });
 });
 
 describe("Outlook sign-in", () => {
@@ -195,5 +199,52 @@ describe("Outlook helpers", () => {
   it("labels: OUTLOOK_ is reserved for Google labels; MS_ACCOUNTS parses like GOOGLE_ACCOUNTS", () => {
     expect(isLabel("OUTLOOK_WORK")).toBe(false);
     expect(parseMsAccounts("work, home,bad-label")).toEqual({ valid: ["WORK", "HOME"], invalid: ["bad?label"] });
+  });
+});
+
+describe("MS_TOKEN_KEY is Outlook's own key", () => {
+  const refusal = async (f: () => Promise<unknown>) => { try { await f(); return "opened"; } catch (e) { return e instanceof Error ? e.message : String(e); } };
+
+  it("seal/open: an Outlook token sealed with MS_TOKEN_KEY can't be opened with GOOGLE_TOKEN_KEY, and vice versa", async () => {
+    const msK = must(await importTokenKey(KEY));
+    const gK = must(await importTokenKey(KEY_G));
+    const msSealed = await seal(msK, RT1, msAad("WORK"));
+    const gSealed = await seal(gK, G_RT, aadFor("rt", "WORK"));
+    expect(await refusal(() => open([gK, null], msSealed, msAad("WORK")))).toBe("google_token_key_missing");
+    expect(await refusal(() => open([msK, null], gSealed, aadFor("rt", "WORK")))).toBe("google_token_key_missing");
+    expect((await open([msK, null], msSealed, msAad("WORK"))).plaintext).toBe(RT1);
+    // even the same key bytes can't move a token between providers: the AAD differs
+    expect(await refusal(() => open([msK, null], { ...msSealed }, aadFor("rt", "WORK")))).toBe("google_token_decrypt_failed");
+  });
+
+  it("relay: an Outlook sign-in fails closed when only GOOGLE_TOKEN_KEY holds its key", async () => {
+    await connect();
+    await h.setEnv({ GOOGLE_TOKEN_KEY: KEY, MS_TOKEN_KEY: KEY_NEW });
+    expect((await sync()).failed).toEqual([{ account: "OUTLOOK_WORK", reason: "outlook_token_key_missing" }]);
+    await h.setEnv({ MS_TOKEN_KEY: "" });
+    const r = await post("/contacts/outlook/start", { csrf: await pageCsrf(), label: "home" });
+    expect(where(r).searchParams.get("outlook_error")).toBe("outlook_token_key_missing");
+  });
+
+  it("relay: a Google sign-in can't be opened with MS_TOKEN_KEY", async () => {
+    await inRelay(h, (relay) => relay.saveGoogleAccount("WORK", G_RT, GOOGLE_SCOPE, "someone@example.test"));
+    await h.setEnv({ GOOGLE_TOKEN_KEY: KEY_NEW, MS_TOKEN_KEY: KEY_G });
+    expect(await refusal(() => inRelay(h, (relay) => relay.googleRefreshToken("WORK")))).toContain("google_token_key_missing");
+  });
+
+  it("rotation: MS_TOKEN_KEY_OLD still opens old rows, which are re-sealed under the new MS_TOKEN_KEY", async () => {
+    await connect();
+    const oldKid = (await sql("SELECT key_ver FROM ms_accounts"))[0]?.["key_ver"];
+    await h.setEnv({ MS_TOKEN_KEY: KEY_NEW, MS_TOKEN_KEY_OLD: KEY });
+    expect(await sync()).toEqual({ updated: ["OUTLOOK_WORK"], failed: [] });
+    const row = must((await sql("SELECT * FROM ms_accounts"))[0]);
+    expect(row["key_ver"]).not.toBe(oldKid);
+    expect(row["key_ver"]).toBe(must(await importTokenKey(KEY_NEW)).kid);
+    expect(JSON.stringify(row)).not.toContain(RT1);
+    await h.setEnv({ MS_TOKEN_KEY_OLD: "" });
+    expect(await sync()).toEqual({ updated: ["OUTLOOK_WORK"], failed: [] });
+    // GOOGLE_TOKEN_KEY_OLD is not an Outlook rotation key
+    await h.setEnv({ MS_TOKEN_KEY: KEY, GOOGLE_TOKEN_KEY_OLD: KEY_NEW });
+    expect((await sync()).failed).toEqual([{ account: "OUTLOOK_WORK", reason: "outlook_token_key_missing" }]);
   });
 });

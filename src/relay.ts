@@ -114,6 +114,12 @@ async function jsonOr(r: Response, code: string): Promise<any> {
   }
 }
 
+/** Key errors from the shared seal/open helpers, renamed for Outlook (google_token_key_missing → outlook_token_key_missing). */
+function msKeyErr(e: unknown): unknown {
+  const m = e instanceof Error ? e.message : "";
+  return /^google_token_(key_missing|key_invalid|decrypt_failed)$/.test(m) ? new Refuse(m.replace(/^google_/, "outlook_"), 503) : e;
+}
+
 export class Relay extends DurableObject<Env> {
   /** Outbound network. Tests replace this; production uses global fetch. */
   net: Net = (r) => fetch(r);
@@ -168,7 +174,7 @@ export class Relay extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_accounts(label TEXT PRIMARY KEY, email TEXT, rt_ct TEXT NOT NULL, rt_iv TEXT NOT NULL, scope TEXT NOT NULL, connected_ms INTEGER NOT NULL, key_ver TEXT NOT NULL)`);
     // One row per sign-in in flight: single use, 10 minutes, bound to the Access identity that started it.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS google_oauth_state(state TEXT PRIMARY KEY, label TEXT NOT NULL, verifier TEXT NOT NULL, email TEXT NOT NULL, expires_ms INTEGER NOT NULL)`);
-    // Outlook connect (src/outlook.ts): same shape as google_accounts / google_oauth_state, sealed under GOOGLE_TOKEN_KEY.
+    // Outlook connect (src/outlook.ts): same shape as google_accounts / google_oauth_state, sealed under its own MS_TOKEN_KEY.
     this.sql.exec(`CREATE TABLE IF NOT EXISTS ms_accounts(label TEXT PRIMARY KEY, rt_ct TEXT NOT NULL, rt_iv TEXT NOT NULL, scope TEXT NOT NULL, connected_ms INTEGER NOT NULL, key_ver TEXT NOT NULL)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS ms_oauth_state(state TEXT PRIMARY KEY, label TEXT NOT NULL, verifier TEXT NOT NULL, email TEXT NOT NULL, expires_ms INTEGER NOT NULL)`);
     // Retired paste-form client. The table stays so an old row can be deleted; nothing writes it.
@@ -1226,6 +1232,20 @@ export class Relay extends DurableObject<Env> {
     return cur;
   }
 
+  /** Outlook's own MS_TOKEN_KEY, then MS_TOKEN_KEY_OLD (decrypt only, rotation). Never GOOGLE_TOKEN_KEY: one provider's key can't open the other's tokens. */
+  private async msTokenKeys(): Promise<{ cur: TokenKey | null; old: TokenKey | null }> {
+    try {
+      return { cur: await importTokenKey(this.env.MS_TOKEN_KEY), old: await importTokenKey(this.env.MS_TOKEN_KEY_OLD) };
+    } catch (e) {
+      throw msKeyErr(e);
+    }
+  }
+  private async requireMsTokenKey(): Promise<TokenKey> {
+    const { cur } = await this.msTokenKeys();
+    if (!cur) throw new Refuse("outlook_token_key_missing", 503);
+    return cur;
+  }
+
   /** Account order: GOOGLE_ACCOUNTS (legacy seed, first wins name conflicts), then in-app connected labels by connect time. */
   googleLabels(): string[] {
     const stored = this.sql.exec("SELECT label FROM google_accounts ORDER BY connected_ms, label").toArray().flatMap((r) => (typeof r["label"] === "string" ? [r["label"]] : []));
@@ -1467,8 +1487,14 @@ export class Relay extends DurableObject<Env> {
     const raw = this.sql.exec("SELECT * FROM ms_accounts WHERE label=?", label).toArray()[0];
     if (raw) {
       const row = decodeMsAccountRow(raw);
-      const { cur, old } = await this.tokenKeys();
-      const { plaintext, kid } = await open([cur, old], { ct: row.rt_ct, iv: row.rt_iv, kid: row.key_ver }, msAad(row.label));
+      const { cur, old } = await this.msTokenKeys();
+      let opened: { plaintext: string; kid: string };
+      try {
+        opened = await open([cur, old], { ct: row.rt_ct, iv: row.rt_iv, kid: row.key_ver }, msAad(row.label));
+      } catch (e) {
+        throw msKeyErr(e);
+      }
+      const { plaintext, kid } = opened;
       if (cur && kid !== cur.kid) await this.saveMsAccount(row.label, plaintext, row.scope, row.connected_ms);
       return plaintext;
     }
@@ -1477,7 +1503,7 @@ export class Relay extends DurableObject<Env> {
   async saveMsAccount(label: string, refreshToken: string, scope: string, connectedMs = this.clock()): Promise<void> {
     if (!isMsLabel(label)) throw new Refuse("outlook_label_invalid");
     if (!refreshToken) throw new Refuse("outlook_no_refresh_token");
-    const k = await this.requireTokenKey();
+    const k = await this.requireMsTokenKey();
     const s = await seal(k, refreshToken, msAad(label));
     this.sql.exec("INSERT OR REPLACE INTO ms_accounts(label, rt_ct, rt_iv, scope, connected_ms, key_ver) VALUES(?,?,?,?,?,?)", label, s.ct, s.iv, scope, connectedMs, s.kid);
   }
@@ -1494,7 +1520,7 @@ export class Relay extends DurableObject<Env> {
     let label: string;
     try {
       label = parseMsLabelInput(form.get("label"));
-      await this.requireTokenKey();
+      await this.requireMsTokenKey();
     } catch (e) {
       return this.toContactsMs({ outlook_error: e instanceof Refuse ? e.code : errCode(e) });
     }
@@ -1579,7 +1605,7 @@ export class Relay extends DurableObject<Env> {
   private async msPanel(): Promise<MsPanel> {
     let tokenKey: MsPanel["tokenKey"] = "missing";
     try {
-      tokenKey = (await importTokenKey(this.env.GOOGLE_TOKEN_KEY)) ? "ok" : "missing";
+      tokenKey = (await importTokenKey(this.env.MS_TOKEN_KEY)) ? "ok" : "missing";
     } catch {
       tokenKey = "invalid";
     }

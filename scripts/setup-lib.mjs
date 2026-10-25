@@ -74,6 +74,7 @@ const GENERATORS = {
   REQUEST_TOKEN: () => randomBytes(32).toString("hex"),
   LOG_HASH_KEY: () => randomBytes(32).toString("base64"),
   GOOGLE_TOKEN_KEY: () => randomBytes(32).toString("base64"), // seals in-app Google tokens (src/google.ts)
+  MS_TOKEN_KEY: () => randomBytes(32).toString("base64"), // seals in-app Outlook tokens (src/outlook.ts); never the Google key
   GATEWAY_PASSPHRASE: typeablePassphrase,
   DEVICE_TOKEN: () => randomBytes(32).toString("hex"),
   NTFY_URL: () => `https://ntfy.sh/relay-${randomBytes(16).toString("hex")}`, // the long random topic name keeps it private
@@ -359,7 +360,7 @@ export function buildPayload(s, m) {
     else if (m.has(k)) p[k] = m.get(k);
     else missing.push(k);
   }
-  for (const k of ["GOOGLE_TOKEN_KEY", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ICLOUD_APPLE_ID", "ICLOUD_APP_PASSWORD", "MS_CLIENT_ID", "MS_CLIENT_SECRET"]) if (m.has(k)) p[k] = m.get(k);
+  for (const k of ["GOOGLE_TOKEN_KEY", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ICLOUD_APPLE_ID", "ICLOUD_APP_PASSWORD", "MS_TOKEN_KEY", "MS_CLIENT_ID", "MS_CLIENT_SECRET"]) if (m.has(k)) p[k] = m.get(k);
   return { payload: p, missing: [...new Set(missing)] };
 }
 export function renderConfig(template, s) {

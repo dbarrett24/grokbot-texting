@@ -160,6 +160,7 @@ npx wrangler -c .relay-local/wrangler.toml secret put OWNER_NUMBER         # YOU
 npx wrangler -c .relay-local/wrangler.toml secret put ALLOWLIST            # {"+<your number>":"Your Name"}: your own number, so you can test
 openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put LOG_HASH_KEY   # made and stored without showing it
 openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY   # seals Google sign-ins stored by the Worker (section 9)
+openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put MS_TOKEN_KEY   # optional, only for Outlook contacts (README): seals Outlook sign-ins with their own key, never GOOGLE_TOKEN_KEY
 ```
 Device-key mode (opt-in): don't type the pin: run `gateway-check` then `confirm-fingerprint` (section 1, step 9). They store `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` for you (on the Worker too, once it's deployed); `secrets` sends them otherwise.
 
@@ -225,6 +226,8 @@ Use the same config you deploy with; if yours lives elsewhere, pass that path to
 | `google_client_not_configured` | Step 6: `node scripts/google-client.mjs --file=<client.json> --config=.relay-local/wrangler.toml` |
 | `google_token_key_missing` | `GOOGLE_TOKEN_KEY` is unset or isn't the key the sign-in was saved with (section 6, section 14) |
 | `google_token_decrypt_failed` | The stored sign-in can't be read: press Reconnect |
+| `outlook_token_key_missing` | `MS_TOKEN_KEY` is unset or isn't the key the Outlook sign-in was saved with (section 6, section 14). `GOOGLE_TOKEN_KEY` can't open Outlook tokens |
+| `outlook_token_decrypt_failed` | The stored Outlook sign-in can't be read: press Reconnect in Outlook accounts |
 | `default_country_code_invalid` | Set `DEFAULT_COUNTRY_CODE` (section 5) and deploy |
 | `google_people_status_403` | People API not enabled (step 2) |
 | `google_token_status_400` | Access expired (Testing mode) or revoked. Publish the app, then press Reconnect |
@@ -363,6 +366,7 @@ Rollback doesn't undo secrets or stored data.
 | Google access | **Disconnect** the account on the Contacts page (revokes at Google and deletes it), then **Connect Google** again. Legacy secret accounts: remove the app at https://myaccount.google.com/connections, then press Reconnect |
 | Google client secret | In the console's Clients page, add a new secret, download the client JSON, run `node scripts/google-client.mjs --file=<that-file.json> --config=.relay-local/wrangler.toml`, then delete the old secret in the console |
 | `GOOGLE_TOKEN_KEY` | `npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY_OLD` with the **current** value, then `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY`. The old key still decrypts, and each stored sign-in is re-sealed under the new key at the next sync. Delete the old one **only after every stored sign-in has been re-sealed**: press **Sync now** on the Contacts page, reload it, and check that the Google accounts panel reads "All N stored Google sign-ins are on the current GOOGLE_TOKEN_KEY" (while any are left it says "X of N … are still on the old GOOGLE_TOKEN_KEY"). Then `npx wrangler -c .relay-local/wrangler.toml secret delete GOOGLE_TOKEN_KEY_OLD`. An account whose sync failed isn't re-sealed, so fix it first or Reconnect it. Without `_OLD`, stored sign-ins fail with `google_token_key_missing` until you Reconnect. The OAuth client is not stored: it is only `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. A client left over from the old paste form is deleted the next time the Worker reads the client. |
+| `MS_TOKEN_KEY` (Outlook) | `npx wrangler -c .relay-local/wrangler.toml secret put MS_TOKEN_KEY_OLD` with the **current** value, then `openssl rand -base64 32 \| tr -d '\n' \| npx wrangler -c .relay-local/wrangler.toml secret put MS_TOKEN_KEY`. The old key still decrypts, and each stored Outlook sign-in is re-sealed under the new key at its next sync. Press **Sync now**, check that no Outlook account failed, then `npx wrangler -c .relay-local/wrangler.toml secret delete MS_TOKEN_KEY_OLD`. Without `_OLD`, stored Outlook sign-ins fail with `outlook_token_key_missing` until you Reconnect. |
 
 Do it right away if a phone, computer or bot that held one is lost or compromised.
 

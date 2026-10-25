@@ -42,6 +42,8 @@ export interface Env {
   ICLOUD_APP_PASSWORD?: string; // secret: app-specific password (appleid.apple.com). Never a var, never logged, never stored in the DO. Both set = sync on; one alone = icloud_secret_missing
   MS_CLIENT_ID?: string; // secret: Microsoft Entra app (client) id for Outlook contact sync (Contacts.Read + offline_access). `wrangler secret put MS_CLIENT_ID`
   MS_CLIENT_SECRET?: string; // secret: that app's client secret value. `wrangler secret put MS_CLIENT_SECRET`. Never logged or stored
+  MS_TOKEN_KEY?: string; // secret: 32 random bytes (base64 or 64 hex; setup step keys makes it). Seals in-app Outlook sign-ins (AES-GCM) in the DO; separate from GOOGLE_TOKEN_KEY. Unset = Outlook connect off
+  MS_TOKEN_KEY_OLD?: string; // secret, rotation only: the previous MS_TOKEN_KEY, accepted for decrypt; Outlook rows are re-sealed under the new key on next sync
   MS_ACCOUNTS?: string; // var: optional comma list of Outlook labels whose refresh token is an MS_RT_<LABEL> secret (like GOOGLE_ACCOUNTS); page sign-ins need nothing here
   GOOGLE_TOKEN_KEY_OLD?: string; // secret, rotation only: the previous GOOGLE_TOKEN_KEY, accepted for decrypt; rows are re-sealed under the new key on next use
   LOG_HASH_KEY?: string; // secret, 32+ chars: HMAC key for number and body hashes. Missing = direct send refused (direct_config_invalid); tap log rows fall back to plain SHA-256
