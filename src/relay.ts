@@ -4,6 +4,7 @@ import { encryptField as encryptFieldRsa, fingerprint, sha256Hex, hex, hmacHex, 
 import { checkPassphrase, encryptFieldPassphrase, parseIterations } from "./passphrase";
 import { verifyAccess, type Net } from "./access";
 import { HARBOR_CSS, HARBOR_FONT_PATH, HARBOR_LOGO_PATH, harborFont, harborLogo, harborPhoto, leavesFor, HARBOR_PHOTO_PREFIX, pickerFor, setBackground } from "./harbor";
+import { ICLOUD_ROOT, ICLOUD_SOURCE, MAX_ADDRESSBOOKS, PROPFIND_BOOKS, PROPFIND_HOME, PROPFIND_PRINCIPAL, REPORT_CARDS, addressBooks, addressData, basicAuth, parseICloudCreds, propHref, safeUrl, splitCards, vcardToContact, type ICloudCreds } from "./icloud";
 import { GOOGLE_REVOKE_URL, GOOGLE_SCOPE, GOOGLE_STATE_TTL_MS, GOOGLE_TOKEN_URL, buildAuthUrl, decodeTokenReply, parseLabelInput, pkcePair, scopeIsExact, aadFor, decodeAccountRow, importTokenKey, isLabel, open, seal, type GoogleClient, type TokenKey } from "./google";
 import {
   CSRF_TTL_MS, GONE_KEEP_MS, LEGACY_SOURCE, type GooglePanel, isContactsPath, isExampleNumber, last4, ownerFromAccess, parseEnableAllBody, parsePrefsBody, renderContactsPage, type Owner,
@@ -1048,7 +1049,7 @@ export class Relay extends DurableObject<Env> {
    * Outstanding candidate ids are retired, since the list they were drawn from changed.
    */
   private rebuildContacts() {
-    const order = [...this.googleLabels(), UPLOAD_SOURCE, LEGACY_SOURCE];
+    const order = [...this.googleLabels(), ICLOUD_SOURCE, UPLOAD_SOURCE, LEGACY_SOURCE];
     this.sql.exec("DELETE FROM contacts");
     this.setMeta("hash_key_fp", null); // pref rows follow the new list on the next read
     this.sql.exec("DELETE FROM candidates");
@@ -1116,8 +1117,37 @@ export class Relay extends DurableObject<Env> {
         failed.push({ account: acct, reason: why });
       }
     }
-    // A label removed from GOOGLE_ACCOUNTS: its stored list is deleted, not just left out of the merge.
-    const keep = new Set([...valid, UPLOAD_SOURCE, LEGACY_SOURCE]);
+    // iCloud (ICLOUD_APPLE_ID + ICLOUD_APP_PASSWORD secrets): same rules as a Google account. Its rows go to
+    // contact_sources only; contact_prefs stays OFF for new numbers, so a sync never widens who can be texted.
+    let icloud: ICloudCreds | null = null;
+    let icloudOn = false;
+    try {
+      icloud = parseICloudCreds(this.env.ICLOUD_APPLE_ID, this.env.ICLOUD_APP_PASSWORD);
+      icloudOn = icloud !== null;
+    } catch (e) {
+      icloudOn = true; // half-configured: keep the previous list and report it
+      failed.push({ account: ICLOUD_SOURCE, reason: errCode(e) });
+    }
+    if (icloud) {
+      if (ccError) failed.push({ account: ICLOUD_SOURCE, reason: ccError });
+      else {
+        try {
+          const { contacts, dropped } = await this.fetchICloudContacts(icloud, cc);
+          const snap = parseSnapshot({ generated_at: new Date(now).toISOString(), contacts });
+          if (!snap.rows.length) throw new Error("icloud_empty_result");
+          this.ctx.storage.transactionSync(() => {
+            this.replaceSource(ICLOUD_SOURCE, snap.rows, now);
+            this.setMeta(`acct:${ICLOUD_SOURCE}:dropped`, String(dropped));
+            this.log("contacts_sync", { detail: `account=${ICLOUD_SOURCE} contacts=${snap.contacts} numbers=${snap.rows.length} dropped_fax_pager=${dropped}` });
+          });
+          updated.push(ICLOUD_SOURCE);
+        } catch (e) {
+          failed.push({ account: ICLOUD_SOURCE, reason: e instanceof Refuse ? e.code : errCode(e) });
+        }
+      }
+    }
+    // A label removed from GOOGLE_ACCOUNTS (or iCloud secrets deleted): its stored list is deleted, not just left out of the merge.
+    const keep = new Set([...valid, ...(icloudOn ? [ICLOUD_SOURCE] : []), UPLOAD_SOURCE, LEGACY_SOURCE]);
     const gone = (this.sql.exec("SELECT DISTINCT account FROM contact_sources").toArray().map((r) => r.account as string)).filter((a) => !keep.has(a));
     this.ctx.storage.transactionSync(() => {
       for (const a of gone) {
@@ -1387,6 +1417,42 @@ export class Relay extends DurableObject<Env> {
   }
 
   /** OAuth refresh → People API connections (names + phone numbers only). Errors are codes, never token values. */
+  /**
+   * iCloud CardDAV, read-only: PROPFIND current-user-principal → addressbook-home-set → address books (Depth 1),
+   * then one addressbook-query REPORT per book. Only https iCloud contacts hosts are followed. Errors are codes;
+   * the Basic credentials are only ever in the Authorization header.
+   */
+  private async fetchICloudContacts(c: ICloudCreds, cc: string | null) {
+    const auth = basicAuth(c);
+    const dav = async (method: "PROPFIND" | "REPORT", url: string, depth: "0" | "1", body: string, step: string) => {
+      const r = await this.net(new Request(url, { method, redirect: "manual", headers: { Authorization: auth, Depth: depth, "content-type": "application/xml; charset=utf-8" }, body }));
+      if (r.status === 401 || r.status === 403) throw new Error("icloud_auth_failed");
+      if (r.status !== 207) throw new Error(`icloud_${step}_status_${r.status}`);
+      return await r.text();
+    };
+    const root = ICLOUD_ROOT;
+    const principalHref = propHref(await dav("PROPFIND", root, "0", PROPFIND_PRINCIPAL, "principal"), "current-user-principal");
+    if (!principalHref) throw new Error("icloud_no_principal");
+    const principal = safeUrl(principalHref, root);
+    const homeHref = propHref(await dav("PROPFIND", principal, "0", PROPFIND_HOME, "home"), "addressbook-home-set");
+    if (!homeHref) throw new Error("icloud_no_home");
+    const home = safeUrl(homeHref, principal);
+    const books = addressBooks(await dav("PROPFIND", home, "1", PROPFIND_BOOKS, "books")).map((h) => safeUrl(h, home));
+    if (!books.length) throw new Error("icloud_no_addressbook");
+    if (books.length > MAX_ADDRESSBOOKS) throw new Error("icloud_too_many_addressbooks");
+    const all: SnapshotContact[] = [];
+    const stats = { dropped: 0 };
+    for (const b of books) {
+      for (const data of addressData(await dav("REPORT", b, "1", REPORT_CARDS, "report"))) {
+        for (const card of splitCards(data)) {
+          const contact = vcardToContact(card, stats, cc);
+          if (contact) all.push(contact);
+        }
+      }
+    }
+    return { contacts: all, dropped: stats.dropped };
+  }
+
   private async fetchGoogleContacts(refreshToken: string, cc: string | null) {
     const client = await this.googleClient();
     if (!client) throw new Error("google_client_not_configured");
@@ -1437,8 +1503,8 @@ export class Relay extends DurableObject<Env> {
 ${this.devicePageLine()}
 <p><b>DEFAULT_COUNTRY_CODE:</b> ${(() => { try { return esc(parseCountryCode(this.env.DEFAULT_COUNTRY_CODE) ?? "none (strict E.164)"); } catch { return "NOT SET: contact sync is refused until it is"; } })()}</p>
 <p><b>Direct list:</b> ${snapAt ? `${esc(this.meta("snapshot_numbers") ?? "?")} numbers under ${esc(this.meta("snapshot_names") ?? "?")} distinct names, rebuilt ${esc(this.fmtTime(Number(snapAt)))}` : "empty"}</p>
-<ul>${[...this.googleLabels(), UPLOAD_SOURCE].map((a) => { const ok = this.meta(`acct:${a}:ok_ms`); return `<li>${esc(a)}: ${ok ? `${esc(this.meta(`acct:${a}:numbers`) ?? "?")} numbers${this.meta(`acct:${a}:dropped`) ? ` (${esc(this.meta(`acct:${a}:dropped`)!)} fax/pager dropped)` : ""}, last good ${esc(this.fmtTime(Number(ok)))}` : "never loaded"}</li>`; }).join("")}</ul>
-${this.googleLabels().length ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${csrf}"><button>Sync contacts now</button></form>` : "<p>No Google accounts configured (GOOGLE_ACCOUNTS).</p>"}
+<ul>${[...this.googleLabels(), ...(this.env.ICLOUD_APPLE_ID || this.env.ICLOUD_APP_PASSWORD ? [ICLOUD_SOURCE] : []), UPLOAD_SOURCE].map((a) => { const ok = this.meta(`acct:${a}:ok_ms`); return `<li>${esc(a)}: ${ok ? `${esc(this.meta(`acct:${a}:numbers`) ?? "?")} numbers${this.meta(`acct:${a}:dropped`) ? ` (${esc(this.meta(`acct:${a}:dropped`)!)} fax/pager dropped)` : ""}, last good ${esc(this.fmtTime(Number(ok)))}` : "never loaded"}</li>`; }).join("")}</ul>
+${this.googleLabels().length || this.env.ICLOUD_APPLE_ID ? `<form method=post action="/direct/sync"><input type=hidden name=csrf value="${csrf}"><button>Sync contacts now</button></form>` : "<p>No Google accounts configured (GOOGLE_ACCOUNTS).</p>"}
 ${paused ? `<form method=post action="/direct/resume"><input type=hidden name=csrf value="${csrf}"><button>Resume direct send</button></form>` : ""}`;
     const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
     const html = renderShell({ nonce, css: HARBOR_CSS, leaves: leavesFor(req, true) + pickerFor(req, "/direct", true), current: "direct", body: inner, script: "" });

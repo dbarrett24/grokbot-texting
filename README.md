@@ -52,6 +52,16 @@ By default there is no tap on your phone. You agree in the chat, and the text go
 
 A shared group thread is off until you turn it on, and it works only from an Android phone. Live-test it before you rely on it. The rules are in [SETTINGS.md](SETTINGS.md#group-mms-group-true-behind-group_mms-default-off).
 
+## iCloud contacts
+
+The bot can read your iCloud contacts into its address book. It only reads them, and a synced contact stays switched off until you turn it on, the same as Google contacts.
+
+1. At https://appleid.apple.com, go to Sign-In and Security, then App-Specific Passwords, and make one.
+2. Run setup. It asks for your Apple ID, then the app-specific password on a masked card. Both are saved as Worker secrets, never as vars. To set them by hand instead, run `npx wrangler -c .relay-local/wrangler.toml secret put ICLOUD_APPLE_ID`, then the same command with `ICLOUD_APP_PASSWORD`.
+3. On the Contacts page, press Sync. iCloud shows up as the `ICLOUD` list, after Google accounts and before an uploaded list.
+
+If you see `icloud_auth_failed`, make a new app-specific password and set it again. If only one of the two secrets is set, you see `icloud_secret_missing`. To stop syncing, delete both secrets. The next sync then deletes the iCloud list.
+
 ## A few safety notes
 
 - Anyone who has the bot's token can text anyone on your list. Treat that token like a password. How to stop sending is in [DEPLOY.md section 13](DEPLOY.md#13-kill-switch-and-rollback).
