@@ -26,7 +26,7 @@ Placeholders in this guide:
 - `<yourdomain>`: a domain you own.
 - `<API_HOST>`: the bot's address, for example `api.<yourdomain>`.
 - `<APPROVE_HOST>`: your private page, for example `app.<yourdomain>`.
-- `<TEMPLATE_REPO_URL>`: the clone URL of this repository (or your fork), for example `https://github.com/<you>/grokbot-texting.git`. It appears in DEPLOY.md and docs/SETUP.md only; find every spot with `grep -rn '<TEMPLATE_REPO_URL>' DEPLOY.md docs/SETUP.md`. A template owner replaces all of them with the published URL before announcing the template.
+- Repository: clone `https://github.com/dbarrett24/grokbot-texting.git` (or your fork's URL) in section 1. The repository is https://github.com/dbarrett24/grokbot-texting.
 
 Keep the hostnames bland.
 
@@ -105,7 +105,7 @@ In the dashboard, open **Zero Trust** (https://one.dash.cloudflare.com/).
 
 ## 4. Get the code
 ```sh
-git clone <TEMPLATE_REPO_URL> texting-relay && cd texting-relay
+git clone https://github.com/dbarrett24/grokbot-texting.git texting-relay && cd texting-relay
 npm ci --legacy-peer-deps
 npm test && npm run typecheck
 ```
@@ -163,7 +163,7 @@ npx wrangler -c .relay-local/wrangler.toml secret put ALLOWLIST            # {"+
 openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put LOG_HASH_KEY   # made and stored without showing it
 openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put GOOGLE_TOKEN_KEY   # seals Google sign-ins stored by the Worker (section 9)
 openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put MS_TOKEN_KEY   # optional, only for Outlook contacts (README): seals Outlook sign-ins with their own key, never GOOGLE_TOKEN_KEY
-openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put LOG_ENC_KEY   # 32 bytes; once set, every stored text row (each send, and inbound when CAPTURE_INBOUND = "1") keeps the number AES-GCM sealed; bodies only with STORE_MESSAGE_BODIES = "1"; must differ from LOG_HASH_KEY
+openssl rand -base64 32 | tr -d '\n' | npx wrangler -c .relay-local/wrangler.toml secret put LOG_ENC_KEY   # 32 bytes; once set, every stored text row (each send, and inbound when CAPTURE_INBOUND = "1") keeps the number AES-GCM sealed; bodies only with STORE_MESSAGE_BODIES = "1"; must differ from LOG_HASH_KEY; `setup-mac.sh keys` does not make this one
 ```
 Device-key mode (opt-in): don't type the pin: run `gateway-check` then `confirm-fingerprint` (section 1, step 9). They store `GATEWAY_PINNED_FINGERPRINT` and `GATEWAY_KEY_VERSION` for you (on the Worker too, once it's deployed); `secrets` sends them otherwise.
 

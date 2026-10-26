@@ -101,7 +101,7 @@ The bot holds the relay token and speaks to you. The relay does not.
 ### Step 1.7 Get the code
 
 ```sh
-git clone <TEMPLATE_REPO_URL> texting-relay && cd texting-relay   # <TEMPLATE_REPO_URL>: this repo's clone URL (DEPLOY.md, Placeholders)
+git clone https://github.com/dbarrett24/grokbot-texting.git texting-relay && cd texting-relay   # or your fork's URL
 npm ci --legacy-peer-deps
 npm test && npm run typecheck
 ```
